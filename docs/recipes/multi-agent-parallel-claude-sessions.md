@@ -6,6 +6,18 @@ Atomic claims live in `~/.squad/global.db`, a SQLite file with `BEGIN IMMEDIATE`
 
 The dashboard at `squad serve` shows live which agent holds what, what they last said, and where the file-touch overlaps are.
 
+When several agents need the same shared resource, do not make each model run a
+status/history loop. Once a candidate is actually eligible to use the resource,
+run one blocking claim instead:
+
+```bash
+squad claim ENV-001 --intent "deploy current green head" --long --wait
+```
+
+Squad waits inside the CLI and wakes on release. Only the process that wins the
+atomic claim returns successfully; other waiters remain blocked until a later
+release or their timeout.
+
 ## Setup: three terminal panes, one repo
 
 Open Claude Code in each pane (each pane is its own session) and ask:
@@ -137,3 +149,6 @@ This is by design for v1. Cross-machine claim sync is a v2 design problem (the d
 - **Editing a file without `squad touch`** in a multi-agent session. Peers can't see your overlap and the touch-check hook can't help.
 - **Force-releasing without checking.** The peer might be 30 seconds from posting a milestone. Try `squad ask @agent-NAME` first.
 - **Treating `claim` as a property.** It's a CLI command and a DB row, not a frontmatter field. The item file's `status:` updates only at `squad done`.
+- **Model-driven claim polling.** Repeatedly running `status`, `history`, and
+  `claim` when nothing changed wastes context. Use `claim --wait` after the
+  external readiness gates have passed.

@@ -392,6 +392,48 @@ func TestReclaimStale_LongClaimWaitsTwoHours(t *testing.T) {
 	}
 }
 
+func TestReclaimStale_NeverDeletesProtectedEnvironmentClaim(t *testing.T) {
+	db := newDB(t)
+	t0 := int64(1_000_000)
+	registerAgent(t, db, "repo-test", "agent-a", t0)
+	insertClaim(t, db, "repo-test", "ENV-001", "agent-a", t0, 1)
+
+	now := time.Unix(t0+48*3600, 0)
+	sw := NewWithClock(db, "repo-test", emptyItems{}, func() time.Time { return now })
+	got, err := sw.ReclaimStale(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("protected ENV claim auto-reclaimed: %v", got)
+	}
+	var holder string
+	if err := db.QueryRow(`SELECT agent_id FROM claims WHERE repo_id='repo-test' AND item_id='ENV-001'`).Scan(&holder); err != nil {
+		t.Fatalf("ENV claim disappeared: %v", err)
+	}
+}
+
+func TestSweep_ProtectedEnvironmentSuggestsRecoveryNotForceRelease(t *testing.T) {
+	db := newDB(t)
+	t0 := int64(1_000_000)
+	registerAgent(t, db, "repo-test", "agent-a", t0)
+	insertClaim(t, db, "repo-test", "ENV-001", "agent-a", t0, 1)
+	now := time.Unix(t0+3*3600, 0)
+	findings, err := NewWithClock(db, "repo-test", emptyItems{}, func() time.Time { return now }).Sweep(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range findings {
+		if f.Code == "stale_claim" && strings.Contains(f.Message, "ENV-001") {
+			if !strings.Contains(f.Fix, "squad recover ENV-001") || strings.Contains(f.Fix, "force-release") {
+				t.Fatalf("unsafe protected-resource fix: %q", f.Fix)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing protected ENV stale finding: %+v", findings)
+}
+
 func TestMarkStaleAgents_FlipsStatus(t *testing.T) {
 	db := newDB(t)
 	t0 := int64(1_000_000)

@@ -77,6 +77,9 @@ func newForceReleaseCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "no active claim on %s\n", itemID)
 				os.Exit(1)
 			}
+			if errors.Is(err, claims.ErrProtectedResource) {
+				return fmt.Errorf("%s is a protected environment; verify the stopped holder and use `squad recover`", itemID)
+			}
 			return err
 		},
 	}

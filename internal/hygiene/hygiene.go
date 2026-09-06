@@ -101,11 +101,15 @@ func (sw *Sweeper) Sweep(ctx context.Context) ([]Finding, error) {
 			rows.Close()
 			return nil, err
 		}
+		fix := "squad force-release " + item + " --reason \"stale\""
+		if isProtectedEnvironment(item) {
+			fix = "verify the holder task is stopped and external operations are terminal; then use `squad recover " + item + " --from " + agent + " ...`"
+		}
 		findings = append(findings, Finding{
 			Severity: SeverityWarn,
 			Code:     "stale_claim",
 			Message:  "stale claim: " + item + " (agent=" + agent + ")",
-			Fix:      "squad force-release " + item + " --reason \"stale\"",
+			Fix:      fix,
 		})
 	}
 	rows.Close()
@@ -328,7 +332,9 @@ func (sw *Sweeper) ReclaimStale(ctx context.Context) ([]string, error) {
 		ids = nil
 		rows, err := tx.QueryContext(ctx, `
 			SELECT item_id, agent_id, claimed_at, last_touch FROM claims
-			WHERE repo_id = ? AND ((long = 0 AND last_touch < ?) OR (long = 1 AND last_touch < ?))
+			WHERE repo_id = ?
+			  AND item_id NOT LIKE 'ENV-%'
+			  AND ((long = 0 AND last_touch < ?) OR (long = 1 AND last_touch < ?))
 		`, sw.repoID, now-sw.staleSec, now-StaleClaimLongSec)
 		if err != nil {
 			return err
@@ -392,6 +398,10 @@ func (sw *Sweeper) ReclaimStale(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return ids, nil
+}
+
+func isProtectedEnvironment(itemID string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(itemID)), "ENV-")
 }
 
 // isValidDateField accepts the YYYY-MM-DD shape squad writes for `created`

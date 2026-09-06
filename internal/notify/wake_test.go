@@ -115,6 +115,67 @@ func TestWake_TolerantOfDeadEndpoints(t *testing.T) {
 	}
 }
 
+func TestWakeKind_OnlyConnectsMatchingEndpoints(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "global.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	matching, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = matching.Close() }()
+	unrelated, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unrelated.Close() }()
+
+	var matchingHits, unrelatedHits atomic.Int64
+	acceptCount := func(l net.Listener, hits *atomic.Int64) {
+		go func() {
+			for {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				hits.Add(1)
+				_ = c.Close()
+			}
+		}()
+	}
+	acceptCount(matching, &matchingHits)
+	acceptCount(unrelated, &unrelatedHits)
+
+	registry := NewRegistry(db)
+	kind := ClaimWaitKind("ENV-001")
+	ctx := context.Background()
+	_ = registry.Register(ctx, Endpoint{
+		Instance: "matching", RepoID: "repo", Kind: kind,
+		Port: matching.Addr().(*net.TCPAddr).Port,
+	})
+	_ = registry.Register(ctx, Endpoint{
+		Instance: "unrelated", RepoID: "repo", Kind: ClaimWaitKind("ENV-002"),
+		Port: unrelated.Addr().(*net.TCPAddr).Port,
+	})
+
+	if err := WakeKind(ctx, registry, "repo", kind, 100*time.Millisecond); err != nil {
+		t.Fatalf("WakeKind: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for matchingHits.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if matchingHits.Load() != 1 {
+		t.Fatalf("matching hits=%d want 1", matchingHits.Load())
+	}
+	if unrelatedHits.Load() != 0 {
+		t.Fatalf("unrelated hits=%d want 0", unrelatedHits.Load())
+	}
+}
+
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

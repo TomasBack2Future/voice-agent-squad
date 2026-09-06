@@ -5,9 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func (s *Store) ForceRelease(ctx context.Context, itemID, byAgent, reason string) (priorHolder string, err error) {
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(itemID)), "ENV-") {
+		return "", ErrProtectedResource
+	}
 	if reason == "" {
 		return "", ErrReasonRequired
 	}

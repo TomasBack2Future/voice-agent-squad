@@ -11,14 +11,16 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zsiec/squad/internal/claims"
+	"github.com/zsiec/squad/internal/notify"
 )
 
 type ReleaseArgs struct {
-	DB      *sql.DB `json:"-"`
-	RepoID  string  `json:"repo_id"`
-	AgentID string  `json:"agent_id"`
-	ItemID  string  `json:"item_id"`
-	Outcome string  `json:"outcome,omitempty"`
+	DB            *sql.DB                       `json:"-"`
+	RepoID        string                        `json:"repo_id"`
+	AgentID       string                        `json:"agent_id"`
+	ItemID        string                        `json:"item_id"`
+	Outcome       string                        `json:"outcome,omitempty"`
+	NotifyWaiters func(context.Context, string) `json:"-"`
 }
 
 type ReleaseResult struct {
@@ -35,6 +37,9 @@ func Release(ctx context.Context, args ReleaseArgs) (*ReleaseResult, error) {
 	store := claims.New(args.DB, args.RepoID, nil)
 	if err := store.Release(ctx, args.ItemID, args.AgentID, outcome); err != nil {
 		return nil, err
+	}
+	if args.NotifyWaiters != nil {
+		args.NotifyWaiters(ctx, args.ItemID)
 	}
 	return &ReleaseResult{
 		ItemID:     args.ItemID,
@@ -64,6 +69,9 @@ func newReleaseCmd() *cobra.Command {
 				AgentID: bc.agentID,
 				ItemID:  itemID,
 				Outcome: outcome,
+				NotifyWaiters: func(ctx context.Context, itemID string) {
+					notifyClaimWaiters(ctx, notify.NewRegistry(bc.db), bc.repoID, itemID)
+				},
 			})
 			if err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "released %s (%s)\n", res.ItemID, res.Outcome)

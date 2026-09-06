@@ -7,9 +7,14 @@ import (
 )
 
 const (
-	KindListen = "listen"
-	KindRewake = "rewake"
+	KindListen      = "listen"
+	KindRewake      = "rewake"
+	claimWaitPrefix = "claim-wait:"
 )
+
+func ClaimWaitKind(itemID string) string {
+	return claimWaitPrefix + itemID
+}
 
 type Endpoint struct {
 	Instance  string

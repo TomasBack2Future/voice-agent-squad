@@ -64,13 +64,16 @@ func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 }
 
 type claimWireRow struct {
-	ItemID    string `json:"item_id"`
-	AgentID   string `json:"agent_id"`
-	Intent    string `json:"intent"`
-	ClaimedAt int64  `json:"claimed_at"`
-	LastTouch int64  `json:"last_touch"`
-	Worktree  string `json:"worktree,omitempty"`
-	RepoID    string `json:"repo_id"`
+	ItemID          string `json:"item_id"`
+	AgentID         string `json:"agent_id"`
+	Intent          string `json:"intent"`
+	ClaimedAt       int64  `json:"claimed_at"`
+	LastTouch       int64  `json:"last_touch"`
+	Worktree        string `json:"worktree,omitempty"`
+	RepoID          string `json:"repo_id"`
+	State           string `json:"state"`
+	Generation      int64  `json:"generation"`
+	PreviousAgentID string `json:"previous_agent_id,omitempty"`
 }
 
 func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
@@ -80,12 +83,14 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 	)
 	if s.cfg.RepoID == "" {
 		rows, err = s.db.QueryContext(r.Context(), `
-			SELECT item_id, agent_id, COALESCE(intent, ''), claimed_at, last_touch, COALESCE(worktree, ''), repo_id
+			SELECT item_id, agent_id, COALESCE(intent, ''), claimed_at, last_touch,
+			       COALESCE(worktree, ''), repo_id, state, generation, previous_agent_id
 			FROM claims ORDER BY claimed_at
 		`)
 	} else {
 		rows, err = s.db.QueryContext(r.Context(), `
-			SELECT item_id, agent_id, COALESCE(intent, ''), claimed_at, last_touch, COALESCE(worktree, ''), repo_id
+			SELECT item_id, agent_id, COALESCE(intent, ''), claimed_at, last_touch,
+			       COALESCE(worktree, ''), repo_id, state, generation, previous_agent_id
 			FROM claims WHERE repo_id = ? ORDER BY claimed_at
 		`, s.cfg.RepoID)
 	}
@@ -97,7 +102,8 @@ func (s *Server) handleClaims(w http.ResponseWriter, r *http.Request) {
 	out := []claimWireRow{}
 	for rows.Next() {
 		var c claimWireRow
-		if err := rows.Scan(&c.ItemID, &c.AgentID, &c.Intent, &c.ClaimedAt, &c.LastTouch, &c.Worktree, &c.RepoID); err != nil {
+		if err := rows.Scan(&c.ItemID, &c.AgentID, &c.Intent, &c.ClaimedAt, &c.LastTouch,
+			&c.Worktree, &c.RepoID, &c.State, &c.Generation, &c.PreviousAgentID); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}

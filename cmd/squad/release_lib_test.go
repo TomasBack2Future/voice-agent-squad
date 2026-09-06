@@ -57,3 +57,38 @@ func TestRelease_PureRejectsNotYours(t *testing.T) {
 		t.Fatalf("err=%v want ErrNotYours", err)
 	}
 }
+
+func TestRelease_NotifiesWaitersOnlyAfterSuccess(t *testing.T) {
+	env := newTestEnv(t)
+	writeMinimalItem(t, env.ItemsDir, "BUG-402")
+	if _, err := Claim(context.Background(), ClaimArgs{
+		DB: env.DB, RepoID: env.RepoID, AgentID: env.AgentID,
+		ItemID: "BUG-402", ItemsDir: env.ItemsDir, DoneDir: env.DoneDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var notified []string
+	notify := func(_ context.Context, itemID string) {
+		notified = append(notified, itemID)
+	}
+	if _, err := Release(context.Background(), ReleaseArgs{
+		DB: env.DB, RepoID: env.RepoID, AgentID: "agent-other",
+		ItemID: "BUG-402", NotifyWaiters: notify,
+	}); !errors.Is(err, claims.ErrNotYours) {
+		t.Fatalf("wrong-holder release err=%v want ErrNotYours", err)
+	}
+	if len(notified) != 0 {
+		t.Fatalf("failed release notified waiters: %v", notified)
+	}
+
+	if _, err := Release(context.Background(), ReleaseArgs{
+		DB: env.DB, RepoID: env.RepoID, AgentID: env.AgentID,
+		ItemID: "BUG-402", NotifyWaiters: notify,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(notified) != 1 || notified[0] != "BUG-402" {
+		t.Fatalf("notifications=%v want [BUG-402]", notified)
+	}
+}

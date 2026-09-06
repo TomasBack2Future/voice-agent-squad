@@ -222,6 +222,18 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 	if hasNudged90m > 0 {
 		legacy = append(legacy, legacyRow{12, "claim_timebox_nudges"})
 	}
+	var hasClaimGeneration int
+	_ = db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pragma_table_info('claims') WHERE name='generation'`).Scan(&hasClaimGeneration)
+	if hasClaimGeneration > 0 {
+		legacy = append(legacy, legacyRow{13, "claim_recovery"})
+	}
+	var hasDispatchReservations int
+	_ = db.QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dispatch_reservations'`).Scan(&hasDispatchReservations)
+	if hasDispatchReservations > 0 {
+		legacy = append(legacy, legacyRow{14, "dispatch_reservations"})
+	}
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

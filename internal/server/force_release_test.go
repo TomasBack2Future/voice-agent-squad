@@ -73,3 +73,24 @@ func TestForceRelease_PostEmptyReasonRejected(t *testing.T) {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestForceRelease_ProtectedEnvironmentRejected(t *testing.T) {
+	db := newTestDB(t)
+	registerAgent(t, db, "agent-aaaa", "Alice")
+	registerAgent(t, db, "agent-bbbb", "Bob")
+	insertClaim(t, db, "agent-aaaa", "ENV-001", "deploy")
+	s := New(db, testRepoID, Config{RepoID: testRepoID, SquadDir: t.TempDir()})
+	defer s.Close()
+	body, _ := json.Marshal(map[string]any{"reason": "holder stopped"})
+	req := httptest.NewRequest(http.MethodPost, "/api/items/ENV-001/force-release", bytes.NewReader(body))
+	req.Header.Set("X-Squad-Agent", "agent-bbbb")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	holder, err := claims.HolderOf(context.Background(), db, testRepoID, "ENV-001")
+	if err != nil || holder != "agent-aaaa" {
+		t.Fatalf("protected claim changed: holder=%q err=%v", holder, err)
+	}
+}

@@ -46,6 +46,8 @@ func (s *Server) handleItemForceRelease(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, claims.ErrReasonRequired):
 		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, claims.ErrProtectedResource):
+		writeErr(w, http.StatusConflict, "protected environment requires fenced recovery")
 	default:
 		writeErr(w, http.StatusInternalServerError, err.Error())
 	}

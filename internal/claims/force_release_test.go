@@ -59,3 +59,12 @@ func TestForceRelease_RejectsUnclaimedItem(t *testing.T) {
 		t.Fatalf("want ErrNotClaimed, got %v", err)
 	}
 }
+
+func TestForceRelease_RejectsProtectedEnvironment(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	_ = s.Claim(ctx, "ENV-001", "agent-a", "deploy", nil, true)
+	if _, err := s.ForceRelease(ctx, "ENV-001", "agent-admin", "task stopped"); !errors.Is(err, ErrProtectedResource) {
+		t.Fatalf("want ErrProtectedResource, got %v", err)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/zsiec/squad/internal/claims"
 	"github.com/zsiec/squad/internal/config"
 	"github.com/zsiec/squad/internal/items"
+	"github.com/zsiec/squad/internal/notify"
 	"github.com/zsiec/squad/internal/repo"
 	"github.com/zsiec/squad/internal/stats"
 	"github.com/zsiec/squad/internal/touch"
@@ -165,6 +166,9 @@ func newClaimCmd() *cobra.Command {
 		touches      string
 		long         bool
 		worktreeFlag bool
+		wait         bool
+		waitTimeout  time.Duration
+		waitFallback time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "claim <ITEM-ID>",
@@ -190,7 +194,7 @@ func newClaimCmd() *cobra.Command {
 
 			repoRoot, _ := discoverRepoRoot()
 			useWorktree := worktreeFlag || worktreeDefault()
-			res, err := Claim(ctx, ClaimArgs{
+			claimArgs := ClaimArgs{
 				DB:             bc.db,
 				RepoID:         bc.repoID,
 				AgentID:        bc.agentID,
@@ -203,7 +207,19 @@ func newClaimCmd() *cobra.Command {
 				ConcurrencyCap: claimConcurrencyCap(),
 				Worktree:       useWorktree,
 				RepoRoot:       repoRoot,
-			})
+			}
+			var res *ClaimResult
+			if wait {
+				res, err = ClaimWithWait(ctx, ClaimWaitArgs{
+					Claim:      claimArgs,
+					Registry:   notify.NewRegistry(bc.db),
+					Fallback:   waitFallback,
+					Timeout:    waitTimeout,
+					WaitWriter: cmd.ErrOrStderr(),
+				})
+			} else {
+				res, err = Claim(ctx, claimArgs)
+			}
 			if err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "claimed %s\n", res.ItemID)
 				printCadenceNudge(cmd.ErrOrStderr(), "claim")
@@ -261,6 +277,9 @@ func newClaimCmd() *cobra.Command {
 	cmd.Flags().StringVar(&touches, "touches", "", "comma-separated file paths you'll modify")
 	cmd.Flags().BoolVar(&long, "long", false, "use the 2h long-running threshold instead of hygiene.stale_claim_minutes")
 	cmd.Flags().BoolVar(&worktreeFlag, "worktree", false, "provision a per-claim isolated git worktree under .squad/worktrees/")
+	cmd.Flags().BoolVar(&wait, "wait", false, "block without model polling until the item can be atomically claimed")
+	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 2*time.Hour, "maximum time to wait for a claim")
+	cmd.Flags().DurationVar(&waitFallback, "wait-fallback", 30*time.Second, "internal missed-notification recovery interval (0 disables)")
 	return cmd
 }
 

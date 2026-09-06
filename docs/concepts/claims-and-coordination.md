@@ -16,8 +16,71 @@ Claims, chat, and file touches are **machine-local, operational, ephemeral.** Th
 
 - **One claim per agent per repo** by default. The configuration knob (`agent.claim_concurrency` in `.squad/config.yaml`) can lift it, but the default is 1 because a single agent juggling multiple claims is usually thrashing.
 - **Heartbeat keeps a claim live.** Every `squad tick`, `squad milestone`, `squad thinking`, etc. updates the `last_touch` timestamp on your active claim. A claim with no activity past the configured `hygiene.stale_claim_minutes` (default 60 min) is flagged by `squad doctor` as stale.
-- **`squad force-release <ID>`** takes over a stuck claim from a peer who isn't responding. The command requires `--reason` so the audit trail in `claim_history` records why the takeover happened. Good citizenship: post `squad ask @agent-XXXX "stealing X, ok?"` first if the peer is reachable.
+- **`squad force-release <ID>`** removes an ordinary stuck claim after an operator verifies it is abandoned. Protected `ENV-*` claims are different: hygiene never auto-reclaims them. Use the fenced `squad recover` flow after independently verifying the holder task and external operations.
 - **File-touch tracking** warns (does not block) when you start editing a file that another agent's claim is touching. `squad touch <path>` declares an active touch; `squad untouch <path>` releases it. The opt-in pre-edit hook automates this against Edit/Write tool calls.
+
+## Waiting without model polling
+
+Most claim conflicts should still make an agent choose other ready work. When
+the item is a required shared resource and useful work is exhausted, the agent
+can wait without repeatedly spending model tokens:
+
+```bash
+squad claim ENV-001 --intent "run exact-revision acceptance" --long --wait
+```
+
+The first attempt is the same atomic claim as usual. If another agent holds the
+item, Squad registers a non-exclusive, item-scoped listener and blocks inside
+the CLI process. `squad release` sends an immediate loopback wake signal. The
+waiting process then rechecks ownership and retries the atomic claim. A quiet
+fallback check covers releases that did not originate from the CLI, including
+stale-claim hygiene.
+
+Waiting is not ownership. It must not be used to reserve a shared environment
+before external prerequisites such as approval, current-base validation, or CI
+have passed. Revalidate those prerequisites after `--wait` returns and before
+the first mutation.
+
+## Protected environment recovery
+
+Stopping a Codex task can interrupt its cleanup handler while a deployment or
+rollback continues outside Codex. For that reason, stale `ENV-*` claims are
+reported but never deleted by automatic hygiene.
+
+After independently verifying the holder task is stopped and recording the
+state of workflows, rollout, exact revision, and environment health, a recovery
+operator can atomically transfer the claim:
+
+```bash
+squad recover ENV-001 \
+  --from agent-abcd \
+  --holder-session 0199... \
+  --reason "holder task stopped during rollback verification" \
+  --evidence "task stopped; workflow terminal; staging revision 9917d417 ready" \
+  --confirm-holder-stopped
+```
+
+Recovery is a compare-and-swap on the expected holder and generation. It never
+makes the environment free between owners. The new generation is written to
+`claim_recoveries`; a late release from the displaced holder is rejected. The
+recovery owner may only make the environment safe, verify an exact revision,
+and release it—not merge unrelated work.
+
+## Durable dispatch reservations
+
+A Dispatcher reserves a canonical Issue before creating a Worker task, then
+binds the returned generation to the created task:
+
+```bash
+squad dispatch reserve STUDIO-501 --source github:owner/repo#501 --json
+squad dispatch bind STUDIO-501 --generation 1 --thread-id 0199...
+```
+
+This reservation is not work ownership. The Worker must still win the normal
+atomic Issue claim. It only closes the scheduler race in which two periodic
+cycles both observe an unclaimed Issue before either Worker exists. Unbound
+reservations expire; bound reservations remain durable until the Dispatcher
+reconciles them with `dispatch close`.
 
 ## Lifecycle states
 
@@ -82,7 +145,7 @@ The `--worktree` flag is opt-in for this ship. Solo flows are unaffected — the
 ## Common races and how they resolve
 
 - **Two agents claim simultaneously.** SQLite `BEGIN IMMEDIATE` serializes the transactions; one commits, the other gets `unique_constraint`-equivalent and the `squad claim` command exits with a clear "already claimed by X" message. No corruption, no torn state.
-- **Agent crashes mid-claim.** No release runs, so the claim stays open with a stale heartbeat. The next `squad doctor` run flags it; a peer can `squad force-release` after confirming.
+- **Agent crashes mid-claim.** No release runs, so the claim stays open with a stale heartbeat. Ordinary claims can be force-released after confirmation. `ENV-*` claims require the fenced recovery flow above and are never auto-reclaimed.
 - **Claim across worktrees in the same repo.** Each worktree's `.squad/items/` may differ if the items are in different branches, but the DB is shared. Claiming the same `<ID>` from two worktrees still races against the DB, so only one wins — even if the other worktree doesn't have that file checked out.
 
 ## See also

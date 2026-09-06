@@ -36,7 +36,7 @@ func TestClaims_List(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	var out []map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&out)
-	if len(out) != 1 || out[0]["item_id"] != "BUG-100" || out[0]["intent"] != "fix it" {
+	if len(out) != 1 || out[0]["item_id"] != "BUG-100" || out[0]["intent"] != "fix it" || out[0]["state"] != "held" || out[0]["generation"] != float64(1) {
 		t.Fatalf("got %v", out)
 	}
 }

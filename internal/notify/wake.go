@@ -21,6 +21,10 @@ import (
 // SessionEnd cleanup. The receiver-side housekeeping (TTL sweep) is
 // what reclaims the row, not the sender.
 func Wake(ctx context.Context, r *Registry, repoID string, perDial time.Duration) error {
+	return WakeKind(ctx, r, repoID, KindListen, perDial)
+}
+
+func WakeKind(ctx context.Context, r *Registry, repoID, kind string, perDial time.Duration) error {
 	eps, err := r.LookupRepo(ctx, repoID)
 	if err != nil {
 		return err
@@ -30,7 +34,7 @@ func Wake(ctx context.Context, r *Registry, repoID string, perDial time.Duration
 	}
 	var wg sync.WaitGroup
 	for _, e := range eps {
-		if e.Kind != KindListen {
+		if e.Kind != kind {
 			continue
 		}
 		wg.Add(1)

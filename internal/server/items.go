@@ -29,6 +29,8 @@ type itemListRow struct {
 	EvidenceRequired []string `json:"evidence_required"`
 	ClaimedBy        string   `json:"claimed_by"`
 	LastTouch        int64    `json:"last_touch"`
+	ClaimState       string   `json:"claim_state,omitempty"`
+	ClaimGeneration  int64    `json:"claim_generation,omitempty"`
 	RepoID           string   `json:"repo_id"`
 }
 
@@ -101,8 +103,10 @@ func (s *Server) handleItemsList(w http.ResponseWriter, r *http.Request) {
 
 	type claimKey struct{ Repo, Item string }
 	type claimInfo struct {
-		Agent     string
-		LastTouch int64
+		Agent      string
+		LastTouch  int64
+		State      string
+		Generation int64
 	}
 	claimByItem := map[claimKey]claimInfo{}
 	// Workspace mode (cfg.RepoID == "") needs all repos' claims; single-repo
@@ -113,20 +117,22 @@ func (s *Server) handleItemsList(w http.ResponseWriter, r *http.Request) {
 	)
 	if s.cfg.RepoID == "" {
 		rows, qErr = s.db.QueryContext(r.Context(),
-			`SELECT repo_id, item_id, agent_id, last_touch FROM claims`)
+			`SELECT repo_id, item_id, agent_id, last_touch, state, generation FROM claims`)
 	} else {
 		rows, qErr = s.db.QueryContext(r.Context(),
-			`SELECT repo_id, item_id, agent_id, last_touch FROM claims WHERE repo_id = ?`, s.cfg.RepoID)
+			`SELECT repo_id, item_id, agent_id, last_touch, state, generation FROM claims WHERE repo_id = ?`, s.cfg.RepoID)
 	}
 	if qErr != nil {
 		writeErr(w, http.StatusInternalServerError, qErr.Error())
 		return
 	}
 	for rows.Next() {
-		var repoID, id, agent string
-		var lt int64
-		if err := rows.Scan(&repoID, &id, &agent, &lt); err == nil {
-			claimByItem[claimKey{Repo: repoID, Item: id}] = claimInfo{Agent: agent, LastTouch: lt}
+		var repoID, id, agent, state string
+		var lt, generation int64
+		if err := rows.Scan(&repoID, &id, &agent, &lt, &state, &generation); err == nil {
+			claimByItem[claimKey{Repo: repoID, Item: id}] = claimInfo{
+				Agent: agent, LastTouch: lt, State: state, Generation: generation,
+			}
 		}
 	}
 	rows.Close()
@@ -164,6 +170,8 @@ func (s *Server) handleItemsList(w http.ResponseWriter, r *http.Request) {
 		if c, ok := claimByItem[claimKey{Repo: it.RepoID, Item: it.ID}]; ok {
 			row.ClaimedBy = c.Agent
 			row.LastTouch = c.LastTouch
+			row.ClaimState = c.State
+			row.ClaimGeneration = c.Generation
 		}
 		out = append(out, row)
 	}
@@ -205,15 +213,21 @@ func (s *Server) handleItemDetail(w http.ResponseWriter, r *http.Request) {
 	var currentClaim any
 	var lastTouch int64
 	row := s.db.QueryRowContext(r.Context(),
-		`SELECT agent_id, COALESCE(intent, ''), claimed_at, last_touch, COALESCE(worktree, '') FROM claims WHERE item_id = ? AND repo_id = ?`,
+		`SELECT agent_id, COALESCE(intent, ''), claimed_at, last_touch,
+		        COALESCE(worktree, ''), state, generation, previous_agent_id
+		 FROM claims WHERE item_id = ? AND repo_id = ?`,
 		id, repoID)
 	var cc struct {
-		AgentID   string `json:"agent_id"`
-		Intent    string `json:"intent"`
-		ClaimedAt int64  `json:"claimed_at"`
-		Worktree  string `json:"worktree,omitempty"`
+		AgentID         string `json:"agent_id"`
+		Intent          string `json:"intent"`
+		ClaimedAt       int64  `json:"claimed_at"`
+		Worktree        string `json:"worktree,omitempty"`
+		State           string `json:"state"`
+		Generation      int64  `json:"generation"`
+		PreviousAgentID string `json:"previous_agent_id,omitempty"`
 	}
-	switch err := row.Scan(&cc.AgentID, &cc.Intent, &cc.ClaimedAt, &lastTouch, &cc.Worktree); {
+	switch err := row.Scan(&cc.AgentID, &cc.Intent, &cc.ClaimedAt, &lastTouch,
+		&cc.Worktree, &cc.State, &cc.Generation, &cc.PreviousAgentID); {
 	case err == nil:
 		currentClaim = cc
 	case errors.Is(err, sql.ErrNoRows):

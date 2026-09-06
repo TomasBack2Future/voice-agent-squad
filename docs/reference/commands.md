@@ -213,6 +213,20 @@ squad claim FEAT-001 --intent "wire the export button to the API"
 
 Exit non-zero if another agent already holds it. Add `--touches path1,path2` (comma-separated) to declare files you'll be editing so peers see the overlap. Use `--long` to apply the 2h long-running threshold instead of `hygiene.stale_claim_minutes`.
 
+When you need that exact item instead of choosing different work, use
+`--wait`. Squad registers an item-scoped loopback listener and keeps the retry
+loop inside the CLI process, so the calling agent does not need to wake the
+model and poll status repeatedly:
+
+```bash
+squad claim ENV-001 --intent "deploy the verified release" --long --wait
+```
+
+`--wait-timeout` defaults to 2h. `--wait-fallback` defaults to 30s and only
+recovers a missed notification inside the CLI; unchanged fallback checks emit
+no output. A normal `squad release` wakes waiters immediately. Acquisition is
+still an atomic claim, so simultaneous waiters produce exactly one winner.
+
 ### `squad release`
 
 Release your claim on an item.
@@ -248,10 +262,43 @@ squad reassign FEAT-001 --to agent-bob
 
 ### `squad force-release`
 
-Admin: forcibly release someone else's stuck claim. Requires `--reason` for the audit trail.
+Admin: forcibly release someone else's ordinary stuck claim. Requires `--reason` for the audit trail. Do not use it for `ENV-*`; use `squad recover` so ownership is transferred without a free-lock gap.
 
 ```bash
 squad force-release BUG-042 --reason "agent-blue offline >2h, no response"
+```
+
+### `squad recover`
+
+Atomically take over a protected `ENV-*` claim after independently verifying
+that its Codex holder task is stopped. The expected holder is a compare-and-swap
+guard; task/session and external-state evidence are retained in the recovery
+audit. A recent registered holder heartbeat causes the command to refuse.
+
+```bash
+squad recover ENV-001 \
+  --from agent-blue \
+  --holder-session 0199abcd \
+  --reason "task stopped after rollout" \
+  --evidence "task stopped; Actions terminal; exact staging SHA ready" \
+  --confirm-holder-stopped \
+  --json
+```
+
+### `squad dispatch`
+
+Maintain durable, generation-fenced reservations around Worker task creation.
+Reservations prevent duplicate periodic dispatch but never replace the Worker's
+normal Issue claim.
+
+```bash
+squad dispatch reserve STUDIO-501 \
+  --source github:TomasBack2Future/voice-agent-studio#501 \
+  --ttl 15m --json
+squad dispatch bind STUDIO-501 --generation 1 --thread-id 0199abcd
+squad dispatch list --active --json
+squad dispatch close STUDIO-501 --generation 1 --state completed \
+  --note "issue closed after staging acceptance"
 ```
 
 ### `squad handoff`
@@ -742,4 +789,3 @@ Print the squad version.
 ```bash
 squad version
 ```
-

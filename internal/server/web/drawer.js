@@ -269,13 +269,16 @@ function claimBanner(it) {
     const c = it.current_claim;
     const ago = c.claimed_at ? fmtAgo(c.claimed_at) + ' ago' : '';
     const pretty = displayName(c.agent_id, c.display_name);
+    const recovery = c.state === 'recovering'
+      ? ` · recovery generation ${escapeHtml(c.generation || '?')}${c.previous_agent_id ? ' from ' + escapeHtml(c.previous_agent_id) : ''}`
+      : (c.generation > 1 ? ` · generation ${escapeHtml(c.generation)}` : '');
     const worktreeHtml = c.worktree
       ? `<div class="claim-worktree" title="${escapeHtml(c.worktree)}">worktree: <code>${escapeHtml(c.worktree)}</code></div>`
       : '';
     return `
       <div class="claim-banner">
         <span class="agent-id" title="${escapeHtml(c.agent_id)}">${escapeHtml(pretty)}</span>
-        <span class="intent">— ${escapeHtml(c.intent || '(no intent)')}${ago ? ' · claimed ' + ago : ''}</span>
+        <span class="intent">— ${escapeHtml(c.intent || '(no intent)')}${ago ? ' · claimed ' + ago : ''}${recovery}</span>
         ${worktreeHtml}
       </div>`;
   }
