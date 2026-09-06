@@ -71,6 +71,42 @@ func TestCanonicalItemCanOnlyAttachToOneReservation(t *testing.T) {
 	}
 }
 
+func TestConcurrentSourceReservationHasExactlyOneWinner(t *testing.T) {
+	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	type result struct {
+		reservation *Reservation
+		err         error
+	}
+	results := make(chan result, 2)
+	for _, candidate := range []struct{ key, actor string }{
+		{"DISPATCH-STUDIO-701-A", "dispatcher-a"},
+		{"DISPATCH-STUDIO-701-B", "dispatcher-b"},
+	} {
+		candidate := candidate
+		go func() {
+			r, err := s.Reserve(ctx, candidate.key, "github:o/r#701", candidate.actor, "race", time.Minute)
+			results <- result{r, err}
+		}()
+	}
+	winners, losers := 0, 0
+	for range 2 {
+		r := <-results
+		switch {
+		case r.err == nil:
+			winners++
+		case errors.Is(r.err, ErrAlreadyReserved):
+			losers++
+		default:
+			t.Fatalf("unexpected reservation result: reservation=%+v err=%v", r.reservation, r.err)
+		}
+	}
+	if winners != 1 || losers != 1 {
+		t.Fatalf("winners=%d losers=%d, want one each", winners, losers)
+	}
+}
+
 func TestExpiredReservationCanBeReusedWithNewGeneration(t *testing.T) {
 	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	s := newDispatchStore(t, &now)
