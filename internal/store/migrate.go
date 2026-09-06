@@ -234,6 +234,12 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 	if hasDispatchReservations > 0 {
 		legacy = append(legacy, legacyRow{14, "dispatch_reservations"})
 	}
+	var hasDispatchCanonicalItem int
+	_ = db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pragma_table_info('dispatch_reservations') WHERE name='canonical_item_id'`).Scan(&hasDispatchCanonicalItem)
+	if hasDispatchCanonicalItem > 0 {
+		legacy = append(legacy, legacyRow{15, "dispatch_canonical_item"})
+	}
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

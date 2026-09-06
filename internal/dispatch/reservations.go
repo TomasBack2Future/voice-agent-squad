@@ -22,20 +22,22 @@ var (
 	ErrGeneration       = errors.New("dispatch: reservation generation changed")
 	ErrExpired          = errors.New("dispatch: reservation expired before worker binding")
 	ErrIdentityConflict = errors.New("dispatch: item and source refer to different reservations")
+	ErrCanonicalItem    = errors.New("dispatch: canonical item is not attached")
 )
 
 type Reservation struct {
-	RepoID         string `json:"repo_id"`
-	ItemID         string `json:"item_id"`
-	SourceRef      string `json:"source_ref"`
-	ReservedBy     string `json:"reserved_by"`
-	ReservedAt     int64  `json:"reserved_at"`
-	UpdatedAt      int64  `json:"updated_at"`
-	ExpiresAt      int64  `json:"expires_at"`
-	State          string `json:"state"`
-	Generation     int64  `json:"generation"`
-	WorkerThreadID string `json:"worker_thread_id,omitempty"`
-	Note           string `json:"note,omitempty"`
+	RepoID          string `json:"repo_id"`
+	ItemID          string `json:"reservation_key"`
+	CanonicalItemID string `json:"canonical_item_id,omitempty"`
+	SourceRef       string `json:"source_ref"`
+	ReservedBy      string `json:"reserved_by"`
+	ReservedAt      int64  `json:"reserved_at"`
+	UpdatedAt       int64  `json:"updated_at"`
+	ExpiresAt       int64  `json:"expires_at"`
+	State           string `json:"state"`
+	Generation      int64  `json:"generation"`
+	WorkerThreadID  string `json:"worker_thread_id,omitempty"`
+	Note            string `json:"note,omitempty"`
 }
 
 type Store struct {
@@ -71,7 +73,7 @@ func (s *Store) Reserve(ctx context.Context, itemID, sourceRef, actor, note stri
 			return err
 		}
 		if err == nil {
-			if current.ItemID != itemID || current.SourceRef != sourceRef {
+			if current.SourceRef != sourceRef {
 				return fmt.Errorf("%w: requested item=%s source=%s; existing item=%s source=%s",
 					ErrIdentityConflict, itemID, sourceRef, current.ItemID, current.SourceRef)
 			}
@@ -84,13 +86,14 @@ func (s *Store) Reserve(ctx context.Context, itemID, sourceRef, actor, note stri
 				out = *current
 				return ErrAlreadyReserved
 			}
+			existingKey := current.ItemID
 			res, err := tx.ExecContext(ctx, `
 				UPDATE dispatch_reservations
-				SET reserved_by=?, reserved_at=?, updated_at=?, expires_at=?,
+				SET item_id=?, reserved_by=?, reserved_at=?, updated_at=?, expires_at=?,
 				    state='reserved', generation=generation+1,
 				    worker_thread_id='', note=?
 				WHERE repo_id=? AND item_id=? AND generation=?
-			`, actor, now, now, expires, note, s.repoID, itemID, current.Generation)
+			`, itemID, actor, now, now, expires, note, s.repoID, existingKey, current.Generation)
 			if err != nil {
 				return err
 			}
@@ -98,7 +101,7 @@ func (s *Store) Reserve(ctx context.Context, itemID, sourceRef, actor, note stri
 			if changed != 1 {
 				return ErrGeneration
 			}
-			out = Reservation{RepoID: s.repoID, ItemID: itemID, SourceRef: sourceRef,
+			out = Reservation{RepoID: s.repoID, ItemID: itemID, CanonicalItemID: current.CanonicalItemID, SourceRef: sourceRef,
 				ReservedBy: actor, ReservedAt: now, UpdatedAt: now, ExpiresAt: expires,
 				State: "reserved", Generation: current.Generation + 1, Note: note}
 			return nil
@@ -127,6 +130,32 @@ func (s *Store) Reserve(ctx context.Context, itemID, sourceRef, actor, note stri
 	return &out, nil
 }
 
+// Attach records the canonical Squad item after the caller has won the source
+// reservation. No Worker may be bound until this step succeeds.
+func (s *Store) Attach(ctx context.Context, reservationKey, canonicalItemID, actor string, generation int64) (*Reservation, error) {
+	reservationKey = strings.TrimSpace(reservationKey)
+	canonicalItemID = strings.TrimSpace(canonicalItemID)
+	actor = strings.TrimPrefix(strings.TrimSpace(actor), "@")
+	if reservationKey == "" || canonicalItemID == "" || actor == "" || generation <= 0 {
+		return nil, fmt.Errorf("dispatch: reservation key, canonical item, actor, and positive generation are required")
+	}
+	now := s.now().Unix()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE dispatch_reservations
+		SET canonical_item_id=?, updated_at=?
+		WHERE repo_id=? AND item_id=? AND reserved_by=? AND generation=?
+		  AND state='reserved' AND expires_at>?
+	`, canonicalItemID, now, s.repoID, reservationKey, actor, generation, now)
+	if err != nil {
+		return nil, fmt.Errorf("attach canonical item: %w", err)
+	}
+	changed, _ := res.RowsAffected()
+	if changed != 1 {
+		return nil, s.explainBindFailure(ctx, reservationKey, actor, generation, now)
+	}
+	return s.Get(ctx, reservationKey)
+}
+
 func (s *Store) Bind(ctx context.Context, itemID, actor, workerThreadID string, generation int64) (*Reservation, error) {
 	itemID = strings.TrimSpace(itemID)
 	actor = strings.TrimPrefix(strings.TrimSpace(actor), "@")
@@ -139,7 +168,7 @@ func (s *Store) Bind(ctx context.Context, itemID, actor, workerThreadID string, 
 		UPDATE dispatch_reservations
 		SET state='dispatched', worker_thread_id=?, updated_at=?, expires_at=0
 		WHERE repo_id=? AND item_id=? AND reserved_by=? AND generation=?
-		  AND state='reserved' AND expires_at>?
+		  AND state='reserved' AND expires_at>? AND canonical_item_id<>''
 	`, workerThreadID, now, s.repoID, itemID, actor, generation, now)
 	if err != nil {
 		return nil, err
@@ -209,14 +238,14 @@ func (s *Store) List(ctx context.Context, activeOnly bool) ([]Reservation, error
 }
 
 const reservationSelect = `SELECT repo_id, item_id, source_ref, reserved_by,
-	reserved_at, updated_at, expires_at, state, generation, worker_thread_id, note
+	canonical_item_id, reserved_at, updated_at, expires_at, state, generation, worker_thread_id, note
 	FROM dispatch_reservations`
 
 type scanner interface{ Scan(...any) error }
 
 func scanReservation(s scanner) (*Reservation, error) {
 	var r Reservation
-	err := s.Scan(&r.RepoID, &r.ItemID, &r.SourceRef, &r.ReservedBy,
+	err := s.Scan(&r.RepoID, &r.ItemID, &r.SourceRef, &r.ReservedBy, &r.CanonicalItemID,
 		&r.ReservedAt, &r.UpdatedAt, &r.ExpiresAt, &r.State, &r.Generation,
 		&r.WorkerThreadID, &r.Note)
 	return &r, err
@@ -259,6 +288,9 @@ func (s *Store) explainBindFailure(ctx context.Context, itemID, actor string, ge
 	}
 	if r.State == "reserved" && r.ExpiresAt <= now {
 		return ErrExpired
+	}
+	if r.State == "reserved" && r.CanonicalItemID == "" {
+		return ErrCanonicalItem
 	}
 	return fmt.Errorf("dispatch: reservation is in state %s", r.State)
 }

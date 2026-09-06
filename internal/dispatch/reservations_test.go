@@ -24,29 +24,50 @@ func TestReserveBindCloseLifecycle(t *testing.T) {
 	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	s := newDispatchStore(t, &now)
 	ctx := context.Background()
-	r, err := s.Reserve(ctx, "STUDIO-501", "github:o/r#501", "dispatcher-a", "ready", 15*time.Minute)
+	r, err := s.Reserve(ctx, "DISPATCH-STUDIO-501", "github:o/r#501", "dispatcher-a", "ready", 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Generation != 1 || r.State != "reserved" {
 		t.Fatalf("reserve=%+v", r)
 	}
-	if _, err := s.Reserve(ctx, "STUDIO-501", "github:o/r#501", "dispatcher-b", "duplicate", 15*time.Minute); !errors.Is(err, ErrAlreadyReserved) {
+	if _, err := s.Reserve(ctx, "DISPATCH-STUDIO-501", "github:o/r#501", "dispatcher-b", "duplicate", 15*time.Minute); !errors.Is(err, ErrAlreadyReserved) {
 		t.Fatalf("want ErrAlreadyReserved, got %v", err)
 	}
-	r, err = s.Bind(ctx, "STUDIO-501", "dispatcher-a", "thread-123", 1)
+	if _, err := s.Bind(ctx, "DISPATCH-STUDIO-501", "dispatcher-a", "thread-too-early", 1); !errors.Is(err, ErrCanonicalItem) {
+		t.Fatalf("bind without canonical item: want ErrCanonicalItem, got %v", err)
+	}
+	r, err = s.Attach(ctx, "DISPATCH-STUDIO-501", "STUDIO-501", "dispatcher-a", 1)
+	if err != nil || r.CanonicalItemID != "STUDIO-501" {
+		t.Fatalf("attach=%+v err=%v", r, err)
+	}
+	r, err = s.Bind(ctx, "DISPATCH-STUDIO-501", "dispatcher-a", "thread-123", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.State != "dispatched" || r.WorkerThreadID != "thread-123" || r.ExpiresAt != 0 {
 		t.Fatalf("bind=%+v", r)
 	}
-	r, err = s.Close(ctx, "STUDIO-501", "dispatcher-a", "completed", "issue closed", 1)
+	r, err = s.Close(ctx, "DISPATCH-STUDIO-501", "dispatcher-a", "completed", "issue closed", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.State != "completed" {
 		t.Fatalf("close=%+v", r)
+	}
+}
+
+func TestCanonicalItemCanOnlyAttachToOneReservation(t *testing.T) {
+	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	_, _ = s.Reserve(ctx, "DISPATCH-STUDIO-601", "github:o/r#601", "dispatcher-a", "", time.Minute)
+	_, _ = s.Reserve(ctx, "DISPATCH-STUDIO-602", "github:o/r#602", "dispatcher-a", "", time.Minute)
+	if _, err := s.Attach(ctx, "DISPATCH-STUDIO-601", "STUDIO-601", "dispatcher-a", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Attach(ctx, "DISPATCH-STUDIO-602", "STUDIO-601", "dispatcher-a", 1); err == nil {
+		t.Fatal("expected unique canonical item conflict")
 	}
 }
 
@@ -79,5 +100,23 @@ func TestReserveRejectsItemSourceCrossing(t *testing.T) {
 	_, err := s.Reserve(ctx, "STUDIO-503", "github:o/r#DIFFERENT", "dispatcher-a", "", time.Minute)
 	if !errors.Is(err, ErrIdentityConflict) {
 		t.Fatalf("want ErrIdentityConflict, got %v", err)
+	}
+}
+
+func TestInactiveLegacyItemKeyMigratesToSourceFirstKey(t *testing.T) {
+	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	_, err := s.Reserve(ctx, "STUDIO-604", "github:o/r#604", "dispatcher-a", "legacy", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	r, err := s.Reserve(ctx, "DISPATCH-STUDIO-604", "github:o/r#604", "dispatcher-b", "source first", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ItemID != "DISPATCH-STUDIO-604" || r.Generation != 2 {
+		t.Fatalf("migrated=%+v", r)
 	}
 }

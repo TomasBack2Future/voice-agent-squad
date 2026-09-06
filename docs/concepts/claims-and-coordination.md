@@ -68,18 +68,21 @@ and release it—not merge unrelated work.
 
 ## Durable dispatch reservations
 
-A Dispatcher reserves a canonical Issue before creating a Worker task, then
-binds the returned generation to the created task:
+A Dispatcher reserves a canonical Issue source before creating its Squad item
+or Worker task. Only the winner creates the item, attaches it, and binds the
+returned generation to the created task:
 
 ```bash
-squad dispatch reserve STUDIO-501 --source github:owner/repo#501 --json
-squad dispatch bind STUDIO-501 --generation 1 --thread-id 0199...
+squad dispatch reserve DISPATCH-STUDIO-501 --source github:owner/repo#501 --json
+squad dispatch attach DISPATCH-STUDIO-501 --item STUDIO-501 --generation 1
+squad dispatch bind DISPATCH-STUDIO-501 --generation 1 --thread-id 0199...
 ```
 
 This reservation is not work ownership. The Worker must still win the normal
 atomic Issue claim. It only closes the scheduler race in which two periodic
-cycles both observe an unclaimed Issue before either Worker exists. Unbound
-reservations expire; bound reservations remain durable until the Dispatcher
+cycles both observe an unclaimed Issue. Reserving before item creation prevents
+duplicate canonical items as well as duplicate Workers. Unbound reservations
+expire; bound reservations remain durable until the Dispatcher
 reconciles them with `dispatch close`.
 
 ## Lifecycle states

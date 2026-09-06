@@ -292,12 +292,13 @@ Reservations prevent duplicate periodic dispatch but never replace the Worker's
 normal Issue claim.
 
 ```bash
-squad dispatch reserve STUDIO-501 \
+squad dispatch reserve DISPATCH-STUDIO-501 \
   --source github:TomasBack2Future/voice-agent-studio#501 \
   --ttl 15m --json
-squad dispatch bind STUDIO-501 --generation 1 --thread-id 0199abcd
+squad dispatch attach DISPATCH-STUDIO-501 --item STUDIO-501 --generation 1
+squad dispatch bind DISPATCH-STUDIO-501 --generation 1 --thread-id 0199abcd
 squad dispatch list --active --json
-squad dispatch close STUDIO-501 --generation 1 --state completed \
+squad dispatch close DISPATCH-STUDIO-501 --generation 1 --state completed \
   --note "issue closed after staging acceptance"
 ```
 

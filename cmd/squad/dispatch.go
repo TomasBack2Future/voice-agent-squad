@@ -12,7 +12,7 @@ import (
 
 func newDispatchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "dispatch", Short: "Manage durable Dispatcher-to-Worker reservations"}
-	cmd.AddCommand(newDispatchReserveCmd(), newDispatchBindCmd(), newDispatchCloseCmd(), newDispatchListCmd())
+	cmd.AddCommand(newDispatchReserveCmd(), newDispatchAttachCmd(), newDispatchBindCmd(), newDispatchCloseCmd(), newDispatchListCmd())
 	return cmd
 }
 
@@ -21,7 +21,7 @@ func newDispatchReserveCmd() *cobra.Command {
 	var ttl time.Duration
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use: "reserve <ITEM-ID>", Short: "Atomically reserve one canonical source before creating a Worker", Args: cobra.ExactArgs(1),
+		Use: "reserve <RESERVATION-KEY>", Short: "Atomically reserve one canonical source before creating its Squad item", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bc, err := bootClaimContext(cmd.Context())
 			if err != nil {
@@ -47,12 +47,43 @@ func newDispatchReserveCmd() *cobra.Command {
 	return cmd
 }
 
+func newDispatchAttachCmd() *cobra.Command {
+	var itemID string
+	var generation int64
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use: "attach <RESERVATION-KEY>", Short: "Attach the canonical Squad item created by the reservation winner", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			bc, err := bootClaimContext(cmd.Context())
+			if err != nil {
+				return err
+			}
+			defer bc.Close()
+			res, err := dispatch.New(bc.db, bc.repoID, nil).Attach(cmd.Context(), args[0], itemID, bc.agentID, generation)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "attached %s generation=%d item=%s\n", res.ItemID, res.Generation, res.CanonicalItemID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&itemID, "item", "", "canonical Squad item id")
+	cmd.Flags().Int64Var(&generation, "generation", 0, "reservation generation returned by reserve")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	_ = cmd.MarkFlagRequired("item")
+	_ = cmd.MarkFlagRequired("generation")
+	return cmd
+}
+
 func newDispatchBindCmd() *cobra.Command {
 	var threadID string
 	var generation int64
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use: "bind <ITEM-ID>", Short: "Bind a created Worker task to the matching reservation generation", Args: cobra.ExactArgs(1),
+		Use: "bind <RESERVATION-KEY>", Short: "Bind a created Worker task to the matching reservation generation", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bc, err := bootClaimContext(cmd.Context())
 			if err != nil {
@@ -83,7 +114,7 @@ func newDispatchCloseCmd() *cobra.Command {
 	var generation int64
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use: "close <ITEM-ID>", Short: "Close a reservation after reconciling Worker outcome", Args: cobra.ExactArgs(1),
+		Use: "close <RESERVATION-KEY>", Short: "Close a reservation after reconciling Worker outcome", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bc, err := bootClaimContext(cmd.Context())
 			if err != nil {
@@ -128,7 +159,7 @@ func newDispatchListCmd() *cobra.Command {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(rows)
 			}
 			for _, r := range rows {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\tgeneration=%d\tworker=%s\t%s\n", r.ItemID, r.State, r.Generation, r.WorkerThreadID, r.SourceRef)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\titem=%s\t%s\tgeneration=%d\tworker=%s\t%s\n", r.ItemID, r.CanonicalItemID, r.State, r.Generation, r.WorkerThreadID, r.SourceRef)
 			}
 			return nil
 		},
