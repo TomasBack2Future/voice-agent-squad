@@ -1,0 +1,15 @@
+{
+  "schema_version": "squad.reviewer.release.v1",
+  "documents": [
+    {
+      "name": "squad-pr-reviewer-core",
+      "path": "skills/squad-pr-reviewer-core/SKILL.md",
+      "sha256": "e7da7ec5782bc02e15d018608acdea977018ba14f83099adfbb9a0f5ece8b9d5"
+    },
+    {
+      "name": "studio-pr-review-policy",
+      "path": "policies/studio-pr-review-policy.md",
+      "sha256": "c076c9db35d15d821e599ee4427e0cd08abccf0a9a29314a213761c0489c71f0"
+    }
+  ]
+}
