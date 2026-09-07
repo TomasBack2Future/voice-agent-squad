@@ -17,7 +17,7 @@ func TestRunTail_OneShotPrintsLatest(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if code := runTailBody(context.Background(), f.chat, f.db, "global", false, "720h", "", &buf); code != 0 {
+	if code := runTailBody(context.Background(), f.chat, f.db, "global", false, "", "", &buf); code != 0 {
 		t.Fatalf("exit=%d", code)
 	}
 	if !strings.Contains(buf.String(), "tail-me") {
