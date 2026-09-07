@@ -1,6 +1,6 @@
 # Proposal: Grok as a required, read-only PR reviewer
 
-Status: Revised draft after three independent Grok reviews
+Status: Approved for implementation after three revision rounds
 
 ## Decision
 
@@ -64,6 +64,25 @@ than PR-scoped. Both are accepted:
 | --- | --- |
 | Reopen, ready-for-review, duplicates, or concurrent processes could sample the same tuple twice | Compute and transactionally CAS-claim the idempotency key before generation or provider work; only the `empty -> in_progress` winner samples; joiners and sealed events replay the shared record. |
 | Two open PRs could share one head SHA and consume each other's latest Check | Before every success, list open in-scope PRs using the head and require exactly one matching PR; lifecycle changes reconcile the head, and ambiguity publishes only non-success. |
+
+## Independent approval
+
+The final independent review returned `decision: approve` with no blocking
+findings. Rounds 1–3 are closed and must not be reopened during implementation.
+The accepted merge guarantee is:
+
+> The configured App published `grok-review` success on head H for a unique open
+> PR whose current base-ref tip and head still matched the sealed tuple.
+
+Model quality remains probabilistic; deterministic trust-boundary and publication
+controls make only the provenance and reviewed snapshot enforceable.
+
+The final review identified six non-architectural controls that are mandatory
+before Phase 3: post-success verification, authorizing-run close semantics,
+PR-keyed replay after shared-head reconciliation, exhaustive occupancy paging,
+continuous sampler-lease fencing, and launch gates that remain outside the merge
+TCB. They are incorporated below as implementation requirements and control
+tests.
 
 ## Goals
 
@@ -225,13 +244,15 @@ only when the unchanged head is already up to date with the new base tip, as can
 happen after a retarget or a base ref moving to an ancestor.
 
 The App handles `converted_to_draft` by minting a newer generation and completing
-it `cancelled`, even if the previous run had already succeeded. `closed` cancels
-current eligibility. `ready_for_review` and `reopened` reconcile the same tuple;
-they replay a sealed result without another model call. Every opened, reopened,
-closed, converted-to-draft, synchronize, and base-change event also reconciles
-all open in-scope PRs that use the affected head SHA. V1 accepts same-repository
-PRs only; fork PRs fail closed until their outbound-data and permission model is
-explicitly approved.
+it `cancelled`, even if the previous run had already succeeded. `closed` with
+`merged=false` supersedes leftover success with a non-success generation.
+`closed` with `merged=true` preserves the historical authorizing run and only
+reconciles other PRs using the head. `ready_for_review` and `reopened` reconcile
+the same tuple; they replay a sealed result without another model call. Every
+opened, reopened, closed, converted-to-draft, synchronize, and base-change event
+also reconciles all open in-scope PRs that use the affected head SHA. V1 accepts
+same-repository PRs only; fork PRs fail closed until their outbound-data and
+permission model is explicitly approved.
 
 The App also subscribes to `check_run.rerequested` and
 `check_suite.rerequested`. Rerequest is replay, never resampling. The same
@@ -291,9 +312,15 @@ wait or arrange a fresh latest Check Run, but complete it only from the sealed
 record. If a sampler loses its lease or seal CAS, its private result is discarded
 and cannot reach GitHub. The store is shared across webhook redelivery, duplicate
 `synchronize` events, rerequests, service restarts, and concurrent processes.
+The sampler heartbeats its fenced lease during freeze, queue admission, every
+shard, reduction, and sealing. It verifies the lease immediately before each
+provider call and before every GitHub PATCH. A freeze that outlives the lease
+cannot continue into provider execution.
+
 An expired lease may be taken over only while no shard has reached
-`provider_started`. Once any provider request might have left the service, a lost
-owner is completed as an error by the fenced watchdog rather than resampled.
+`provider_started`, and the old owner must fail its next fence check. Once any
+provider request might have left the service, a lost owner is completed as an
+error by the fenced watchdog rather than resampled.
 
 Generation is a monotonically increasing integer per `(installation,
 repository, head.sha, check-name)`, because GitHub's named Check is commit-global,
@@ -304,12 +331,17 @@ generation exits without PATCHing either run. It never looks up a Check by name
 to complete it.
 
 Before publishing success, the App lists all open, in-scope PRs in the repository
-that use the reviewed head SHA. The set must contain exactly one PR and it must
-equal the reviewed PR. Zero or multiple matches produce only a fenced
-non-success result. When a second PR opens on a previously successful head, its
-event creates a newer non-success generation that blocks every PR sharing that
-commit. When ambiguity later disappears, reconciliation either replays the sole
-remaining PR's sealed result or starts its one allowed sample.
+that use the reviewed head SHA, paginating to completion. A page, rate-limit, or
+API error is non-success and is never interpreted as occupancy one. The complete
+set must contain exactly one PR and it must equal the reviewed PR. Zero or
+multiple matches produce only a fenced non-success result. When a second PR
+opens on a previously successful head, its event creates a newer non-success
+generation that blocks every PR sharing that commit.
+
+When ambiguity later disappears, reconciliation computes the sole remaining
+PR's own idempotency key. It may replay only that key's sealed result or start
+that key's one allowed sample. A seal belonging to the merged or closed PR is
+never copied to another PR merely because the two PRs shared a head SHA.
 
 Review execution uses a separate bounded reviewer pool, initially two or three
 concurrent runs; it does not consume any of the five product-Worker WIP slots.
@@ -493,10 +525,18 @@ includes base SHA, head SHA, policy hash, adapter release, request hash, and
 generation.
 
 Immediately before a `success` PATCH, the App lists open in-scope PRs at that
-head again. Success is forbidden unless exactly one result exists and its PR
-number and base-ref tip match the sealed record. PR numbers in `external_id` or
-Check output do not change GitHub's commit-global semantics and are never used as
-a substitute for this query.
+head again, paginating exhaustively. Success is forbidden unless exactly one
+result exists and its PR number and base-ref tip match the sealed record. PR
+numbers in `external_id` or Check output do not change GitHub's commit-global
+semantics and are never used as a substitute for this query.
+
+GitHub offers no compare-and-swap primitive proving that a just-completed Check
+is still the latest same-name run. Therefore every successful PATCH is followed
+immediately by another exhaustive occupancy query and a read of the latest
+App-pinned `grok-review` ID on that SHA. If occupancy is no longer exactly the
+reviewed PR or the successful ID is no longer latest, the App atomically mints a
+newer head-global generation and completes it non-successfully. The second-PR
+opened handler is an additional backstop, not the only repair path.
 
 Required-check conclusions are deliberately narrow:
 
@@ -522,8 +562,9 @@ The Worker does not invoke the App. It follows the ordinary GitHub-driven path:
    for the current, up-to-date head.
 4. Re-read the PR head, mergeability, ruleset result, and environment after
    acquiring the environment claim.
-5. Merge, deploy, verify the exact staging revision, roll back on failure, and
-   release locks under existing Worker authorization.
+5. Record the App-pinned Check Run ID that authorizes the merge as an untrusted
+   lookup hint, then merge, deploy, verify the exact staging revision, roll back
+   on failure, and release locks under existing Worker authorization.
 
 Squad review evidence contains a sanitized pointer to the GitHub Check Run ID,
 App integration ID, repository, PR, base SHA, head SHA, request and result hashes,
@@ -537,14 +578,21 @@ attestation. It confirms that:
 
 - The PR is merged.
 - The merged PR's last `headRefOid` equals the recorded reviewed head SHA.
-- The merge-relevant latest `grok-review` Check Run on that head succeeded.
-- The Check came from the configured App integration ID.
-- Its recorded base/head tuple and generation match the run that authorized the
-  merge.
+- The explicitly recorded authorizing Check Run ID, or an unambiguous historical
+  candidate when the hint is absent, exists on that head and succeeded.
+- The Check came from the configured App integration ID and completed no later
+  than GitHub's `merged_at` timestamp.
+- Its recorded base/head tuple and generation match the evidence observed at the
+  merge gate.
 
 It does not compare the PR head to the merge commit SHA. `squad done --force`
 cannot bypass review evidence. Any emergency merge bypass exists only in GitHub
 administration and remains unavailable to Workers.
+
+After merge, close validation does not require the authorizing run to remain the
+latest Check on that commit. A later PR-sharing, close, or reconciliation event
+may legitimately publish a newer non-success run on the same head. For an
+unmerged PR, by contrast, close handling must supersede leftover success.
 
 Policy hash and adapter release remain immutable audit fields, but close
 validation does not require them to appear in today's allowlist. Rotating the
@@ -576,6 +624,10 @@ The implementation is not ready for enforcement until automated tests prove:
 - Two open in-scope PRs sharing one head SHA, including PRs targeting different
   bases, can produce no successful required Check; closing one reconciles the
   sole remaining PR without resampling an already sealed tuple.
+- Merging or closing PR A while PR B shares the head never replays A's sealed
+  success onto B; only B's idempotency key can authorize B.
+- Occupancy queries paginate to completion; a truncated page or any page error
+  cannot publish success.
 - One blocking shard dominates any number of approved shards.
 - Missing, truncated, malformed, timed-out, cancelled, and uncovered shards never
   reduce to approval.
@@ -588,6 +640,8 @@ The implementation is not ready for enforcement until automated tests prove:
   cannot complete or overwrite another process's run.
 - A stale publisher cannot overwrite a Check for a newer head or a newer base and
   generation on the same head.
+- If occupancy or latest Check ID changes between the pre-success read and PATCH,
+  post-success verification creates a newer non-success generation.
 - Freeze or scan failure immediately seals failure and completes the owned run
   only while its fence is current.
 - Queue age does not consume the execution timeout, but a separate queue-age cap
@@ -595,12 +649,17 @@ The implementation is not ready for enforcement until automated tests prove:
   watchdog.
 - Watchdog, freeze, draft, close, and all other failure paths cannot PATCH an ID
   after its generation becomes stale.
-- Closed and converted-to-draft events supersede even a completed success with a
-  non-success generation, while reopen and ready-for-review reconcile by replay.
+- The sampler heartbeats throughout freeze and review and verifies its lease
+  before every shard and PATCH; a freeze that loses its lease cannot call Grok.
+- An unmerged close and converted-to-draft event supersede even a completed
+  success, while a merged close preserves the historical authorizing run and
+  reconciles other PRs by their own keys.
 - Production publisher code, policy, and credentials cannot be loaded from the
   reviewed repository or a Worker host.
 - `squad done` refuses a Check from the wrong App or wrong head, including when
   locally fabricated evidence claims success.
+- `squad done` accepts the verified App-pinned authorizing success completed by
+  `merged_at` even when a legitimate later non-success run is now latest.
 
 ## Rollout
 
@@ -648,6 +707,11 @@ Before enabling it, the App release must contain the reviewed non-semantic
 generated-file exclusion list, including an explicit decision for Dependabot and
 lockfile-only PRs. Fork PRs remain unsupported and fail closed in v1.
 
+The retention/training go/no-go, generated-file and Dependabot policy, gold-set
+false-block threshold, and policy-owner cadence are launch gates outside the
+merge TCB. Missing any of them delays Phase 3; it never weakens App identity,
+single-sampling, occupancy, fencing, schema, or fail-closed enforcement.
+
 ### Phase 4: future capabilities
 
 Add `merge_group` support before enabling a merge queue. Consider tightly
@@ -682,6 +746,12 @@ contract without changing the enforcement boundary.
   tuple.
 - Success is forbidden unless exactly one open in-scope PR uses the reviewed head
   SHA and it is the reviewed PR.
+- Occupancy is exhaustively paginated and revalidated together with the latest
+  App Check ID after every success PATCH; a race is repaired by a newer
+  non-success generation.
+- Shared-head reconciliation uses only the remaining PR's own idempotency key and
+  never transfers another PR's sealed result.
+- The sampler heartbeats and verifies its fence before every shard and PATCH.
 - Missing, stale, malformed, secret-bearing, truncated, uncovered, timed-out, or
   cancelled work never produces success.
 - The required publisher emits no `neutral` or `skipped` conclusion.
@@ -689,8 +759,11 @@ contract without changing the enforcement boundary.
 - Workers wait without holding `ENV`, correct findings on a new head, and proceed
   automatically only after current required checks pass.
 - Squad stores audit evidence only, and close validation independently re-reads
-  the successful Check for the merged PR's last head OID and pinned App.
+  the App-pinned authorizing success for the merged PR's last head OID at or
+  before `merged_at`; that run need not remain latest after merge.
 - App-release rotation does not invalidate already-merged historical evidence.
+- Retention, exclusions, gold-set thresholds, and policy ownership are Phase 3
+  launch gates and cannot relax the merge TCB.
 - Merge queues remain disabled until their separately bound review flow exists.
 
 ## Remaining implementation decisions
