@@ -1,6 +1,6 @@
 # Proposal: Grok as a required, read-only PR reviewer
 
-Status: Revised draft after two independent Grok reviews
+Status: Revised draft after three independent Grok reviews
 
 ## Decision
 
@@ -17,6 +17,13 @@ bypass it. Squad stores an audit pointer to the GitHub Check; it is not the merg
 enforcement authority.
 
 This replaces the original Worker-triggered local-adapter design.
+
+Two v1 invariants govern every event and process:
+
+1. Exactly one Grok sample may exist for one idempotency key. GitHub events may
+   create or replay Check Runs, but cannot create another model sample.
+2. A `grok-review` success may be published on a head SHA only while exactly one
+   open, in-scope PR in that repository uses that head, and it is the reviewed PR.
 
 ## Independent-review disposition: round 1
 
@@ -46,6 +53,17 @@ GitHub Check-semantics gaps. All four are accepted as v1 requirements:
 | GitHub rerequest could resample a terminal verdict | Handle `check_run.rerequested` and `check_suite.rerequested`; replay the sealed terminal result for the idempotency key without calling Grok. |
 | A stale publisher could complete another or newer run | Persist each exact `check_run_id`, use compare-and-swap generations, PATCH only the owned ID, and refuse completion unless it is still current. |
 | The off-host publisher remained an implementation choice | Require a dedicated external GitHub App service deployed from an immutable `voice-agent-squad` release; production publisher code, policy, and secrets never come from the reviewed repository. |
+
+## Independent-review disposition: round 3
+
+The third review confirmed that all Round 2 findings are closed and found two
+remaining consequences of GitHub treating a named Check as commit-scoped rather
+than PR-scoped. Both are accepted:
+
+| Finding | Resolution in this revision |
+| --- | --- |
+| Reopen, ready-for-review, duplicates, or concurrent processes could sample the same tuple twice | Compute and transactionally CAS-claim the idempotency key before generation or provider work; only the `empty -> in_progress` winner samples; joiners and sealed events replay the shared record. |
+| Two open PRs could share one head SHA and consume each other's latest Check | Before every success, list open in-scope PRs using the head and require exactly one matching PR; lifecycle changes reconcile the head, and ambiguity publishes only non-success. |
 
 ## Goals
 
@@ -115,6 +133,13 @@ The App is trusted to:
 The App private key, installation token, policy allowlist, release signing keys,
 and production publisher endpoint must not exist on a Worker host. A local build
 may validate bundles for development, but it cannot publish a production Check.
+
+The durable idempotency and generation store is part of the same trusted
+computing base. It runs beside the external App, is unreachable with Worker
+network identity or credentials, and provides transactional compare-and-swap
+over idempotency state and per-head generation. An App replica must acquire a
+fenced sampler lease from this store before calling Grok; process memory, webhook
+delivery IDs, and local files are not coordination authority.
 
 The App has only `contents:read`, `metadata:read`, `pull-requests:read`, and
 `checks:write`; `pull-requests:write` is optional when sanitized review comments
@@ -189,51 +214,69 @@ GitHub, not a Worker or timer, schedules production review.
 The App handles authenticated `pull_request` events for `opened`, `reopened`,
 `synchronize`, and `ready_for_review`. It also handles `edited` when
 `changes.base` is present; title- or description-only edits do not create a new
-review. A `push` to an in-scope protected base causes the App to reconcile every
-open PR targeting that base and create a new generation wherever GitHub's current
-`base.sha` differs from the recorded tuple. Strict up-to-date enforcement remains
-an additional repository protection, not a substitute for these events.
+review. It reads the current base-ref tip from GitHub's refs API rather than
+assuming `pull_request.base.sha` is current. Strict up-to-date enforcement remains
+an additional repository protection, not a substitute for event reconciliation.
 
-The App handles `converted_to_draft` and `closed` by cancelling eligible
-in-flight runs. A later `ready_for_review` or `reopened` event creates a new
-generation even when the head SHA is unchanged. V1 accepts same-repository PRs
-only; fork PRs fail closed until their outbound-data and permission model is
+A `push` to an in-scope protected base reconciles its open PRs without immediately
+sending all of them to Grok. A behind PR receives a newer non-success Check and
+waits for its normal rebase and `synchronize` event. The App reviews immediately
+only when the unchanged head is already up to date with the new base tip, as can
+happen after a retarget or a base ref moving to an ancestor.
+
+The App handles `converted_to_draft` by minting a newer generation and completing
+it `cancelled`, even if the previous run had already succeeded. `closed` cancels
+current eligibility. `ready_for_review` and `reopened` reconcile the same tuple;
+they replay a sealed result without another model call. Every opened, reopened,
+closed, converted-to-draft, synchronize, and base-change event also reconciles
+all open in-scope PRs that use the affected head SHA. V1 accepts same-repository
+PRs only; fork PRs fail closed until their outbound-data and permission model is
 explicitly approved.
 
 The App also subscribes to `check_run.rerequested` and
-`check_suite.rerequested`. Rerequest is replay, never resampling: for an existing
-idempotency key, the service immediately republishes the sealed terminal
-conclusion and sanitized output without invoking Grok. If a crash occurred
-before any provider attempt or terminal record existed, the durable run resumes
-its original bounded attempt; it does not allocate a fresh sampling budget.
+`check_suite.rerequested`. Rerequest is replay, never resampling. The same
+idempotency protocol applies to every event, including reopen, ready-for-review,
+duplicate delivery, base reconciliation, rerequest, and restart.
 
 For each current head:
 
 ```text
 GitHub event
   -> authenticate installation and repository allowlist
-  -> read PR base.sha, head.sha, changed-file list, and current checks
-  -> atomically allocate next generation for (repository, PR, head.sha)
-  -> create pending Check Run on head.sha; persist its exact check_run_id
-  -> freeze and hash bundle
-  -> scan outbound content and verify coverage
-     -> freeze/scan failure: complete this exact run as failure immediately
+  -> read PR, head.sha, base ref tip, and open in-scope PRs using this head
+  -> apply draft, closed, behind, fork, and shared-head preconditions
+  -> compute the idempotency key before generation or provider work
+  -> transactionally CAS the key
+     -> sealed: reuse the sealed result; never call Grok
+     -> in_progress: join/wait for that record; never call Grok
+     -> empty: become the only sampler for this key
+  -> mint a head-global generation and Check Run only when GitHub needs a fresh
+     latest result; persist the exact check_run_id
+  -> sampler freezes and hashes the bundle
+  -> sampler scans outbound content and verifies coverage
+     -> freeze/scan failure: seal failure in the shared record
   -> wait in the bounded reviewer queue
-  -> mark execution started and start the execution watchdog
-  -> run bounded Grok review shards
-  -> validate every result and reduce with deterministic code
-  -> transactionally seal the first terminal result for the idempotency key
-  -> re-read PR base.sha, head.sha, and latest review generation
-     -> exact tuple and generation still current: PATCH only owned check_run_id
-     -> stale tuple or generation: do not publish success and never touch a newer ID
+  -> atomically mark provider_started and start the execution watchdog
+  -> sampler runs each deterministic Grok shard at most once
+  -> sampler validates and deterministically reduces the results
+  -> sampler CAS-seals the first terminal aggregate; a losing private result is discarded
+  -> every waiter publishes only from the sealed shared record, never private output
+  -> re-read PR, base ref tip, head occupancy, generation, and exact check_run_id
+     -> success is eligible only for an exact current tuple with exactly one
+        matching open in-scope PR
+     -> any writer may PATCH only its owned current ID while its fence is current
+     -> stale tuple, ID, or generation: perform no PATCH, including cancellation
   -> finish; a local audit recorder may later import the Check Run pointer
 ```
 
-A queue-age monitor reports backlog separately. The execution watchdog starts
-when a reviewer slot begins work, not when the webhook arrives, and converts an
-over-deadline in-progress Check into `timed_out`. No pending run may disappear
-silently or remain indefinitely ambiguous. Per-installation rate limits queue
-work and fail closed; they never skip review or produce success.
+A queue-age monitor reports backlog and applies a separate maximum queue age. A
+current fenced run that exceeds it becomes `timed_out`, never success. The
+execution watchdog starts when a reviewer slot begins work and separately times
+out over-deadline execution. Freeze/scan failure seals failure immediately. All
+watchdog, freeze, draft, close, and failure writers verify the same exact ID and
+generation fence before PATCHing; a stale writer performs no update. No pending
+run may remain indefinitely ambiguous. Per-installation rate limits queue work
+and fail closed; they never skip review or produce success.
 
 The logical idempotency key is:
 
@@ -242,19 +285,34 @@ installation + repository + PR + base SHA + head SHA
 + policy hash + adapter release + model configuration hash
 ```
 
-The durable idempotency store is shared across webhook redelivery, duplicate
-`synchronize` events, rerequests, service restarts, and concurrent processes. It
-stores the first sealed terminal result as well as repository, PR, base SHA,
-head SHA, generation, request hash, and exact `check_run_id`. Review execution
-uses a separate bounded reviewer pool, initially two or three concurrent runs;
-it does not consume any of the five product-Worker WIP slots.
+The durable idempotency record has `empty`, `in_progress`, and `sealed` states.
+Only the CAS winner from `empty` to `in_progress` may begin sampling. Joiners may
+wait or arrange a fresh latest Check Run, but complete it only from the sealed
+record. If a sampler loses its lease or seal CAS, its private result is discarded
+and cannot reach GitHub. The store is shared across webhook redelivery, duplicate
+`synchronize` events, rerequests, service restarts, and concurrent processes.
+An expired lease may be taken over only while no shard has reached
+`provider_started`. Once any provider request might have left the service, a lost
+owner is completed as an error by the fenced watchdog rather than resampled.
 
-Generation is a monotonically increasing integer per `(repository, PR,
-head.sha)`. A base change on the same head allocates a newer generation and
-creates a new same-name Check Run. Before that creation, any owned older pending
-run is cancelled; the newer run is then created last. A late older process that
-observes a newer generation exits without PATCHing either run. It never looks up
-a Check by name to complete it.
+Generation is a monotonically increasing integer per `(installation,
+repository, head.sha, check-name)`, because GitHub's named Check is commit-global,
+not PR-local. A base or eligibility change on the same head can allocate a newer
+generation. Before creating it, the App may cancel an owned older current pending
+run; the new run is created last. A late older process that observes a newer
+generation exits without PATCHing either run. It never looks up a Check by name
+to complete it.
+
+Before publishing success, the App lists all open, in-scope PRs in the repository
+that use the reviewed head SHA. The set must contain exactly one PR and it must
+equal the reviewed PR. Zero or multiple matches produce only a fenced
+non-success result. When a second PR opens on a previously successful head, its
+event creates a newer non-success generation that blocks every PR sharing that
+commit. When ambiguity later disappears, reconciliation either replays the sole
+remaining PR's sealed result or starts its one allowed sample.
+
+Review execution uses a separate bounded reviewer pool, initially two or three
+concurrent runs; it does not consume any of the five product-Worker WIP slots.
 
 ## Frozen review bundle
 
@@ -268,8 +326,6 @@ All authoritative identity fields are derived from GitHub by the App:
   "repository_id": 98765,
   "repository": "TomasBack2Future/voice-agent-studio",
   "pull_request": 123,
-  "review_generation": 4,
-  "check_run_id": 456789,
   "base_ref": "main",
   "base_sha": "012345...",
   "head_sha": "abcdef...",
@@ -304,6 +360,13 @@ contents when they fit the declared bounds. Large changes are split
 deterministically by file and hunk. The manifest, not model output, defines the
 required coverage. A required file that is missing, truncated, unsupported, or
 not assigned to a shard makes the run `error`.
+
+The App constructs the manifest for the exact base-ref tip and head SHA and
+fetches every source blob through the Git Contents or Git Blob API at
+`head.sha`. It never reads changed content from a default-branch checkout and
+never executes files from the PR. Check conclusions supplied to Grok are limited
+to configured, pinned GitHub Apps; Worker-authored classic statuses and unknown
+Check publishers are excluded rather than presented as trusted evidence.
 
 Author-declared test evidence is untrusted supporting context. GitHub Check
 conclusions are GitHub-derived. The initial no-tool reviewer is sufficient only
@@ -382,19 +445,27 @@ them with AND semantics:
 
 The model never performs the aggregate reduction.
 
-Automatic retry is allowed only before a valid terminal verdict and only for a
-bounded transport, rate-limit, timeout, or parse failure. V1 permits at most one
-transport retry. The first valid `approved` or `blocking` result for a shard and
-request is immutable and ends provider sampling. A valid blocking result is
-never automatically resampled.
+Each deterministic shard has a subkey under the review idempotency key and may
+be sampled at most once. Immediately before the provider request, the sampler
+irreversibly records `provider_started` for that shard. If the process dies or a
+response is lost after that point, the shard becomes `error`; another process
+does not call Grok again. A transport retry is allowed only when the provider
+offers an idempotency token that guarantees the same request is not sampled
+again, or when the App can prove no request left the process. Otherwise timeout,
+rate limit, parse failure, and ambiguous delivery fail closed.
 
-After the bounded internal retry budget, the aggregate conclusion and its cause
-are sealed in the idempotency record. GitHub rerequest does not reset that budget.
+The first valid `approved` or `blocking` shard result is immutable. After every
+shard is terminal, deterministic reduction seals the aggregate conclusion and
+cause in the idempotency record. GitHub rerequest does not reset any sampling or
+transport budget.
+
 For `check_run.rerequested`, the App verifies the run belongs to its installation
-and completes that exact event run with the sealed conclusion. If a
-`check_suite.rerequested` delivery requires a new Check Run, the App creates a
-replay run for the same tuple and generation and immediately completes it with
-the same sealed conclusion. Neither path invokes Grok.
+and reconciles it against the current GitHub tuple and head-global fence. If that
+event run is still current, the App completes that exact ID from the sealed
+record. Otherwise it creates a newer replay generation for the current tuple and
+completes the new exact ID from the corresponding sealed record. A suite
+rerequest follows the same rule. Neither path invokes Grok or reuses a result
+from a different tuple.
 
 V1 does not allow same-SHA approval shopping. A Worker resolves blocking
 findings by pushing a new head, which gets a new GitHub-scheduled review. A
@@ -406,13 +477,13 @@ the original result and cannot be a generic Worker-controlled retry button.
 The production Check name is `grok-review`. The shadow name is
 `grok-review-shadow`; shadow code never publishes the future required context.
 
-Before publishing, the App re-reads GitHub and requires the current PR
-`base.sha` and `head.sha` to match the frozen request. It publishes only on the
+Before publishing, the App re-reads GitHub and requires the current PR head and
+current base-ref tip to match the frozen request. It publishes only on the
 reviewed `head.sha` and through the dedicated App identity. It also verifies in
 its durable store and through GitHub that the owned `check_run_id` is the current
-`grok-review` generation for that `(repository, PR, head.sha)`. It PATCHes only
-that numeric ID; it never finds a run by name and never completes a run ID from
-another process.
+`grok-review` generation for that `(installation, repository, head.sha,
+check-name)`. It PATCHes only that numeric ID; it never finds a run by name and
+never completes a run ID from another process.
 
 If the same head is retargeted or its base SHA otherwise changes, the new event
 creates a newer pending `grok-review` generation on that head. The old success
@@ -420,6 +491,12 @@ is no longer the latest same-name result. An older process that wakes afterward
 observes the generation fence and exits without publishing. The new Check output
 includes base SHA, head SHA, policy hash, adapter release, request hash, and
 generation.
+
+Immediately before a `success` PATCH, the App lists open in-scope PRs at that
+head again. Success is forbidden unless exactly one result exists and its PR
+number and base-ref tip match the sealed record. PR numbers in `external_id` or
+Check output do not change GitHub's commit-global semantics and are never used as
+a substitute for this query.
 
 Required-check conclusions are deliberately narrow:
 
@@ -490,6 +567,15 @@ The implementation is not ready for enforcement until automated tests prove:
 - A valid blocking result is not retried into an approval.
 - Rerequest after a sealed blocking result republishes failure without a provider
   call; webhook redelivery, restart, and duplicate synchronize behave the same.
+- Close/reopen and draft/ready transitions without a tuple change do not call the
+  provider again; any fresh Check Run reproduces the sealed conclusion.
+- Two concurrent deliveries for an empty idempotency key produce exactly one
+  sampling execution, one result per deterministic shard, and identical sealed
+  conclusions on every current replay Check.
+- A sampler whose private result loses the seal CAS cannot publish that result.
+- Two open in-scope PRs sharing one head SHA, including PRs targeting different
+  bases, can produce no successful required Check; closing one reconciles the
+  sole remaining PR without resampling an already sealed tuple.
 - One blocking shard dominates any number of approved shards.
 - Missing, truncated, malformed, timed-out, cancelled, and uncovered shards never
   reduce to approval.
@@ -502,11 +588,15 @@ The implementation is not ready for enforcement until automated tests prove:
   cannot complete or overwrite another process's run.
 - A stale publisher cannot overwrite a Check for a newer head or a newer base and
   generation on the same head.
-- Freeze or scan failure immediately completes the owned run as failure.
-- Queue age does not consume the execution timeout; an in-progress over-deadline
-  run is completed non-successfully by the watchdog.
-- Closed and converted-to-draft events cancel in-flight eligibility, while reopen
-  and ready-for-review create a new generation.
+- Freeze or scan failure immediately seals failure and completes the owned run
+  only while its fence is current.
+- Queue age does not consume the execution timeout, but a separate queue-age cap
+  eventually completes a still-current run as `timed_out`; execution has its own
+  watchdog.
+- Watchdog, freeze, draft, close, and all other failure paths cannot PATCH an ID
+  after its generation becomes stale.
+- Closed and converted-to-draft events supersede even a completed success with a
+  non-success generation, while reopen and ready-for-review reconcile by replay.
 - Production publisher code, policy, and credentials cannot be loaded from the
   reviewed repository or a Worker host.
 - `squad done` refuses a Check from the wrong App or wrong head, including when
@@ -545,8 +635,9 @@ In a disposable repository or throwaway protected branch, enable the actual
 always-required `grok-review` rule, pinned App, strict up-to-date setting, and
 Worker no-bypass identities. Exercise stale heads, base advances, App outages,
 retargets with unchanged heads, rerequests, duplicate webhooks, stale same-head
-publishers, timeouts, prompt injection, secret detection, blocking fixes, and
-watchdog completion. Label-based enforcement is not used.
+publishers, concurrent first deliveries, close/reopen replay, two PRs sharing one
+head, timeouts, prompt injection, secret detection, blocking fixes, and watchdog
+completion. Label-based enforcement is not used.
 
 ### Phase 3: default Studio gate
 
@@ -570,18 +661,27 @@ contract without changing the enforcement boundary.
 - The publisher is an external GitHub App service built from an immutable
   `voice-agent-squad` release; its credentials and policy allowlist are
   inaccessible from Studio and Worker hosts.
+- The transactional idempotency and head-generation store is in the same TCB and
+  is inaccessible with Worker network identity or credentials.
 - Worker tokens cannot impersonate or administratively bypass the required gate.
 - Both reviewer skills are immutable, hash-allowlisted parts of the App release.
 - Grok receives no tools or mutation credentials and returns strict structured
   findings only.
 - GitHub-derived base and head SHAs, full changed-file coverage, and diff hunk
   positions are validated before deterministic fail-closed reduction.
-- The first valid terminal result is immutable; no retry can approval-shop.
+- A CAS on the idempotency key permits exactly one sampling execution and at most
+  one provider sample per deterministic shard; every other event joins or replays
+  the sealed record.
+- The first terminal aggregate is immutable; a losing or late private result can
+  never reach a Check Run.
 - Base-changing edits and protected-base pushes create a newer review generation
   even when the head SHA is unchanged.
 - GitHub rerequest replays the sealed result without calling Grok.
 - Every process PATCHes only its persisted `check_run_id`, and a monotonic
-  generation prevents a stale publisher from completing a newer tuple.
+  head-global generation prevents a stale publisher from completing a newer
+  tuple.
+- Success is forbidden unless exactly one open in-scope PR uses the reviewed head
+  SHA and it is the reviewed PR.
 - Missing, stale, malformed, secret-bearing, truncated, uncovered, timed-out, or
   cancelled work never produces success.
 - The required publisher emits no `neutral` or `skipped` conclusion.
