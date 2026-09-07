@@ -95,6 +95,11 @@ CI runs `golangci-lint run` and rejects PRs on gofmt / staticcheck drift. Run it
 
 Every meaningful change goes through `superpowers:code-reviewer` before commit. Even one-line fixes. The cost is about thirty seconds; the cost of a bug reaching a user is hours of their time and yours. Review catches what tests do not.
 
+This repository workflow does not make priority or risk an implicit CLI review
+quota. Projects that require review evidence declare it in
+`evidence_required`; hosting-service approval requirements remain enforced by
+their branch policy.
+
 ### Use the right skill before coding
 
 - `superpowers:brainstorming` for unclear features, ambiguous requests, or anything creative.

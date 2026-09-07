@@ -27,22 +27,12 @@ import (
 // at least one of those kinds has no successful attestation. The wrapper
 // renders the existing user-facing message; MCP callers can inspect Missing
 // directly.
-//
-// The same type is reused for the risk-tier two-reviewer gate (priority=P0
-// or risk=high): when only one distinct reviewer has attested, TierReason
-// carries the human-readable explanation and Missing is empty. CLI callers
-// branch on TierReason != "" to render the tier-specific message instead
-// of the generic "missing kinds" line.
 type EvidenceMissingError struct {
-	ItemID     string
-	Missing    []attest.Kind
-	TierReason string
+	ItemID  string
+	Missing []attest.Kind
 }
 
 func (e *EvidenceMissingError) Error() string {
-	if e.TierReason != "" {
-		return fmt.Sprintf("%s: %s", e.ItemID, e.TierReason)
-	}
 	return fmt.Sprintf("%s: evidence_required not satisfied. Missing kinds: %s", e.ItemID, joinKinds(e.Missing))
 }
 
@@ -123,27 +113,6 @@ func Done(ctx context.Context, args DoneArgs) (*DoneResult, error) {
 				return nil, err
 			}
 			bypassed = missing
-		}
-	}
-
-	// Risk-tier reviewer gate: P0 priority OR risk:high requires two
-	// distinct reviewer-agent attestations. A single reviewer (or two
-	// rows from the same reviewer) does not satisfy the gate. --force
-	// bypasses this just like evidence_required, recording the bypass
-	// as a manual attestation.
-	if isHighStakesTier(parsed.Priority, parsed.Risk) {
-		reviewers, rErr := L.DistinctReviewers(ctx, args.ItemID)
-		if rErr != nil {
-			return nil, rErr
-		}
-		if len(reviewers) < 2 {
-			reason := tierReviewerReason(parsed.Priority, parsed.Risk, len(reviewers))
-			if !args.Force {
-				return nil, &EvidenceMissingError{ItemID: args.ItemID, TierReason: reason}
-			}
-			if err := recordTierForceOverride(ctx, L, args.RepoRoot, args.AgentID, args.ItemID, reason, clock); err != nil {
-				return nil, err
-			}
 		}
 	}
 
@@ -273,11 +242,6 @@ func newDoneCmd() *cobra.Command {
 			}
 			var miss *EvidenceMissingError
 			if errors.As(err, &miss) {
-				if miss.TierReason != "" {
-					return fmt.Errorf(
-						"%s: %s — pass --force to override (the override is recorded as a manual attestation)",
-						miss.ItemID, miss.TierReason)
-				}
 				return fmt.Errorf(
 					"%s: evidence_required not satisfied (missing kinds: %s) — "+
 						"run `squad attest %s --kind <kind> --command \"...\"` for each, "+
@@ -324,60 +288,6 @@ func joinKinds(ks []attest.Kind) string {
 		parts[i] = string(k)
 	}
 	return strings.Join(parts, ", ")
-}
-
-// isHighStakesTier returns true when the item's priority/risk pair
-// triggers the two-distinct-reviewer requirement: priority=P0 OR
-// risk=high. Both fields are normalized to lower case to absorb the
-// usual frontmatter casing drift.
-func isHighStakesTier(priority, risk string) bool {
-	return strings.EqualFold(strings.TrimSpace(priority), "P0") ||
-		strings.EqualFold(strings.TrimSpace(risk), "high")
-}
-
-func tierReviewerReason(priority, risk string, have int) string {
-	trigger := "priority=P0"
-	if !strings.EqualFold(strings.TrimSpace(priority), "P0") {
-		trigger = "risk=high"
-	}
-	if have == 0 {
-		return fmt.Sprintf(
-			"%s requires two distinct reviewers; none recorded yet. "+
-				"Run `squad attest --kind review --reviewer-agent <id> --findings-file <path>` twice with different --reviewer-agent values.",
-			trigger)
-	}
-	return fmt.Sprintf(
-		"%s requires two distinct reviewers; only one recorded. "+
-			"A second reviewer must run `squad attest --kind review --reviewer-agent <id> --findings-file <path>` with a different --reviewer-agent before close.",
-		trigger)
-}
-
-func recordTierForceOverride(ctx context.Context, L *attest.Ledger, repoRoot, agentID, itemID, reason string, clock func() time.Time) error {
-	body := fmt.Sprintf(
-		"FORCE OVERRIDE for %s\ntier_gate_bypassed: %s\nagent: %s\nat: %s\n",
-		itemID, reason, agentID, clock().UTC().Format(time.RFC3339),
-	)
-	attDir := filepath.Join(repoRoot, ".squad", "attestations")
-	hash := L.Hash([]byte(body))
-	if err := os.MkdirAll(attDir, 0o755); err != nil {
-		return err
-	}
-	out := filepath.Join(attDir, hash+".txt")
-	if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
-		return err
-	}
-	if _, err := L.Insert(ctx, attest.Record{
-		ItemID:     itemID,
-		Kind:       attest.KindManual,
-		Command:    "force override of risk-tier reviewer gate",
-		ExitCode:   0,
-		OutputHash: hash,
-		OutputPath: out,
-		AgentID:    agentID,
-	}); err != nil {
-		return err
-	}
-	return nil
 }
 
 func recordForceOverride(ctx context.Context, L *attest.Ledger, repoRoot, agentID, itemID string, missing []attest.Kind, clock func() time.Time) error {

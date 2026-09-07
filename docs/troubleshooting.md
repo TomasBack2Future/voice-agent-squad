@@ -132,7 +132,7 @@ FEAT-001: evidence_required not satisfied. Missing kinds: test, review.
 Run squad attest --item FEAT-001 --kind <kind> --command "..." for each, or pass --force.
 ```
 
-**Cause:** The item's frontmatter has `evidence_required: [test, review]` (or similar), and you haven't recorded an attestation for each kind. Squad refuses to close out without the evidence — the whole point of the ledger is that "the agent said it's done" isn't sufficient.
+**Cause:** The item's frontmatter has `evidence_required: [test, review]` (or similar), and you haven't recorded an attestation for each kind. Squad refuses to close out without the evidence — the whole point of the ledger is that "the agent said it's done" isn't sufficient. `priority` and `risk` alone do not create reviewer requirements.
 
 **Fix:** Run the verifications squad is asking for, capturing each into the ledger.
 
