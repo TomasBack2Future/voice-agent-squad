@@ -5,10 +5,11 @@ Status: Approved for implementation after three revision rounds
 ## Decision
 
 Use Grok as an untrusted, read-only reviewer behind a dedicated GitHub App. The
-App runs outside every Worker host, freezes the pull-request snapshot, invokes
-Grok with two immutable reviewer skills, validates the result deterministically,
-and publishes a Check Run bound to one base/head tuple and one monotonically
-fenced review generation.
+App's Reviewer Runner runs outside every Worker host, freezes the pull-request
+snapshot, invokes the installed `grok` CLI headlessly with two immutable
+reviewer skills, validates the result deterministically, and publishes a Check
+Run bound to one base/head tuple and one monotonically fenced review generation.
+The Runner does not implement or call an xAI HTTP API adapter.
 
 The protected branch requires that Check from the expected GitHub App and
 requires the branch to be up to date. Workers can observe the Check and respond
@@ -173,6 +174,16 @@ Grok is untrusted. It receives review instructions and a bounded review bundle,
 then returns findings. It receives no GitHub token, Squad access, shell, MCP,
 writable checkout, deployment credential, environment lock, or Check publisher.
 Repository and GitHub content is data, never instruction.
+
+The trusted service invokes the installed `grok` CLI as a one-shot child
+process with `--single`, `--json-schema`, `--output-format json`,
+`--no-subagents`, `--disable-web-search`, plan permission mode, a private empty
+working directory, and an explicit empty tool allowlist. The child environment
+contains only the dedicated Grok login/configuration and safe process settings;
+GitHub App keys, installation tokens, webhook secrets, database credentials,
+and publisher endpoints are removed. The service parses only the CLI envelope's
+`structuredOutput` and separately records its request ID, session ID, resolved
+model, usage, exit status, and timeout as non-authoritative audit metadata.
 
 ### Worker
 
@@ -410,9 +421,10 @@ before hashing.
 
 ## Outbound-data policy
 
-Private Studio review is disabled until the selected Grok API account's
+Private Studio review is disabled until the dedicated Grok CLI login's
 retention, training, regional-processing, access-control, and deletion settings
-pass an explicit deployment go/no-go review.
+pass an explicit deployment go/no-go review. The Reviewer Runner must use its
+own OS identity and Grok home; it must not reuse a Worker's Grok session store.
 
 The App denies outbound submission of secrets, `.env` files, credentials,
 production dumps, customer payloads, kubeconfigs, private keys, tokens, and
@@ -429,9 +441,11 @@ Grok, and the Check summary must identify this as `policy-excluded`, not
 
 ## Strict Grok result
 
-The provider call uses schema-constrained structured output. The parser accepts
-one JSON value matching the exact schema and rejects prefixes, suffixes, Markdown
-fences, commentary, unknown keys, oversized fields, and unsupported versions.
+The Grok CLI call uses `--json-schema` schema-constrained structured output. The
+service first validates the CLI JSON envelope, then accepts exactly the
+`structuredOutput` value matching the review schema and rejects absent or
+inconsistent structured output, prefixes, suffixes, Markdown fences,
+commentary, unknown keys, oversized fields, and unsupported versions.
 
 Grok returns only non-authoritative review content:
 
@@ -665,12 +679,13 @@ The implementation is not ready for enforcement until automated tests prove:
 
 ### Phase 0: outbound and identity gate
 
-Approve the Grok API account's private-source retention/training policy. Create
-the least-privilege GitHub App and deploy its webhook service from an immutable
+Approve the dedicated Grok CLI login's private-source retention/training policy.
+Pin and attest the CLI version and binary digest. Create the least-privilege
+GitHub App and deploy its webhook service plus CLI Runner from an immutable
 `voice-agent-squad` release outside Studio and every Worker host. Prove webhook
-authentication, exact permissions, same-name status and Check impersonation,
-no Worker bypass, complete-by-ID, and generation fencing in a disposable
-repository.
+authentication, child-environment credential stripping, no-tool CLI execution,
+exact permissions, same-name status and Check impersonation, no Worker bypass,
+complete-by-ID, and generation fencing in a disposable repository.
 
 ### Phase 1: shadow
 
@@ -770,8 +785,9 @@ contract without changing the enforcement boundary.
 
 - Select the hosting platform, durable transactional idempotency store, and
   secret manager that satisfy the mandatory external-App runtime boundary.
-- Record the approved Grok API retention/training configuration and outbound
-  repository/path allowlist.
+- Record the approved dedicated Grok CLI login's retention/training
+  configuration, pinned CLI version/digest, and outbound repository/path
+  allowlist.
 - Choose the initial review concurrency of two or three from measured latency and
   provider limits.
 - Define the historical gold set and the operational false-block threshold.
