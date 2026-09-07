@@ -463,6 +463,11 @@ squad touches list-others --json
 
 Record a verification artifact (test/lint/build/typecheck/manual/review) into the evidence ledger. Items with `evidence_required: [...]` in their frontmatter need an attestation per kind before `squad done` will close them out (without `--force`).
 
+Priority and risk are scheduling metadata; they never synthesize evidence kinds
+or reviewer-count requirements. Declare `review` explicitly in
+`evidence_required` when the ledger should enforce it, and rely on the hosting
+repository's branch policy for required PR approvals.
+
 The item id is taken either as a positional argument (matches every other claim verb's convention) or via `--item`. Both forms work; passing both with conflicting values is an error.
 
 ```bash
