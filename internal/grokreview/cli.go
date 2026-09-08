@@ -38,7 +38,7 @@ const (
 	CLIFailureUnknown          CLIFailureKind = "unknown"
 )
 
-const FindingsJSONSchema = `{"type":"object","additionalProperties":false,"required":["schema_version","verdict","summary","findings"],"properties":{"schema_version":{"const":"squad.review.findings.v2"},"verdict":{"type":"string","enum":["approved","blocking","error"]},"summary":{"type":"string","minLength":1,"maxLength":4000},"findings":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["category","severity","blocking","path","line","title","body"],"properties":{"category":{"type":"string","enum":["correctness","security","data_loss","concurrency","compatibility","contract","migration","rollback","critical_test"]},"severity":{"type":"string","enum":["critical","high","medium","low"]},"blocking":{"type":"boolean"},"path":{"type":"string","minLength":1,"maxLength":1024},"line":{"type":"integer","minimum":1},"title":{"type":"string","minLength":1,"maxLength":200},"body":{"type":"string","minLength":1,"maxLength":4000},"verification":{"type":"string","maxLength":2000}}}}}}`
+const FindingsJSONSchema = `{"type":"object","additionalProperties":false,"required":["schema_version","verdict","summary","findings"],"properties":{"schema_version":{"const":"squad.review.findings.v2"},"verdict":{"type":"string","enum":["approved","blocking"]},"summary":{"type":"string","minLength":1,"maxLength":4000},"findings":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["category","severity","blocking","path","line","title","body"],"properties":{"category":{"type":"string","enum":["correctness","security","data_loss","concurrency","compatibility","contract","migration","rollback","critical_test"]},"severity":{"type":"string","enum":["critical","high","medium","low"]},"blocking":{"type":"boolean"},"path":{"type":"string","minLength":1,"maxLength":1024},"line":{"type":"integer","minimum":1},"title":{"type":"string","minLength":1,"maxLength":200},"body":{"type":"string","minLength":1,"maxLength":4000},"verification":{"type":"string","maxLength":2000}}}}}}`
 
 type Finding struct {
 	Category     string `json:"category"`
@@ -205,7 +205,7 @@ func (r *CLIRunner) Doctor(ctx context.Context) (CLIDoctor, error) {
 	}
 	requiredOptions := []string{
 		"--prompt-file", "--json-schema", "--output-format", "--no-subagents",
-		"--disable-web-search", "--permission-mode", "--tools", "--max-turns",
+		"--disable-web-search", "--permission-mode", "--no-plan", "--tools", "--max-turns",
 		"--model", "--cwd", "--system-prompt-override", "--verbatim",
 	}
 	if r.config.SandboxProfile != "" {
@@ -219,6 +219,9 @@ func (r *CLIRunner) Doctor(ctx context.Context) (CLIDoctor, error) {
 			return CLIDoctor{}, fmt.Errorf("grok CLI does not support required option %s", option)
 		}
 	}
+	if err := r.verifyOneShotInvocationContract(ctx, workDir); err != nil {
+		return CLIDoctor{}, err
+	}
 	modelsOutput, err := r.runDoctorCommand(ctx, workDir, "models")
 	if err != nil {
 		return CLIDoctor{}, err
@@ -227,6 +230,47 @@ func (r *CLIRunner) Doctor(ctx context.Context) (CLIDoctor, error) {
 		return CLIDoctor{}, fmt.Errorf("configured model %q is unavailable", r.config.Model)
 	}
 	return CLIDoctor{Version: version, Model: r.config.Model}, nil
+}
+
+// verifyOneShotInvocationContract exercises the complete review argument shape
+// without starting a model call. The deliberately absent prompt file makes a
+// correctly parsed command stop before session creation or provider work.
+func (r *CLIRunner) verifyOneShotInvocationContract(ctx context.Context, workDir string) error {
+	promptPath := filepath.Join(workDir, "doctor-missing-review-bundle.txt")
+	callCtx, cancel := context.WithTimeout(ctx, min(r.config.Timeout, time.Minute))
+	defer cancel()
+	command := exec.CommandContext(callCtx, r.config.Binary, r.commandArguments(promptPath, workDir)...)
+	command.Dir = workDir
+	command.Env = r.childEnvironment(workDir)
+	stdout := &cappedBuffer{limit: r.config.MaxOutputBytes}
+	stderr := &cappedBuffer{limit: r.config.MaxOutputBytes}
+	command.Stdout = stdout
+	command.Stderr = stderr
+	err := command.Run()
+	if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("grok CLI invocation contract check exceeded %s", min(r.config.Timeout, time.Minute))
+	}
+	if stdout.overflow || stderr.overflow {
+		return fmt.Errorf("grok CLI invocation contract output exceeded %d bytes", r.config.MaxOutputBytes)
+	}
+	if err == nil {
+		return fmt.Errorf("grok CLI invocation contract unexpectedly accepted a missing prompt file")
+	}
+	if expectedMissingPromptFailure(stderr.Bytes(), filepath.Base(promptPath)) {
+		return nil
+	}
+	diagnostics := append(append([]byte(nil), stdout.Bytes()...), stderr.Bytes()...)
+	digest := sha256.Sum256(diagnostics)
+	return fmt.Errorf(
+		"grok CLI invocation contract failed before reading the prompt (kind=%s, output_sha256=%s): %w",
+		classifyCLIFailure(diagnostics), hex.EncodeToString(digest[:]), err,
+	)
+}
+
+func expectedMissingPromptFailure(stderr []byte, promptBase string) bool {
+	message := strings.ToLower(string(stderr))
+	return strings.Contains(message, strings.ToLower(promptBase)) &&
+		(strings.Contains(message, "failed to read") || strings.Contains(message, "no such file"))
 }
 
 func (r *CLIRunner) runDoctorCommand(ctx context.Context, workDir string, args ...string) ([]byte, error) {
@@ -355,13 +399,28 @@ func (r *CLIRunner) prepare(ctx context.Context, frozenBundle []byte) (preparedC
 		return preparedCommand{}, fmt.Errorf("write frozen Grok review bundle: %w", err)
 	}
 
+	args := r.commandArguments(promptPath, workDir)
+	command := exec.CommandContext(ctx, r.config.Binary, args...)
+	command.Dir = workDir
+	command.Env = r.childEnvironment(workDir)
+	return preparedCommand{
+		command: command, workDir: workDir, promptPath: promptPath, cleanup: cleanup,
+	}, nil
+}
+
+func (r *CLIRunner) commandArguments(promptPath, workDir string) []string {
 	args := []string{
 		"--prompt-file", promptPath,
 		"--json-schema", FindingsJSONSchema,
 		"--output-format", "json",
 		"--no-subagents",
 		"--disable-web-search",
-		"--permission-mode", "plan",
+		// Plan mode is not a read-only permission boundary. It changes the model's
+		// task behavior and can make a one-shot review emit an intermediate plan as
+		// its final structured result. Filesystem isolation and an empty tool set
+		// provide the boundary; dontAsk plus no-plan require a terminal answer.
+		"--permission-mode", "dontAsk",
+		"--no-plan",
 	}
 	if r.config.SandboxProfile != "" {
 		args = append(args, "--sandbox", r.config.SandboxProfile)
@@ -376,15 +435,13 @@ func (r *CLIRunner) prepare(ctx context.Context, frozenBundle []byte) (preparedC
 	}
 	args = append(args,
 		"--cwd", workDir,
-		"--system-prompt-override", r.config.Core+"\n\n"+r.config.Policy,
+		// Keep the option and value in one argv entry. The trusted reviewer core
+		// starts with YAML frontmatter ("---"); as a separate argv entry Grok's
+		// option parser mistakes that value for another flag.
+		"--system-prompt-override="+r.config.Core+"\n\n"+r.config.Policy,
 		"--verbatim",
 	)
-	command := exec.CommandContext(ctx, r.config.Binary, args...)
-	command.Dir = workDir
-	command.Env = r.childEnvironment(workDir)
-	return preparedCommand{
-		command: command, workDir: workDir, promptPath: promptPath, cleanup: cleanup,
-	}, nil
+	return args
 }
 
 func (r *CLIRunner) childEnvironment(workDir string) []string {
@@ -434,7 +491,7 @@ func ParseCLIEnvelope(raw []byte) (FindingsResult, CLIAudit, error) {
 	if err := decodeStrictJSON(envelope.StructuredOutput, &result); err != nil {
 		return FindingsResult{}, CLIAudit{}, fmt.Errorf("parse Grok structured output: %w", err)
 	}
-	if err := ValidateFindings(result); err != nil {
+	if err := ValidateModelFindings(result); err != nil {
 		return FindingsResult{}, CLIAudit{}, err
 	}
 	var textValue, structuredValue any
@@ -495,6 +552,16 @@ func ValidateFindings(result FindingsResult) error {
 		return fmt.Errorf("blocking Grok result contains no blocking finding")
 	}
 	return nil
+}
+
+// ValidateModelFindings reserves VerdictError for trusted adapter failures.
+// The probabilistic reviewer must always decide approved or blocking from the
+// frozen snapshot; it cannot use error as an intermediate status or escape.
+func ValidateModelFindings(result FindingsResult) error {
+	if result.Verdict == VerdictError {
+		return fmt.Errorf("grok model returned reserved operational verdict %q", result.Verdict)
+	}
+	return ValidateFindings(result)
 }
 
 func decodeStrictJSON(raw []byte, target any) error {
