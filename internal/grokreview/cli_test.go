@@ -226,6 +226,127 @@ func TestCLIRunnerClassifiesFailureWithoutExposingStderr(t *testing.T) {
 	}
 }
 
+func TestClassifyCLIFailurePrioritizesInvalidArgumentsOverOAuthHelp(t *testing.T) {
+	stderr := []byte("error: unexpected argument '--old-flag'\nUsage: grok [OPTIONS]\n  --oauth  Log in with OAuth\n")
+	if got := classifyCLIFailure(stderr); got != CLIFailureInvalidArguments {
+		t.Fatalf("failure kind = %q, want %q", got, CLIFailureInvalidArguments)
+	}
+}
+
+func TestClassifyCLIFailureRecognizesLocalSessionPermissions(t *testing.T) {
+	stderr := []byte(`Couldn't create session: Permission denied: {"code":"FS_PERMISSION_DENIED"}`)
+	if got := classifyCLIFailure(stderr); got != CLIFailureLocalPermissions {
+		t.Fatalf("failure kind = %q, want %q", got, CLIFailureLocalPermissions)
+	}
+}
+
+func TestCLIRunnerDoctorChecksWritableStateCLIContractAndModel(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".grok", "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(dir, "fake-grok")
+	script := `#!/bin/sh
+set -eu
+case "$1" in
+  version)
+    printf '%s\n' 'grok 1.0.13 (test) [stable]'
+    ;;
+  --help)
+    printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim'
+    ;;
+  models)
+    if [ "${GITHUB_TOKEN+x}" = x ] || [ "${GITHUB_APP_PRIVATE_KEY+x}" = x ]; then
+      printf '%s\n' 'secret leaked' >&2
+      exit 9
+    fi
+    printf '%s\n' 'You are logged in with grok.com.' 'Default model: grok-4.6' 'Available models:' '  * grok-4.6 (default)' '  - grok-4.5'
+    ;;
+  *)
+    exit 8
+    ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := testCLIConfig(t)
+	config.Binary = binary
+	config.HomeDir = home
+	config.Model = "grok-4.6"
+	config.SandboxProfile = ""
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_TOKEN", "must-not-leak")
+	t.Setenv("GITHUB_APP_PRIVATE_KEY", "must-not-leak")
+
+	health, err := runner.Doctor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Version != "grok 1.0.13 (test) [stable]" || health.Model != "grok-4.6" {
+		t.Fatalf("health = %#v", health)
+	}
+}
+
+func TestCLIRunnerDoctorRejectsUnavailableConfiguredModel(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(filepath.Join(home, ".grok", "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(dir, "fake-grok")
+	script := `#!/bin/sh
+case "$1" in
+  version) printf '%s\n' 'grok 1.0.13' ;;
+  --help) printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim' ;;
+  models) printf '%s\n' 'Available models:' '  - grok-4.5' ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := testCLIConfig(t)
+	config.Binary = binary
+	config.HomeDir = home
+	config.Model = "grok-4.6"
+	config.SandboxProfile = ""
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = runner.Doctor(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `configured model "grok-4.6" is unavailable`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCLIRunnerDoctorExplainsSandboxedStateDirectory(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".grok"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := testCLIConfig(t)
+	config.HomeDir = home
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = runner.Doctor(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "outside the Codex sandbox") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestParseCLIEnvelopeRejectsTextThatDiffersFromStructuredOutput(t *testing.T) {
 	var envelope map[string]any
 	if err := json.Unmarshal(approvedEnvelope(t), &envelope); err != nil {

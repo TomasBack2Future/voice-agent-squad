@@ -33,6 +33,7 @@ const (
 	CLIFailureInputTooLarge    CLIFailureKind = "input_too_large"
 	CLIFailureAuthentication   CLIFailureKind = "authentication"
 	CLIFailureInvalidArguments CLIFailureKind = "invalid_arguments"
+	CLIFailureLocalPermissions CLIFailureKind = "local_permissions"
 	CLIFailureTransport        CLIFailureKind = "transport"
 	CLIFailureUnknown          CLIFailureKind = "unknown"
 )
@@ -97,6 +98,11 @@ type CLIRunner struct {
 	config CLIConfig
 }
 
+type CLIDoctor struct {
+	Version string
+	Model   string
+}
+
 type preparedCommand struct {
 	command    *exec.Cmd
 	workDir    string
@@ -156,6 +162,134 @@ func NewCLIRunner(config CLIConfig) (*CLIRunner, error) {
 		}
 	}
 	return &CLIRunner{config: config}, nil
+}
+
+func (r *CLIRunner) Doctor(ctx context.Context) (CLIDoctor, error) {
+	stateDir := filepath.Join(r.config.HomeDir, ".grok")
+	if err := probeWritableDirectory(stateDir); err != nil {
+		return CLIDoctor{}, fmt.Errorf(
+			"grok state directory is not writable; run squad-grok-review outside the Codex sandbox: %w", err,
+		)
+	}
+	sessionsDir := filepath.Join(stateDir, "sessions")
+	if _, err := os.Stat(sessionsDir); err == nil {
+		if err := probeWritableDirectory(sessionsDir); err != nil {
+			return CLIDoctor{}, fmt.Errorf(
+				"grok session directory is not writable; run squad-grok-review outside the Codex sandbox: %w", err,
+			)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return CLIDoctor{}, fmt.Errorf("inspect Grok session directory: %w", err)
+	}
+
+	workDir, err := os.MkdirTemp("", "squad-grok-review-doctor-")
+	if err != nil {
+		return CLIDoctor{}, fmt.Errorf("create Grok doctor work directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(workDir) }()
+	if err := os.Chmod(workDir, 0o700); err != nil {
+		return CLIDoctor{}, fmt.Errorf("secure Grok doctor work directory: %w", err)
+	}
+
+	versionOutput, err := r.runDoctorCommand(ctx, workDir, "version")
+	if err != nil {
+		return CLIDoctor{}, err
+	}
+	version := strings.TrimSpace(string(versionOutput))
+	if version == "" {
+		return CLIDoctor{}, fmt.Errorf("grok CLI version output is empty")
+	}
+	helpOutput, err := r.runDoctorCommand(ctx, workDir, "--help")
+	if err != nil {
+		return CLIDoctor{}, err
+	}
+	requiredOptions := []string{
+		"--prompt-file", "--json-schema", "--output-format", "--no-subagents",
+		"--disable-web-search", "--permission-mode", "--tools", "--max-turns",
+		"--model", "--cwd", "--system-prompt-override", "--verbatim",
+	}
+	if r.config.SandboxProfile != "" {
+		requiredOptions = append(requiredOptions, "--sandbox")
+	}
+	if r.config.ReasoningEffort != "" {
+		requiredOptions = append(requiredOptions, "--reasoning-effort")
+	}
+	for _, option := range requiredOptions {
+		if !bytes.Contains(helpOutput, []byte(option)) {
+			return CLIDoctor{}, fmt.Errorf("grok CLI does not support required option %s", option)
+		}
+	}
+	modelsOutput, err := r.runDoctorCommand(ctx, workDir, "models")
+	if err != nil {
+		return CLIDoctor{}, err
+	}
+	if !outputContainsModel(modelsOutput, r.config.Model) {
+		return CLIDoctor{}, fmt.Errorf("configured model %q is unavailable", r.config.Model)
+	}
+	return CLIDoctor{Version: version, Model: r.config.Model}, nil
+}
+
+func (r *CLIRunner) runDoctorCommand(ctx context.Context, workDir string, args ...string) ([]byte, error) {
+	timeout := r.config.Timeout
+	if timeout > time.Minute {
+		timeout = time.Minute
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	command := exec.CommandContext(callCtx, r.config.Binary, args...)
+	command.Dir = workDir
+	command.Env = r.childEnvironment(workDir)
+	stdout := &cappedBuffer{limit: r.config.MaxOutputBytes}
+	stderr := &cappedBuffer{limit: r.config.MaxOutputBytes}
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if err := command.Run(); err != nil {
+		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("grok CLI doctor command %q exceeded %s", args[0], timeout)
+		}
+		diagnostics := append(append([]byte(nil), stdout.Bytes()...), stderr.Bytes()...)
+		digest := sha256.Sum256(diagnostics)
+		return nil, fmt.Errorf(
+			"grok CLI doctor command %q failed (kind=%s, output_sha256=%s): %w",
+			args[0], classifyCLIFailure(diagnostics), hex.EncodeToString(digest[:]), err,
+		)
+	}
+	if stdout.overflow || stderr.overflow {
+		return nil, fmt.Errorf("grok CLI doctor command %q output exceeded %d bytes", args[0], r.config.MaxOutputBytes)
+	}
+	return append([]byte(nil), stdout.Bytes()...), nil
+}
+
+func probeWritableDirectory(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", path)
+	}
+	file, err := os.CreateTemp(path, ".squad-grok-review-doctor-")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Remove(name); err != nil {
+		return err
+	}
+	return nil
+}
+
+func outputContainsModel(output []byte, model string) bool {
+	for _, field := range strings.Fields(string(output)) {
+		if strings.Trim(field, "*-,():") == model {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsResult, CLIAudit, error) {
@@ -402,15 +536,19 @@ func classifyCLIFailure(stderr []byte) CLIFailureKind {
 		strings.Contains(message, "prompt is too long") ||
 		strings.Contains(message, "context length"):
 		return CLIFailureInputTooLarge
+	case strings.Contains(message, "unexpected argument") ||
+		strings.Contains(message, "invalid value") ||
+		strings.Contains(message, "usage:"):
+		return CLIFailureInvalidArguments
+	case strings.Contains(message, "fs_permission_denied") ||
+		strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "operation not permitted"):
+		return CLIFailureLocalPermissions
 	case strings.Contains(message, "not logged in") ||
 		strings.Contains(message, "authentication") ||
 		strings.Contains(message, "unauthorized") ||
 		strings.Contains(message, "oauth"):
 		return CLIFailureAuthentication
-	case strings.Contains(message, "unexpected argument") ||
-		strings.Contains(message, "invalid value") ||
-		strings.Contains(message, "usage:"):
-		return CLIFailureInvalidArguments
 	case strings.Contains(message, "connection") ||
 		strings.Contains(message, "network") ||
 		strings.Contains(message, "websocket") ||

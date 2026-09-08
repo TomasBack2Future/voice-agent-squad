@@ -70,6 +70,10 @@ type doctorOutput struct {
 	GitHubBinary         string `json:"github_binary"`
 	GrokHome             string `json:"grok_home"`
 	Model                string `json:"model"`
+	GrokVersion          string `json:"grok_version"`
+	GrokAuthentication   string `json:"grok_authentication"`
+	GrokCLIContract      string `json:"grok_cli_contract"`
+	GrokSessionStorage   string `json:"grok_session_storage"`
 	GitHubAuthentication string `json:"github_authentication"`
 	ReviewerBundle       string `json:"reviewer_bundle"`
 }
@@ -116,13 +120,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if configuration.doctor {
+		grokHealth, err := dependencies.model.Doctor(ctx)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
 		version, revision := buildIdentity()
 		return encodeJSON(stdout, stderr, doctorOutput{
 			Status: "ok", Version: version, Revision: revision,
 			ConfigPath: configuration.configPath, AppID: configuration.appID,
 			InstallationID: configuration.installationID,
 			GrokBinary:     dependencies.grokBinary, GitHubBinary: dependencies.githubBinary,
-			GrokHome: configuration.grokHome, Model: configuration.model,
+			GrokHome: configuration.grokHome, Model: grokHealth.Model,
+			GrokVersion: grokHealth.Version, GrokAuthentication: "ok",
+			GrokCLIContract: "ok", GrokSessionStorage: "writable",
 			GitHubAuthentication: "ok", ReviewerBundle: "ok",
 		})
 	}
