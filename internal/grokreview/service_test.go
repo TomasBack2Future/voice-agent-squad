@@ -35,6 +35,16 @@ type fakePullRequestGateway struct {
 	publishedInput FindingsResult
 }
 
+type recordingReviewObserver struct {
+	observations []ReviewObservation
+	err          error
+}
+
+func (o *recordingReviewObserver) Observe(observation ReviewObservation) error {
+	o.observations = append(o.observations, observation)
+	return o.err
+}
+
 func (f *fakePullRequestGateway) FetchPullRequest(context.Context, string, int, string) (PullRequestSnapshot, error) {
 	return f.snapshot, f.fetchErr
 }
@@ -70,7 +80,8 @@ func TestLocalReviewServiceBindsReviewAndPublicationToSameTuple(t *testing.T) {
 		snapshot: snapshot, current: snapshot,
 		publication: Publication{CommentID: 1, CheckRunID: 2, Conclusion: "success"},
 	}
-	service, err := NewLocalReviewService(model, github, "core-hash", "policy-hash")
+	observer := &recordingReviewObserver{}
+	service, err := NewLocalReviewService(model, github, "core-hash", "policy-hash", observer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,12 +95,48 @@ func TestLocalReviewServiceBindsReviewAndPublicationToSameTuple(t *testing.T) {
 	if model.calls != 1 || github.published != 1 || github.publishedName != "grok-review-shadow" {
 		t.Fatalf("model calls=%d publish calls=%d name=%q", model.calls, github.published, github.publishedName)
 	}
+	wantStates := []ReviewState{
+		ReviewStateFreezing, ReviewStateSampling, ReviewStateValidating,
+		ReviewStatePublishing, ReviewStateApproved,
+	}
+	if len(observer.observations) != len(wantStates) {
+		t.Fatalf("observations = %#v", observer.observations)
+	}
+	for index, want := range wantStates {
+		if observer.observations[index].State != want {
+			t.Fatalf("observation %d state = %q, want %q", index, observer.observations[index].State, want)
+		}
+	}
 	var bundle FrozenReviewBundle
 	if err := json.Unmarshal(model.bundle, &bundle); err != nil {
 		t.Fatal(err)
 	}
 	if bundle.HeadSHA != "head" || bundle.CoreHash != "core-hash" || bundle.PolicyHash != "policy-hash" || bundle.Diff != "+fixed" {
 		t.Fatalf("bundle = %#v", bundle)
+	}
+}
+
+func TestLocalReviewServiceIgnoresObserverFailure(t *testing.T) {
+	snapshot := PullRequestSnapshot{
+		Repository: "owner/repo", Number: 9, BaseRef: "main", BaseSHA: "base",
+		HeadSHA: "head", Title: "fix", Diff: "+fixed",
+	}
+	model := &fakeModelReviewer{result: approvedFindings()}
+	github := &fakePullRequestGateway{
+		snapshot: snapshot, current: snapshot,
+		publication: Publication{CommentID: 1, CheckRunID: 2, Conclusion: "success"},
+	}
+	observer := &recordingReviewObserver{err: errors.New("status directory unavailable")}
+	service, err := NewLocalReviewService(model, github, "core", "policy", observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.ReviewPullRequest(context.Background(), "token", "grok-review", "owner/repo", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Result.Verdict != VerdictApproved || github.published != 1 {
+		t.Fatalf("report=%#v published=%d", report, github.published)
 	}
 }
 

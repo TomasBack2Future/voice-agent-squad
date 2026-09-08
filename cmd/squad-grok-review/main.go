@@ -28,6 +28,8 @@ type config struct {
 	grokHome          string
 	model             string
 	reasoningEffort   string
+	mode              string
+	statusDir         string
 	timeout           time.Duration
 	maxGitHubOutput   int
 	maxReviewerOutput int
@@ -114,7 +116,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
-	service, err := grokreview.NewLocalReviewService(model, github, bundle.Core.SHA256, bundle.Policy.SHA256)
+	var observers []grokreview.ReviewObserver
+	statusWriter, statusErr := grokreview.NewReviewStatusWriter(configuration.statusDir, configuration.mode, configuration.timeout)
+	if statusErr != nil {
+		_, _ = fmt.Fprintln(stderr, "review status disabled:", statusErr)
+	} else {
+		observers = append(observers, statusWriter)
+	}
+	service, err := grokreview.NewLocalReviewService(model, github, bundle.Core.SHA256, bundle.Policy.SHA256, observers...)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
@@ -145,18 +154,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func parseConfig(args []string, output io.Writer) (config, error) {
 	var configuration config
-	var mode string
 	flags := flag.NewFlagSet("squad-grok-review", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.StringVar(&configuration.repository, "repo", "", "GitHub repository as owner/name")
 	flags.IntVar(&configuration.pullRequest, "pr", 0, "pull request number")
-	flags.StringVar(&mode, "mode", "shadow", "publication mode: shadow or required")
+	flags.StringVar(&configuration.mode, "mode", "shadow", "publication mode: shadow or required")
 	flags.Int64Var(&configuration.appID, "app-id", 0, "GitHub App ID")
 	flags.Int64Var(&configuration.installationID, "installation-id", 0, "GitHub App installation ID")
 	flags.StringVar(&configuration.appPrivateKey, "app-private-key", "", "path to the GitHub App private key PEM")
 	flags.StringVar(&configuration.grokBinary, "grok-bin", "grok", "Grok CLI binary")
 	flags.StringVar(&configuration.githubBinary, "gh-bin", "gh", "GitHub CLI binary")
 	flags.StringVar(&configuration.grokHome, "grok-home", "", "home directory containing the dedicated Grok login")
+	flags.StringVar(&configuration.statusDir, "status-dir", "", "directory for safe local review status JSON")
 	flags.StringVar(&configuration.model, "model", "grok-4.6", "Grok CLI model selector")
 	flags.StringVar(&configuration.reasoningEffort, "reasoning-effort", "", "optional Grok reasoning effort")
 	flags.DurationVar(&configuration.timeout, "timeout", 10*time.Minute, "Grok review timeout")
@@ -168,7 +177,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if flags.NArg() != 0 {
 		return config{}, fmt.Errorf("unexpected positional arguments")
 	}
-	switch mode {
+	switch configuration.mode {
 	case "shadow":
 		configuration.checkName = "grok-review-shadow"
 	case "required":
@@ -188,6 +197,16 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 			return config{}, fmt.Errorf("resolve Grok home: %w", err)
 		}
 		configuration.grokHome = home
+	}
+	if configuration.statusDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return config{}, fmt.Errorf("resolve review status directory: %w", err)
+		}
+		configuration.statusDir = filepath.Join(home, ".squad", "grok-reviews")
+	}
+	if !filepath.IsAbs(configuration.statusDir) {
+		return config{}, fmt.Errorf("--status-dir must be an absolute path")
 	}
 	if configuration.timeout <= 0 || configuration.maxGitHubOutput <= 0 || configuration.maxReviewerOutput <= 0 {
 		return config{}, fmt.Errorf("timeouts and output limits must be positive")

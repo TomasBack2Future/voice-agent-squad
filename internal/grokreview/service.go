@@ -29,6 +29,36 @@ type ReviewReport struct {
 	Publication Publication
 }
 
+type ReviewState string
+
+const (
+	ReviewStateFreezing   ReviewState = "freezing"
+	ReviewStateSampling   ReviewState = "sampling"
+	ReviewStateValidating ReviewState = "validating"
+	ReviewStatePublishing ReviewState = "publishing"
+	ReviewStateApproved   ReviewState = "approved"
+	ReviewStateBlocking   ReviewState = "blocking"
+	ReviewStateError      ReviewState = "error"
+	ReviewStateStale      ReviewState = "stale"
+)
+
+// ReviewObservation is the deliberately small, sanitized lifecycle surface
+// exposed to local read-only observers. It never contains the frozen diff,
+// prompt, GitHub token, private key, Grok stdout/stderr, or hidden reasoning.
+type ReviewObservation struct {
+	State       ReviewState
+	Snapshot    PullRequestSnapshot
+	Result      FindingsResult
+	Audit       CLIAudit
+	Publication Publication
+}
+
+// ReviewObserver receives best-effort lifecycle observations. Observer errors
+// must never change whether a review is accepted, rejected, or published.
+type ReviewObserver interface {
+	Observe(ReviewObservation) error
+}
+
 type ModelReviewer interface {
 	Review(context.Context, []byte) (FindingsResult, CLIAudit, error)
 }
@@ -44,24 +74,38 @@ type LocalReviewService struct {
 	github     PullRequestGateway
 	coreHash   string
 	policyHash string
+	observer   ReviewObserver
 }
 
-func NewLocalReviewService(model ModelReviewer, github PullRequestGateway, coreHash, policyHash string) (*LocalReviewService, error) {
+func NewLocalReviewService(model ModelReviewer, github PullRequestGateway, coreHash, policyHash string, observers ...ReviewObserver) (*LocalReviewService, error) {
 	if model == nil || github == nil {
 		return nil, fmt.Errorf("model reviewer and GitHub gateway are required")
 	}
 	if coreHash == "" || policyHash == "" {
 		return nil, fmt.Errorf("reviewer core and policy hashes are required")
 	}
-	return &LocalReviewService{model: model, github: github, coreHash: coreHash, policyHash: policyHash}, nil
+	if len(observers) > 1 {
+		return nil, fmt.Errorf("at most one review observer is supported")
+	}
+	var observer ReviewObserver
+	if len(observers) == 1 {
+		observer = observers[0]
+	}
+	return &LocalReviewService{model: model, github: github, coreHash: coreHash, policyHash: policyHash, observer: observer}, nil
 }
 
 func (s *LocalReviewService) ReviewPullRequest(ctx context.Context, token, checkName, repository string, number int) (ReviewReport, error) {
+	s.observe(ReviewObservation{
+		State:    ReviewStateFreezing,
+		Snapshot: PullRequestSnapshot{Repository: repository, Number: number},
+	})
 	snapshot, err := s.github.FetchPullRequest(ctx, repository, number, token)
 	if err != nil {
+		s.observe(ReviewObservation{State: ReviewStateError, Snapshot: PullRequestSnapshot{Repository: repository, Number: number}})
 		return ReviewReport{}, err
 	}
 	if err := validateSnapshot(snapshot); err != nil {
+		s.observe(ReviewObservation{State: ReviewStateError, Snapshot: snapshot})
 		return ReviewReport{}, err
 	}
 	bundle, err := json.Marshal(FrozenReviewBundle{
@@ -72,10 +116,13 @@ func (s *LocalReviewService) ReviewPullRequest(ctx context.Context, token, check
 		CoreHash: s.coreHash, PolicyHash: s.policyHash,
 	})
 	if err != nil {
+		s.observe(ReviewObservation{State: ReviewStateError, Snapshot: snapshot})
 		return ReviewReport{}, fmt.Errorf("encode frozen review bundle: %w", err)
 	}
 
+	s.observe(ReviewObservation{State: ReviewStateSampling, Snapshot: snapshot})
 	result, audit, reviewErr := s.model.Review(ctx, bundle)
+	s.observe(ReviewObservation{State: ReviewStateValidating, Snapshot: snapshot, Audit: audit})
 	if reviewErr == nil {
 		if err := ValidateFindings(result); err != nil {
 			reviewErr = err
@@ -92,20 +139,36 @@ func (s *LocalReviewService) ReviewPullRequest(ctx context.Context, token, check
 
 	current, err := s.github.FetchPullRequestIdentity(ctx, repository, number, token)
 	if err != nil {
+		s.observe(ReviewObservation{State: ReviewStateError, Snapshot: snapshot, Result: result, Audit: audit})
 		return ReviewReport{Snapshot: snapshot, Result: result, Audit: audit}, err
 	}
 	if !samePullRequestTuple(snapshot, current) {
+		s.observe(ReviewObservation{State: ReviewStateStale, Snapshot: snapshot, Result: result, Audit: audit})
 		return ReviewReport{Snapshot: snapshot, Result: result, Audit: audit}, fmt.Errorf("pull request base or head changed during review; result was not published")
 	}
+	s.observe(ReviewObservation{State: ReviewStatePublishing, Snapshot: snapshot, Result: result, Audit: audit})
 	publication, err := s.github.PublishReview(ctx, token, checkName, snapshot, result, audit)
 	report := ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, Publication: publication}
 	if err != nil {
+		s.observe(ReviewObservation{State: ReviewStateError, Snapshot: snapshot, Result: result, Audit: audit, Publication: publication})
 		return report, err
 	}
 	if reviewErr != nil {
+		s.observe(ReviewObservation{State: ReviewStateError, Snapshot: snapshot, Result: result, Audit: audit, Publication: publication})
 		return report, fmt.Errorf("local Grok review failed: %w", reviewErr)
 	}
+	state := ReviewStateApproved
+	if result.Verdict == VerdictBlocking {
+		state = ReviewStateBlocking
+	}
+	s.observe(ReviewObservation{State: state, Snapshot: snapshot, Result: result, Audit: audit, Publication: publication})
 	return report, nil
+}
+
+func (s *LocalReviewService) observe(observation ReviewObservation) {
+	if s.observer != nil {
+		_ = s.observer.Observe(observation)
+	}
 }
 
 func samePullRequestTuple(left, right PullRequestSnapshot) bool {
