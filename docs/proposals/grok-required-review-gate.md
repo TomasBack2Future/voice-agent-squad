@@ -32,10 +32,20 @@ Worker with control of the host. That narrower trust model is intentional.
 5. Re-reads the PR and refuses publication if the head changed during review.
 6. Uses a short-lived GitHub App installation token to publish a sanitized PR
    comment and a Check Run on the reviewed head.
+7. Atomically updates a safe observation record under
+   `~/.squad/grok-reviews/` for the local read-only Squad monitor.
 
 The command never gives the GitHub token or App private key to the Grok child.
 It never publishes Grok's hidden thought, raw stdout/stderr, prompt, command
 arguments, environment, or credentials.
+
+The observation record contains only the review mode and stage, PR/base/head
+identity, sanitized verdict/summary/finding titles, model usage and cost,
+timings, and GitHub comment/Check links. It never contains the frozen diff,
+prompt, private key, installation token, Grok hidden thought, stdout, or stderr.
+Its lifecycle is `freezing -> sampling -> validating -> publishing`, followed
+by `approved`, `blocking`, `error`, or `stale`. Monitor availability does not
+change the review or merge result.
 
 Build and run it locally:
 

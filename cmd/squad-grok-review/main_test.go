@@ -23,17 +23,21 @@ func TestParseConfigUsesExplicitLocalReviewerInputs(t *testing.T) {
 		"--grok-bin", "/opt/bin/grok",
 		"--gh-bin", "/opt/bin/gh",
 		"--grok-home", "/srv/reviewer",
+		"--status-dir", "/srv/status",
 		"--model", "grok-4.6",
 		"--timeout", "8m",
 	}, &output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.repository != "owner/repo" || config.pullRequest != 17 || config.checkName != "grok-review-shadow" {
+	if config.repository != "owner/repo" || config.pullRequest != 17 || config.checkName != "grok-review-shadow" || config.mode != "shadow" {
 		t.Fatalf("config = %#v", config)
 	}
 	if config.appID != 4862345 || config.installationID != 99 || config.timeout != 8*time.Minute {
 		t.Fatalf("config = %#v", config)
+	}
+	if config.statusDir != "/srv/status" {
+		t.Fatalf("status dir = %q", config.statusDir)
 	}
 }
 
@@ -57,6 +61,19 @@ func TestRunHelpReturnsSuccess(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Usage of squad-grok-review") || strings.Contains(stderr.String(), "flag: help requested") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestParseConfigRejectsRelativeStatusDirectory(t *testing.T) {
+	var output bytes.Buffer
+	_, err := parseConfig([]string{
+		"--repo", "owner/repo", "--pr", "1", "--mode", "shadow",
+		"--app-id", "1", "--installation-id", "2", "--app-private-key", "/key",
+		"--grok-bin", "/grok", "--gh-bin", "/gh", "--grok-home", "/home",
+		"--status-dir", "relative/status",
+	}, &output)
+	if err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
