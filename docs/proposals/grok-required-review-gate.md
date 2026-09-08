@@ -73,13 +73,21 @@ The installation ID and key path are local setup values. Do not commit the
 configuration, private key, or private-key contents, or include them in Agent
 prompts, logs, comments, or Squad messages.
 
-Validate the installed binary, binaries, reviewer bundle, private key, and
-GitHub App authentication without starting Grok or publishing a comment or
-Check:
+Validate the installed binary, reviewer bundle, private key, GitHub App
+authentication, Grok CLI version and required flags, Grok login, configured
+model, and writable Grok session storage without making a model call or
+publishing a comment or Check:
 
 ```bash
 squad-grok-review doctor
 ```
+
+The Grok CLI persists its own session metadata under the configured Grok home.
+Codex Workers must therefore run both `doctor` and the real review command as a
+narrowly approved command outside the Codex filesystem sandbox. This is local
+reviewer access only: it does not acquire a Squad environment claim and does
+not authorize any deployment, merge, or unrelated filesystem operation. A
+filesystem denial is reported as `local_permissions`, not authentication.
 
 After the doctor succeeds, a Worker needs only the repository and pull request:
 
