@@ -13,6 +13,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"html"
+	"io"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -42,11 +44,17 @@ type Publication struct {
 
 type commandExecutor func(context.Context, []string, []byte, []string) ([]byte, error)
 
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 type GitHubCLI struct {
 	binary         string
 	timeout        time.Duration
 	maxOutputBytes int
 	execute        commandExecutor
+	httpClient     httpDoer
+	apiBaseURL     string
 }
 
 func NewGitHubCLI(binary string, timeout time.Duration, maxOutputBytes int) (*GitHubCLI, error) {
@@ -59,7 +67,10 @@ func NewGitHubCLI(binary string, timeout time.Duration, maxOutputBytes int) (*Gi
 	if maxOutputBytes <= 0 {
 		return nil, fmt.Errorf("github CLI output limit must be positive")
 	}
-	client := &GitHubCLI{binary: binary, timeout: timeout, maxOutputBytes: maxOutputBytes}
+	client := &GitHubCLI{
+		binary: binary, timeout: timeout, maxOutputBytes: maxOutputBytes,
+		httpClient: http.DefaultClient, apiBaseURL: "https://api.github.com",
+	}
 	client.execute = client.runCommand
 	return client, nil
 }
@@ -118,21 +129,49 @@ func (g *GitHubCLI) MintInstallationToken(ctx context.Context, appJWT string, in
 	if appJWT == "" || installationID <= 0 {
 		return "", fmt.Errorf("github App JWT and installation ID are required")
 	}
-	endpoint := "app/installations/" + strconv.FormatInt(installationID, 10) + "/access_tokens"
-	raw, err := g.call(ctx, appJWT, []string{"api", "--method", "POST", endpoint}, nil)
+	endpoint := strings.TrimRight(g.apiBaseURL, "/") + "/app/installations/" + strconv.FormatInt(installationID, 10) + "/access_tokens"
+	callCtx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(callCtx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("build GitHub App installation token request: %w", err)
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("Authorization", "Bearer "+appJWT)
+	request.Header.Set("User-Agent", "squad-grok-review")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	httpResponse, err := g.httpClient.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("mint GitHub App installation token: %w", err)
 	}
-	var response struct {
+	defer httpResponse.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(httpResponse.Body, int64(g.maxOutputBytes)+1))
+	if err != nil {
+		return "", fmt.Errorf("read GitHub App installation token response: %w", err)
+	}
+	if len(raw) > g.maxOutputBytes {
+		return "", fmt.Errorf("GitHub App installation token response exceeded %d bytes", g.maxOutputBytes)
+	}
+	if httpResponse.StatusCode != http.StatusCreated {
+		var failure struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(raw, &failure)
+		if failure.Message == "" {
+			failure.Message = http.StatusText(httpResponse.StatusCode)
+		}
+		return "", fmt.Errorf("mint GitHub App installation token: GitHub returned HTTP %d: %s", httpResponse.StatusCode, failure.Message)
+	}
+	var tokenResponse struct {
 		Token string `json:"token"`
 	}
-	if err := json.Unmarshal(raw, &response); err != nil {
+	if err := json.Unmarshal(raw, &tokenResponse); err != nil {
 		return "", fmt.Errorf("parse GitHub App installation token: %w", err)
 	}
-	if response.Token == "" {
+	if tokenResponse.Token == "" {
 		return "", fmt.Errorf("github App installation token response is empty")
 	}
-	return response.Token, nil
+	return tokenResponse.Token, nil
 }
 
 func (g *GitHubCLI) FetchPullRequest(ctx context.Context, repository string, number int, token string) (PullRequestSnapshot, error) {
