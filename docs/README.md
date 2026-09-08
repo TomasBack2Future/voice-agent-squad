@@ -37,6 +37,8 @@ Both paths converge. `squad go` is idempotent — first run inits `.squad/` and 
 - **Pick a recipe** for your starting situation: [recipes/](recipes/).
 - **Doctrine** behind the loop: [concepts/](concepts/).
 - **Lookup** for commands, config, hooks, skills, slash commands, and the DB schema: [reference/](reference/).
+- **Review a design proposal?** Start with
+  [Grok as a required, read-only PR reviewer](proposals/grok-required-review-gate.md).
 - **Snag?** [troubleshooting.md](troubleshooting.md).
 - **Contribute?** [contributing.md](contributing.md).
 - **Comparing to agent-teams?** [concepts/squad-vs-agent-teams.md](concepts/squad-vs-agent-teams.md).

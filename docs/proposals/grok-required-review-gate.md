@@ -1,0 +1,100 @@
+# Local Grok pull-request review
+
+Status: accepted for implementation
+
+## Decision
+
+Use a cooperative local review flow. The owning Codex Worker invokes one
+reviewed command after its pull request is ready and deterministic CI passes:
+
+```text
+Worker -> squad-grok-review -> grok CLI -> validate result
+       -> GitHub App comment + SHA-bound Check
+```
+
+There is no webhook service, external scheduler, reviewer Agent, xAI HTTP
+adapter, or reviewer database. The Dispatcher does not participate.
+
+This decision trusts the local Worker to follow `AGENTS.md`. It is designed to
+prevent accidental omission and stale-SHA merging, not to resist a malicious
+Worker with control of the host. That narrower trust model is intentional.
+
+## Local command
+
+`squad-grok-review`:
+
+1. Reads the current PR metadata and diff with the installed GitHub CLI.
+2. Records the exact repository, PR, base SHA, and head SHA being reviewed.
+3. Runs the installed `grok` CLI once in headless mode with the immutable core
+   and repository policy, no tools, no web search, no subagents, and strict JSON
+   output.
+4. Validates the verdict and findings.
+5. Re-reads the PR and refuses publication if the head changed during review.
+6. Uses a short-lived GitHub App installation token to publish a sanitized PR
+   comment and a Check Run on the reviewed head.
+
+The command never gives the GitHub token or App private key to the Grok child.
+It never publishes Grok's hidden thought, raw stdout/stderr, prompt, command
+arguments, environment, or credentials.
+
+Build and run it locally:
+
+```bash
+go install ./cmd/squad-grok-review
+squad-grok-review \
+  --repo TomasBack2Future/voice-agent-studio \
+  --pr 705 \
+  --mode shadow \
+  --app-id 4862345 \
+  --installation-id 12345678 \
+  --app-private-key /secure/path/voice-agent-grok-reviewer.pem
+```
+
+The installation ID and key path are local setup values. Do not commit the
+private key or include its contents in Agent prompts, logs, comments, or Squad
+messages.
+
+Run the command once for a substantive head. A provider or transport failure
+may be retried. A valid blocking result requires verifying the finding and
+pushing a real correction; do not repeatedly sample the same head or add a
+no-op commit to obtain a different verdict.
+
+## GitHub publication
+
+The App publishes two representations of the same result:
+
+- A PR comment containing the exact head SHA, verdict, summary, and sanitized
+  findings for human review.
+- `grok-review-shadow` or `grok-review` on the exact head SHA for machine use.
+
+A comment alone is not a merge gate. When enforcement is desired, repository
+rules must require `grok-review` from the dedicated App and require the branch
+to be up to date. The Worker revalidates the current head and Check after
+acquiring the environment lock.
+
+The App needs only metadata/read, pull-requests/read-write, contents/read, and
+checks/write for the selected repository. It does not need a webhook, Actions,
+deployment, environment, administration, or contents-write permission.
+
+## Rollout
+
+1. **Inactive:** the wrapper/App is unavailable; existing deterministic gates
+   remain authoritative.
+2. **Shadow:** Workers run the wrapper and publish `grok-review-shadow`, but its
+   result does not block merging.
+3. **Enforced:** branch policy requires the App-pinned `grok-review` Check on
+   the current, up-to-date head.
+
+Start with shadow on real Studio PRs. Enable enforcement only after the command
+is reliable enough that provider availability and false blocks are acceptable.
+
+## Acceptance
+
+- A local command reviews one current PR with `grok` CLI and no model tools.
+- The App posts a sanitized comment and Check bound to the reviewed head SHA.
+- A head change during review produces no publication.
+- Approved maps to Check success; blocking or error maps to failure.
+- The Grok child environment contains no GitHub credential.
+- Workers invoke the wrapper outside the environment lock and verify findings
+  before changing code.
+- Dispatcher and monitor remain read-only with respect to review execution.
