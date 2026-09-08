@@ -48,7 +48,7 @@ func TestReviewStatusWriterAtomicallyTracksSafeLifecycle(t *testing.T) {
 		Result: result,
 		Audit: CLIAudit{
 			ResolvedModel: "grok-4.6", Usage: TokenUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
-			CostUSD: 0.012,
+			CostUSD: 0.012, FailureKind: CLIFailurePromptFileFormat,
 		},
 		Publication: Publication{
 			CommentURL: "https://github.com/owner/repo/pull/717#issuecomment-1",
@@ -76,6 +76,9 @@ func TestReviewStatusWriterAtomicallyTracksSafeLifecycle(t *testing.T) {
 	}
 	if status.State != ReviewStateApproved || status.HeadSHA != strings.Repeat("b", 40) || status.TotalTokens != 15 {
 		t.Fatalf("status = %#v", status)
+	}
+	if status.FailureKind != CLIFailurePromptFileFormat {
+		t.Fatalf("failure kind = %q", status.FailureKind)
 	}
 	if status.CompletedAt != started.Add(12*time.Second).Unix() || status.DurationMS != 12_000 {
 		t.Fatalf("completion = %#v", status)

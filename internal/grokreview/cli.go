@@ -22,10 +22,19 @@ const FindingsSchemaVersion = "squad.review.findings.v2"
 
 type Verdict string
 
+type CLIFailureKind string
+
 const (
 	VerdictApproved Verdict = "approved"
 	VerdictBlocking Verdict = "blocking"
 	VerdictError    Verdict = "error"
+
+	CLIFailurePromptFileFormat CLIFailureKind = "prompt_file_format"
+	CLIFailureInputTooLarge    CLIFailureKind = "input_too_large"
+	CLIFailureAuthentication   CLIFailureKind = "authentication"
+	CLIFailureInvalidArguments CLIFailureKind = "invalid_arguments"
+	CLIFailureTransport        CLIFailureKind = "transport"
+	CLIFailureUnknown          CLIFailureKind = "unknown"
 )
 
 const FindingsJSONSchema = `{"type":"object","additionalProperties":false,"required":["schema_version","verdict","summary","findings"],"properties":{"schema_version":{"const":"squad.review.findings.v2"},"verdict":{"type":"string","enum":["approved","blocking","error"]},"summary":{"type":"string","minLength":1,"maxLength":4000},"findings":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["category","severity","blocking","path","line","title","body"],"properties":{"category":{"type":"string","enum":["correctness","security","data_loss","concurrency","compatibility","contract","migration","rollback","critical_test"]},"severity":{"type":"string","enum":["critical","high","medium","low"]},"blocking":{"type":"boolean"},"path":{"type":"string","minLength":1,"maxLength":1024},"line":{"type":"integer","minimum":1},"title":{"type":"string","minLength":1,"maxLength":200},"body":{"type":"string","minLength":1,"maxLength":4000},"verification":{"type":"string","maxLength":2000}}}}}}`
@@ -68,6 +77,7 @@ type CLIAudit struct {
 	CostUSD        float64
 	Duration       time.Duration
 	StderrSHA256   string
+	FailureKind    CLIFailureKind
 }
 
 type CLIConfig struct {
@@ -173,7 +183,11 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 		return FindingsResult{}, audit, fmt.Errorf("grok CLI exceeded %s", r.config.Timeout)
 	}
 	if err != nil {
-		return FindingsResult{}, audit, fmt.Errorf("grok CLI failed: %w", err)
+		audit.FailureKind = classifyCLIFailure(stderr.Bytes())
+		return FindingsResult{}, audit, fmt.Errorf(
+			"grok CLI failed (kind=%s, stderr_sha256=%s): %w",
+			audit.FailureKind, audit.StderrSHA256, err,
+		)
 	}
 	if stdout.overflow || stderr.overflow {
 		return FindingsResult{}, audit, fmt.Errorf("grok CLI output exceeded %d bytes", r.config.MaxOutputBytes)
@@ -198,7 +212,10 @@ func (r *CLIRunner) prepare(ctx context.Context, frozenBundle []byte) (preparedC
 		cleanup()
 		return preparedCommand{}, fmt.Errorf("secure Grok CLI work directory: %w", err)
 	}
-	promptPath := filepath.Join(workDir, "review-bundle.json")
+	// Grok treats .json prompt files as typed ACP content envelopes. The frozen
+	// review bundle is deliberately plain prompt text whose contents happen to
+	// be JSON, so keep the prompt-file extension textual.
+	promptPath := filepath.Join(workDir, "review-bundle.txt")
 	if err := os.WriteFile(promptPath, frozenBundle, 0o600); err != nil {
 		cleanup()
 		return preparedCommand{}, fmt.Errorf("write frozen Grok review bundle: %w", err)
@@ -372,6 +389,35 @@ func allowedChildEnvironment(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func classifyCLIFailure(stderr []byte) CLIFailureKind {
+	message := strings.ToLower(string(stderr))
+	switch {
+	case strings.Contains(message, `json object must have a "type" field`) ||
+		strings.Contains(message, "prompt file") && strings.Contains(message, "content"):
+		return CLIFailurePromptFileFormat
+	case strings.Contains(message, "input is too long") ||
+		strings.Contains(message, "prompt is too long") ||
+		strings.Contains(message, "context length"):
+		return CLIFailureInputTooLarge
+	case strings.Contains(message, "not logged in") ||
+		strings.Contains(message, "authentication") ||
+		strings.Contains(message, "unauthorized") ||
+		strings.Contains(message, "oauth"):
+		return CLIFailureAuthentication
+	case strings.Contains(message, "unexpected argument") ||
+		strings.Contains(message, "invalid value") ||
+		strings.Contains(message, "usage:"):
+		return CLIFailureInvalidArguments
+	case strings.Contains(message, "connection") ||
+		strings.Contains(message, "network") ||
+		strings.Contains(message, "websocket") ||
+		strings.Contains(message, "timed out"):
+		return CLIFailureTransport
+	default:
+		return CLIFailureUnknown
 	}
 }
 

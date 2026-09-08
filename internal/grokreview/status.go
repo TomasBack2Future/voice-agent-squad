@@ -16,31 +16,32 @@ import (
 const ReviewStatusSchemaVersion = "squad.local-review.status.v1"
 
 type ReviewStatus struct {
-	SchemaVersion string      `json:"schema_version"`
-	Attempt       string      `json:"attempt"`
-	Repository    string      `json:"repository"`
-	PullRequest   int         `json:"pull_request"`
-	Mode          string      `json:"mode"`
-	BaseRef       string      `json:"base_ref,omitempty"`
-	BaseSHA       string      `json:"base_sha,omitempty"`
-	HeadSHA       string      `json:"head_sha,omitempty"`
-	State         ReviewState `json:"state"`
-	Verdict       Verdict     `json:"verdict,omitempty"`
-	Summary       string      `json:"summary,omitempty"`
-	FindingCount  int         `json:"finding_count"`
-	FindingTitles []string    `json:"finding_titles,omitempty"`
-	Model         string      `json:"model,omitempty"`
-	StartedAt     int64       `json:"started_at"`
-	DeadlineAt    int64       `json:"deadline_at"`
-	UpdatedAt     int64       `json:"updated_at"`
-	CompletedAt   int64       `json:"completed_at,omitempty"`
-	DurationMS    int64       `json:"duration_ms,omitempty"`
-	InputTokens   int64       `json:"input_tokens,omitempty"`
-	OutputTokens  int64       `json:"output_tokens,omitempty"`
-	TotalTokens   int64       `json:"total_tokens,omitempty"`
-	CostUSD       float64     `json:"cost_usd,omitempty"`
-	CommentURL    string      `json:"comment_url,omitempty"`
-	CheckURL      string      `json:"check_url,omitempty"`
+	SchemaVersion string         `json:"schema_version"`
+	Attempt       string         `json:"attempt"`
+	Repository    string         `json:"repository"`
+	PullRequest   int            `json:"pull_request"`
+	Mode          string         `json:"mode"`
+	BaseRef       string         `json:"base_ref,omitempty"`
+	BaseSHA       string         `json:"base_sha,omitempty"`
+	HeadSHA       string         `json:"head_sha,omitempty"`
+	State         ReviewState    `json:"state"`
+	Verdict       Verdict        `json:"verdict,omitempty"`
+	Summary       string         `json:"summary,omitempty"`
+	FindingCount  int            `json:"finding_count"`
+	FindingTitles []string       `json:"finding_titles,omitempty"`
+	Model         string         `json:"model,omitempty"`
+	FailureKind   CLIFailureKind `json:"failure_kind,omitempty"`
+	StartedAt     int64          `json:"started_at"`
+	DeadlineAt    int64          `json:"deadline_at"`
+	UpdatedAt     int64          `json:"updated_at"`
+	CompletedAt   int64          `json:"completed_at,omitempty"`
+	DurationMS    int64          `json:"duration_ms,omitempty"`
+	InputTokens   int64          `json:"input_tokens,omitempty"`
+	OutputTokens  int64          `json:"output_tokens,omitempty"`
+	TotalTokens   int64          `json:"total_tokens,omitempty"`
+	CostUSD       float64        `json:"cost_usd,omitempty"`
+	CommentURL    string         `json:"comment_url,omitempty"`
+	CheckURL      string         `json:"check_url,omitempty"`
 }
 
 // ReviewStatusWriter persists only ReviewStatus's allowlisted observation
@@ -96,6 +97,7 @@ func (w *ReviewStatusWriter) Observe(observation ReviewObservation) error {
 		OutputTokens: observation.Audit.Usage.OutputTokens,
 		TotalTokens:  observation.Audit.Usage.TotalTokens,
 		CostUSD:      observation.Audit.CostUSD,
+		FailureKind:  observation.Audit.FailureKind,
 		CommentURL:   boundedStatusText(observation.Publication.CommentURL, 2048),
 		CheckURL:     boundedStatusText(observation.Publication.CheckURL, 2048),
 	}
