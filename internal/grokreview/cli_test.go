@@ -93,14 +93,15 @@ func TestCLICommandIsOneShotNoToolAndEnvironmentIsAllowlisted(t *testing.T) {
 		"--output-format", "json",
 		"--no-subagents",
 		"--disable-web-search",
-		"--permission-mode", "plan",
+		"--permission-mode", "dontAsk",
+		"--no-plan",
 		"--sandbox", config.SandboxProfile,
 		"--tools", "",
 		"--max-turns", "1",
 		"--model", config.Model,
 		"--reasoning-effort", config.ReasoningEffort,
 		"--cwd", prepared.workDir,
-		"--system-prompt-override", "trusted core\n\ntrusted policy",
+		"--system-prompt-override=trusted core\n\ntrusted policy",
 		"--verbatim",
 	}
 	if !reflect.DeepEqual(prepared.command.Args, wantArgs) {
@@ -254,7 +255,7 @@ case "$1" in
     printf '%s\n' 'grok 1.0.13 (test) [stable]'
     ;;
   --help)
-    printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim'
+    printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --no-plan --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim'
     ;;
   models)
     if [ "${GITHUB_TOKEN+x}" = x ] || [ "${GITHUB_APP_PRIVATE_KEY+x}" = x ]; then
@@ -262,6 +263,21 @@ case "$1" in
       exit 9
     fi
     printf '%s\n' 'You are logged in with grok.com.' 'Default model: grok-4.6' 'Available models:' '  * grok-4.6 (default)' '  - grok-4.5'
+    ;;
+  --prompt-file)
+    found_override=false
+    for argument in "$@"; do
+      case "$argument" in
+        --system-prompt-override=*) found_override=true ;;
+        --system-prompt-override) printf '%s\n' 'separate system prompt argument' >&2; exit 7 ;;
+      esac
+    done
+    if [ "$found_override" != true ]; then
+      printf '%s\n' 'missing system prompt override' >&2
+      exit 7
+    fi
+    printf '%s\n' 'Error: Failed to read doctor-missing-review-bundle.txt: No such file' >&2
+    exit 2
     ;;
   *)
     exit 8
@@ -302,8 +318,9 @@ func TestCLIRunnerDoctorRejectsUnavailableConfiguredModel(t *testing.T) {
 	script := `#!/bin/sh
 case "$1" in
   version) printf '%s\n' 'grok 1.0.13' ;;
-  --help) printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim' ;;
+  --help) printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --no-plan --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim' ;;
   models) printf '%s\n' 'Available models:' '  - grok-4.5' ;;
+  --prompt-file) printf '%s\n' 'Error: Failed to read doctor-missing-review-bundle.txt: No such file' >&2; exit 2 ;;
 esac
 `
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
@@ -366,6 +383,14 @@ func TestParseCLIEnvelopeRejectsUnknownFindingFields(t *testing.T) {
 	structured := `{"schema_version":"squad.review.findings.v2","verdict":"approved","summary":"ok","findings":[],"authority":"forged"}`
 	envelope := `{"text":` + strconvQuote(structured) + `,"stopReason":"end_turn","sessionId":"s","requestId":"r","usage":{"total_tokens":1},"num_turns":1,"modelUsage":{"m":{"modelCalls":1}},"structuredOutput":` + structured + `}`
 	if _, _, err := ParseCLIEnvelope([]byte(envelope)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseCLIEnvelopeRejectsModelOperationalVerdict(t *testing.T) {
+	structured := `{"schema_version":"squad.review.findings.v2","verdict":"error","summary":"inspect later","findings":[]}`
+	envelope := `{"text":` + strconvQuote(structured) + `,"stopReason":"end_turn","sessionId":"s","requestId":"r","usage":{"total_tokens":1},"num_turns":1,"modelUsage":{"m":{"modelCalls":1}},"structuredOutput":` + structured + `}`
+	if _, _, err := ParseCLIEnvelope([]byte(envelope)); err == nil || !strings.Contains(err.Error(), "reserved operational verdict") {
 		t.Fatalf("error = %v", err)
 	}
 }

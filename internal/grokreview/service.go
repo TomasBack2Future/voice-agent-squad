@@ -124,7 +124,7 @@ func (s *LocalReviewService) ReviewPullRequest(ctx context.Context, token, check
 	result, audit, reviewErr := s.model.Review(ctx, bundle)
 	s.observe(ReviewObservation{State: ReviewStateValidating, Snapshot: snapshot, Audit: audit})
 	if reviewErr == nil {
-		if err := ValidateFindings(result); err != nil {
+		if err := ValidateModelFindings(result); err != nil {
 			reviewErr = err
 		}
 	}
