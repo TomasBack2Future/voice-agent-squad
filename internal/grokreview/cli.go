@@ -120,29 +120,29 @@ type modelUsage struct {
 
 func NewCLIRunner(config CLIConfig) (*CLIRunner, error) {
 	if !filepath.IsAbs(config.Binary) {
-		return nil, fmt.Errorf("Grok CLI binary must be an absolute path")
+		return nil, fmt.Errorf("grok CLI binary must be an absolute path")
 	}
 	if !filepath.IsAbs(config.HomeDir) {
-		return nil, fmt.Errorf("Grok CLI home must be an absolute path")
+		return nil, fmt.Errorf("grok CLI home must be an absolute path")
 	}
 	if config.Model == "" {
-		return nil, fmt.Errorf("Grok CLI model is required")
+		return nil, fmt.Errorf("grok CLI model is required")
 	}
 	if config.Timeout <= 0 {
-		return nil, fmt.Errorf("Grok CLI timeout must be positive")
+		return nil, fmt.Errorf("grok CLI timeout must be positive")
 	}
 	if config.MaxOutputBytes <= 0 {
-		return nil, fmt.Errorf("Grok CLI output limit must be positive")
+		return nil, fmt.Errorf("grok CLI output limit must be positive")
 	}
 	if strings.TrimSpace(config.Core) == "" || strings.TrimSpace(config.Policy) == "" {
-		return nil, fmt.Errorf("Grok CLI reviewer core and policy are required")
+		return nil, fmt.Errorf("grok CLI reviewer core and policy are required")
 	}
 	for name, value := range config.SafeEnvironment {
 		if !allowedChildEnvironment(name) {
-			return nil, fmt.Errorf("Grok CLI child environment variable %q is not allowlisted", name)
+			return nil, fmt.Errorf("grok CLI child environment variable %q is not allowlisted", name)
 		}
 		if strings.ContainsRune(value, '\x00') {
-			return nil, fmt.Errorf("Grok CLI child environment variable %q contains NUL", name)
+			return nil, fmt.Errorf("grok CLI child environment variable %q contains NUL", name)
 		}
 	}
 	return &CLIRunner{config: config}, nil
@@ -170,13 +170,13 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 	stderrSum := sha256.Sum256(stderr.Bytes())
 	audit := CLIAudit{Duration: duration, StderrSHA256: hex.EncodeToString(stderrSum[:])}
 	if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-		return FindingsResult{}, audit, fmt.Errorf("Grok CLI exceeded %s", r.config.Timeout)
+		return FindingsResult{}, audit, fmt.Errorf("grok CLI exceeded %s", r.config.Timeout)
 	}
 	if err != nil {
-		return FindingsResult{}, audit, fmt.Errorf("Grok CLI failed: %w", err)
+		return FindingsResult{}, audit, fmt.Errorf("grok CLI failed: %w", err)
 	}
 	if stdout.overflow || stderr.overflow {
-		return FindingsResult{}, audit, fmt.Errorf("Grok CLI output exceeded %d bytes", r.config.MaxOutputBytes)
+		return FindingsResult{}, audit, fmt.Errorf("grok CLI output exceeded %d bytes", r.config.MaxOutputBytes)
 	}
 	result, parsedAudit, err := ParseCLIEnvelope(stdout.Bytes())
 	if err != nil {
@@ -257,28 +257,28 @@ func ParseCLIEnvelope(raw []byte) (FindingsResult, CLIAudit, error) {
 		return FindingsResult{}, CLIAudit{}, fmt.Errorf("parse Grok CLI envelope: %w", err)
 	}
 	if envelope.StopReason != "end_turn" {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI stop reason is %q", envelope.StopReason)
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI stop reason is %q", envelope.StopReason)
 	}
 	if envelope.SessionID == "" || envelope.RequestID == "" {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI envelope lacks session or request identity")
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI envelope lacks session or request identity")
 	}
 	if envelope.NumTurns != 1 {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI used %d turns, expected one", envelope.NumTurns)
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI used %d turns, expected one", envelope.NumTurns)
 	}
 	if len(envelope.ModelUsage) != 1 {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI reported %d models, expected one", len(envelope.ModelUsage))
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI reported %d models, expected one", len(envelope.ModelUsage))
 	}
 	model := ""
 	for name, usage := range envelope.ModelUsage {
 		if usage.ModelCalls != 1 {
-			return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI model %q made %d calls, expected one", name, usage.ModelCalls)
+			return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI model %q made %d calls, expected one", name, usage.ModelCalls)
 		}
 		model = name
 	}
 
 	var result FindingsResult
 	if len(envelope.StructuredOutput) == 0 || bytes.Equal(envelope.StructuredOutput, []byte("null")) {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI envelope lacks structured output")
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI envelope lacks structured output")
 	}
 	if err := decodeStrictJSON(envelope.StructuredOutput, &result); err != nil {
 		return FindingsResult{}, CLIAudit{}, fmt.Errorf("parse Grok structured output: %w", err)
@@ -288,13 +288,13 @@ func ParseCLIEnvelope(raw []byte) (FindingsResult, CLIAudit, error) {
 	}
 	var textValue, structuredValue any
 	if err := decodeStrictJSON([]byte(envelope.Text), &textValue); err != nil {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI text is not exact JSON: %w", err)
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI text is not exact JSON: %w", err)
 	}
 	if err := decodeStrictJSON(envelope.StructuredOutput, &structuredValue); err != nil {
 		return FindingsResult{}, CLIAudit{}, fmt.Errorf("compare Grok structured output: %w", err)
 	}
 	if !reflect.DeepEqual(textValue, structuredValue) {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("Grok CLI text does not match structured output")
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI text does not match structured output")
 	}
 
 	return result, CLIAudit{
@@ -312,10 +312,10 @@ func ValidateFindings(result FindingsResult) error {
 		return fmt.Errorf("invalid Grok verdict %q", result.Verdict)
 	}
 	if strings.TrimSpace(result.Summary) == "" || len(result.Summary) > 4000 {
-		return fmt.Errorf("Grok summary is empty or oversized")
+		return fmt.Errorf("grok summary is empty or oversized")
 	}
 	if len(result.Findings) > 100 {
-		return fmt.Errorf("Grok returned too many findings")
+		return fmt.Errorf("grok returned too many findings")
 	}
 	blocking := 0
 	for index, finding := range result.Findings {

@@ -51,13 +51,13 @@ type GitHubCLI struct {
 
 func NewGitHubCLI(binary string, timeout time.Duration, maxOutputBytes int) (*GitHubCLI, error) {
 	if !filepath.IsAbs(binary) {
-		return nil, fmt.Errorf("GitHub CLI binary must be an absolute path")
+		return nil, fmt.Errorf("github CLI binary must be an absolute path")
 	}
 	if timeout <= 0 {
-		return nil, fmt.Errorf("GitHub CLI timeout must be positive")
+		return nil, fmt.Errorf("github CLI timeout must be positive")
 	}
 	if maxOutputBytes <= 0 {
-		return nil, fmt.Errorf("GitHub CLI output limit must be positive")
+		return nil, fmt.Errorf("github CLI output limit must be positive")
 	}
 	client := &GitHubCLI{binary: binary, timeout: timeout, maxOutputBytes: maxOutputBytes}
 	client.execute = client.runCommand
@@ -66,7 +66,7 @@ func NewGitHubCLI(binary string, timeout time.Duration, maxOutputBytes int) (*Gi
 
 func MintAppJWT(appID int64, privateKeyPEM []byte, now time.Time) (string, error) {
 	if appID <= 0 {
-		return "", fmt.Errorf("GitHub App ID must be positive")
+		return "", fmt.Errorf("github App ID must be positive")
 	}
 	block, _ := pem.Decode(privateKeyPEM)
 	if block == nil {
@@ -84,7 +84,7 @@ func MintAppJWT(appID int64, privateKeyPEM []byte, now time.Time) (string, error
 		var ok bool
 		key, ok = parsed.(*rsa.PrivateKey)
 		if !ok {
-			return "", fmt.Errorf("GitHub App private key is not RSA")
+			return "", fmt.Errorf("github App private key is not RSA")
 		}
 	}
 	header, err := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
@@ -116,7 +116,7 @@ func MintAppJWT(appID int64, privateKeyPEM []byte, now time.Time) (string, error
 
 func (g *GitHubCLI) MintInstallationToken(ctx context.Context, appJWT string, installationID int64) (string, error) {
 	if appJWT == "" || installationID <= 0 {
-		return "", fmt.Errorf("GitHub App JWT and installation ID are required")
+		return "", fmt.Errorf("github App JWT and installation ID are required")
 	}
 	endpoint := "app/installations/" + strconv.FormatInt(installationID, 10) + "/access_tokens"
 	raw, err := g.call(ctx, appJWT, []string{"api", "--method", "POST", endpoint}, nil)
@@ -130,7 +130,7 @@ func (g *GitHubCLI) MintInstallationToken(ctx context.Context, appJWT string, in
 		return "", fmt.Errorf("parse GitHub App installation token: %w", err)
 	}
 	if response.Token == "" {
-		return "", fmt.Errorf("GitHub App installation token response is empty")
+		return "", fmt.Errorf("github App installation token response is empty")
 	}
 	return response.Token, nil
 }
@@ -212,7 +212,7 @@ func (g *GitHubCLI) FetchPullRequestIdentity(ctx context.Context, repository str
 
 func (g *GitHubCLI) PublishReview(ctx context.Context, token, checkName string, snapshot PullRequestSnapshot, result FindingsResult, audit CLIAudit) (Publication, error) {
 	if token == "" {
-		return Publication{}, fmt.Errorf("GitHub App installation token is required")
+		return Publication{}, fmt.Errorf("github App installation token is required")
 	}
 	if checkName != "grok-review" && checkName != "grok-review-shadow" {
 		return Publication{}, fmt.Errorf("unsupported Grok review Check name %q", checkName)
@@ -272,7 +272,7 @@ func (g *GitHubCLI) PublishReview(ctx context.Context, token, checkName string, 
 		return Publication{}, fmt.Errorf("parse Grok review Check response: %w", err)
 	}
 	if comment.ID <= 0 || check.ID <= 0 {
-		return Publication{}, fmt.Errorf("GitHub publication response lacks comment or Check identity")
+		return Publication{}, fmt.Errorf("github publication response lacks comment or Check identity")
 	}
 	return Publication{
 		CommentID: comment.ID, CommentURL: comment.HTMLURL,
@@ -282,7 +282,7 @@ func (g *GitHubCLI) PublishReview(ctx context.Context, token, checkName string, 
 
 func (g *GitHubCLI) call(ctx context.Context, token string, args []string, stdin []byte) ([]byte, error) {
 	if token == "" {
-		return nil, fmt.Errorf("GitHub token is required")
+		return nil, fmt.Errorf("github token is required")
 	}
 	environment := []string{
 		"GH_TOKEN=" + token,
@@ -293,10 +293,10 @@ func (g *GitHubCLI) call(ctx context.Context, token string, args []string, stdin
 	defer cancel()
 	output, err := g.execute(callCtx, args, stdin, environment)
 	if err != nil {
-		return nil, fmt.Errorf("GitHub CLI command failed: %w", err)
+		return nil, fmt.Errorf("github CLI command failed: %w", err)
 	}
 	if len(output) > g.maxOutputBytes {
-		return nil, fmt.Errorf("GitHub CLI output exceeded %d bytes", g.maxOutputBytes)
+		return nil, fmt.Errorf("github CLI output exceeded %d bytes", g.maxOutputBytes)
 	}
 	return output, nil
 }
@@ -313,7 +313,7 @@ func (g *GitHubCLI) runCommand(ctx context.Context, args []string, stdin []byte,
 		return nil, err
 	}
 	if stdout.overflow {
-		return nil, fmt.Errorf("GitHub CLI stdout exceeded limit")
+		return nil, fmt.Errorf("github CLI stdout exceeded limit")
 	}
 	return append([]byte(nil), stdout.Bytes()...), nil
 }
