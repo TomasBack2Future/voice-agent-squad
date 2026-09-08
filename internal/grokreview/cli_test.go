@@ -79,7 +79,8 @@ func TestCLICommandIsOneShotNoToolAndEnvironmentIsAllowlisted(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "must-not-leak")
 	t.Setenv("XAI_API_KEY", "must-not-leak")
 
-	prepared, err := runner.prepare(context.Background(), []byte(`{"bundle":"data"}`))
+	frozenBundle := []byte(`{"bundle":"data"}`)
+	prepared, err := runner.prepare(context.Background(), frozenBundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +127,40 @@ func TestCLICommandIsOneShotNoToolAndEnvironmentIsAllowlisted(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("prompt mode = %o", info.Mode().Perm())
 	}
+	if filepath.Ext(prepared.promptPath) != ".txt" {
+		t.Fatalf("prompt path = %q; .json makes Grok parse it as an ACP envelope", prepared.promptPath)
+	}
+	prompt, err := os.ReadFile(prepared.promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prompt, frozenBundle) {
+		t.Fatalf("prompt content = %q", prompt)
+	}
+}
+
+func TestPreparePreservesLargeJSONBundleAsTextPrompt(t *testing.T) {
+	config := testCLIConfig(t)
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := []byte(`{"diff":"` + strings.Repeat("x", 83_077) + `"}`)
+	prepared, err := runner.prepare(context.Background(), bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.cleanup()
+	if filepath.Ext(prepared.promptPath) != ".txt" {
+		t.Fatalf("prompt path = %q", prepared.promptPath)
+	}
+	prompt, err := os.ReadFile(prepared.promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prompt, bundle) {
+		t.Fatalf("large prompt changed: got %d bytes, want %d", len(prompt), len(bundle))
+	}
 }
 
 func TestCLIRunnerParsesStructuredOutputAndAudit(t *testing.T) {
@@ -156,6 +191,38 @@ func TestCLIRunnerParsesStructuredOutputAndAudit(t *testing.T) {
 	}
 	if audit.Usage.TotalTokens != 17 || audit.NumTurns != 1 {
 		t.Fatalf("audit usage = %#v", audit)
+	}
+}
+
+func TestCLIRunnerClassifiesFailureWithoutExposingStderr(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "fake-grok")
+	script := "#!/bin/sh\nprintf '%s\\n' 'Error: /tmp/private-review-bundle.json: JSON object must have a \"type\" field (private-source-marker)' >&2\nexit 2\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := testCLIConfig(t)
+	config.Binary = binary
+	config.SandboxProfile = ""
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, audit, err := runner.Review(context.Background(), []byte(`{"bundle":"data"}`))
+	if err == nil {
+		t.Fatal("expected Grok CLI failure")
+	}
+	if audit.FailureKind != CLIFailurePromptFileFormat || audit.StderrSHA256 == "" {
+		t.Fatalf("audit = %#v", audit)
+	}
+	if !strings.Contains(err.Error(), "kind=prompt_file_format") || !strings.Contains(err.Error(), "stderr_sha256=") {
+		t.Fatalf("error lacks safe diagnostics: %v", err)
+	}
+	for _, forbidden := range []string{"private-source-marker", "/tmp/private-review-bundle.json", "JSON object must have"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("error exposed stderr %q: %v", forbidden, err)
+		}
 	}
 }
 
