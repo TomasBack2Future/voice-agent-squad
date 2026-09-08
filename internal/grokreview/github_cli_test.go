@@ -11,7 +11,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"reflect"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,17 @@ type fakeCommandExecutor struct {
 	calls   []recordedCommand
 	outputs [][]byte
 	errors  []error
+}
+
+type fakeHTTPDoer struct {
+	request  *http.Request
+	response *http.Response
+	err      error
+}
+
+func (f *fakeHTTPDoer) Do(request *http.Request) (*http.Response, error) {
+	f.request = request.Clone(request.Context())
+	return f.response, f.err
 }
 
 func (f *fakeCommandExecutor) run(_ context.Context, args []string, stdin []byte, env []string) ([]byte, error) {
@@ -85,9 +97,14 @@ func TestMintAppJWTBindsIssuerAndLifetime(t *testing.T) {
 	}
 }
 
-func TestMintInstallationTokenUsesJWTWithoutPuttingItInArguments(t *testing.T) {
+func TestMintInstallationTokenUsesBearerWithoutCallingGitHubCLI(t *testing.T) {
 	executor := &fakeCommandExecutor{outputs: [][]byte{[]byte(`{"token":"installation-token","expires_at":"2026-09-08T01:00:00Z"}`)}}
 	client := testGitHubCLI(executor)
+	doer := &fakeHTTPDoer{response: &http.Response{
+		StatusCode: http.StatusCreated,
+		Body:       io.NopCloser(strings.NewReader(`{"token":"installation-token","expires_at":"2026-09-08T01:00:00Z"}`)),
+	}}
+	client.httpClient = doer
 	token, err := client.MintInstallationToken(context.Background(), "signed-jwt", 42)
 	if err != nil {
 		t.Fatal(err)
@@ -95,15 +112,20 @@ func TestMintInstallationTokenUsesJWTWithoutPuttingItInArguments(t *testing.T) {
 	if token != "installation-token" {
 		t.Fatalf("token = %q", token)
 	}
-	call := executor.calls[0]
-	if !reflect.DeepEqual(call.args, []string{"api", "--method", "POST", "app/installations/42/access_tokens"}) {
-		t.Fatalf("args = %#v", call.args)
+	if len(executor.calls) != 0 {
+		t.Fatalf("GitHub CLI calls = %d", len(executor.calls))
 	}
-	if strings.Contains(strings.Join(call.args, " "), "signed-jwt") {
-		t.Fatal("JWT leaked into arguments")
+	if doer.request == nil {
+		t.Fatal("installation-token request was not sent")
 	}
-	if !containsExact(call.env, "GH_TOKEN=signed-jwt") {
-		t.Fatalf("env = %#v", call.env)
+	if doer.request.Method != http.MethodPost || doer.request.URL.String() != "https://api.github.test/app/installations/42/access_tokens" {
+		t.Fatalf("request = %s %s", doer.request.Method, doer.request.URL)
+	}
+	if got := doer.request.Header.Get("Authorization"); got != "Bearer signed-jwt" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	if got := doer.request.Header.Get("X-GitHub-Api-Version"); got != "2022-11-28" {
+		t.Fatalf("X-GitHub-Api-Version = %q", got)
 	}
 }
 
@@ -214,11 +236,12 @@ func TestGitHubCLIRejectsInvalidRepositoryBeforeCallingCommand(t *testing.T) {
 	}
 }
 
-func TestGitHubCLIPropagatesCommandFailureWithoutOutput(t *testing.T) {
-	executor := &fakeCommandExecutor{errors: []error{errors.New("failed")}}
+func TestMintInstallationTokenPropagatesTransportFailureWithoutJWT(t *testing.T) {
+	executor := &fakeCommandExecutor{}
 	client := testGitHubCLI(executor)
-	_, err := client.MintInstallationToken(context.Background(), "jwt", 42)
-	if err == nil || strings.Contains(err.Error(), "jwt") {
+	client.httpClient = &fakeHTTPDoer{err: errors.New("transport failed")}
+	_, err := client.MintInstallationToken(context.Background(), "sensitive-jwt", 42)
+	if err == nil || !strings.Contains(err.Error(), "transport failed") || strings.Contains(err.Error(), "sensitive-jwt") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -241,6 +264,8 @@ func testGitHubCLI(executor *fakeCommandExecutor) *GitHubCLI {
 	return &GitHubCLI{
 		binary: "/opt/homebrew/bin/gh", timeout: time.Minute,
 		maxOutputBytes: 1 << 20, execute: executor.run,
+		httpClient: &fakeHTTPDoer{err: errors.New("unexpected HTTP call")},
+		apiBaseURL: "https://api.github.test",
 	}
 }
 
