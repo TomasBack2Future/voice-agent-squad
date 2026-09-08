@@ -51,18 +51,43 @@ Build and run it locally:
 
 ```bash
 go install ./cmd/squad-grok-review
-squad-grok-review \
-  --repo TomasBack2Future/voice-agent-studio \
-  --pr 705 \
-  --mode shadow \
-  --app-id 4862345 \
-  --installation-id 12345678 \
-  --app-private-key /secure/path/voice-agent-grok-reviewer.pem
 ```
 
+Create the per-user configuration at the platform user-config location under
+`squad/grok-review.json` (`~/Library/Application Support/squad/` on macOS or
+`$XDG_CONFIG_HOME/squad/` on Linux):
+
+```json
+{
+  "app_id": 4862345,
+  "installation_id": 12323344,
+  "app_private_key": "/secure/path/voice-agent-grok-reviewer.pem"
+}
+```
+
+The optional `SQUAD_GROK_REVIEW_CONFIG` environment variable or `--config`
+flag may point to another absolute JSON path. CLI identity flags remain
+available for controlled overrides, but Workers should use the shared local
+configuration instead of assembling publisher identity arguments themselves.
 The installation ID and key path are local setup values. Do not commit the
-private key or include its contents in Agent prompts, logs, comments, or Squad
-messages.
+configuration, private key, or private-key contents, or include them in Agent
+prompts, logs, comments, or Squad messages.
+
+Validate the installed binary, binaries, reviewer bundle, private key, and
+GitHub App authentication without starting Grok or publishing a comment or
+Check:
+
+```bash
+squad-grok-review doctor
+```
+
+After the doctor succeeds, a Worker needs only the repository and pull request:
+
+```bash
+squad-grok-review \
+  --repo TomasBack2Future/voice-agent-studio \
+  --pr 705
+```
 
 Run the command once for a substantive head. A provider or transport failure
 may be retried. A valid blocking result requires verifying the finding and

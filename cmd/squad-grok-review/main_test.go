@@ -4,12 +4,97 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zsiec/squad/internal/grokreview"
 )
+
+func TestParseConfigDiscoversLocalReviewerConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "grok-review.json")
+	privateKeyPath := filepath.Join(dir, "reviewer.pem")
+	if err := os.WriteFile(configPath, []byte(`{
+  "app_id": 4862345,
+  "installation_id": 159920856,
+  "app_private_key": "`+privateKeyPath+`",
+  "grok_home": "`+dir+`"
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SQUAD_GROK_REVIEW_CONFIG", configPath)
+
+	var output bytes.Buffer
+	config, err := parseConfig([]string{"--repo", "owner/repo", "--pr", "17"}, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.appID != 4862345 || config.installationID != 159920856 || config.appPrivateKey != privateKeyPath {
+		t.Fatalf("config = %#v", config)
+	}
+	if config.grokHome != dir || config.configPath != configPath {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
+func TestParseConfigExplicitFlagsOverrideLocalConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "grok-review.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "app_id": 1,
+  "installation_id": 2,
+  "app_private_key": "/config/key.pem"
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	config, err := parseConfig([]string{
+		"--repo", "owner/repo", "--pr", "17", "--config", configPath,
+		"--app-id", "3", "--installation-id", "4", "--app-private-key", "/flag/key.pem",
+	}, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.appID != 3 || config.installationID != 4 || config.appPrivateKey != "/flag/key.pem" {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
+func TestParseConfigDoctorDoesNotRequirePullRequest(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "grok-review.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "app_id": 4862345,
+  "installation_id": 159920856,
+  "app_private_key": "/secure/reviewer.pem"
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	config, err := parseConfig([]string{"doctor", "--config", configPath}, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.doctor || config.repository != "" || config.pullRequest != 0 {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
+func TestParseConfigReportsMissingDiscoveredIdentity(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "missing.json")
+	t.Setenv("SQUAD_GROK_REVIEW_CONFIG", configPath)
+
+	var output bytes.Buffer
+	_, err := parseConfig([]string{"--repo", "owner/repo", "--pr", "17"}, &output)
+	if err == nil || !strings.Contains(err.Error(), configPath) || !strings.Contains(err.Error(), "reviewer config") {
+		t.Fatalf("error = %v", err)
+	}
+}
 
 func TestParseConfigUsesExplicitLocalReviewerInputs(t *testing.T) {
 	var output bytes.Buffer
