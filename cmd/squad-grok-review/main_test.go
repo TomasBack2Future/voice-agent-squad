@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -45,6 +46,17 @@ func TestParseConfigRejectsUnknownMode(t *testing.T) {
 	}, &output)
 	if err == nil || !strings.Contains(err.Error(), "mode") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunHelpReturnsSuccess(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run(context.Background(), []string{"--help"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Usage of squad-grok-review") || strings.Contains(stderr.String(), "flag: help requested") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -61,6 +62,9 @@ func main() {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	configuration, err := parseConfig(args, stderr)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
