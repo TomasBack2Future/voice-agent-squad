@@ -20,6 +20,14 @@ import (
 
 const FindingsSchemaVersion = "squad.review.findings.v2"
 
+type Verdict string
+
+const (
+	VerdictApproved Verdict = "approved"
+	VerdictBlocking Verdict = "blocking"
+	VerdictError    Verdict = "error"
+)
+
 const FindingsJSONSchema = `{"type":"object","additionalProperties":false,"required":["schema_version","verdict","summary","findings"],"properties":{"schema_version":{"const":"squad.review.findings.v2"},"verdict":{"type":"string","enum":["approved","blocking","error"]},"summary":{"type":"string","minLength":1,"maxLength":4000},"findings":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["category","severity","blocking","path","line","title","body"],"properties":{"category":{"type":"string","enum":["correctness","security","data_loss","concurrency","compatibility","contract","migration","rollback","critical_test"]},"severity":{"type":"string","enum":["critical","high","medium","low"]},"blocking":{"type":"boolean"},"path":{"type":"string","minLength":1,"maxLength":1024},"line":{"type":"integer","minimum":1},"title":{"type":"string","minLength":1,"maxLength":200},"body":{"type":"string","minLength":1,"maxLength":4000},"verification":{"type":"string","maxLength":2000}}}}}}`
 
 type Finding struct {
