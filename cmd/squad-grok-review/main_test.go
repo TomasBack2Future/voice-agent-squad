@@ -38,6 +38,46 @@ func TestParseConfigDiscoversLocalReviewerConfig(t *testing.T) {
 	if config.grokHome != dir || config.configPath != configPath {
 		t.Fatalf("config = %#v", config)
 	}
+	if config.reasoningEffort != "medium" {
+		t.Fatalf("default reasoning effort = %q, want medium", config.reasoningEffort)
+	}
+}
+
+func TestParseConfigReasoningEffortPrecedenceAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, local, flag, want string
+		invalid                 bool
+	}{
+		{name: "local", local: "high", want: "high"},
+		{name: "explicit", local: "xhigh", flag: "medium", want: "medium"},
+		{name: "invalid local", local: "unbounded", invalid: true},
+		{name: "invalid flag", local: "medium", flag: "unbounded", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "review.json")
+			if err := os.WriteFile(path, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/key","reasoning_effort":"`+tc.local+`"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"doctor", "--config", path}
+			if tc.flag != "" {
+				args = append(args, "--reasoning-effort", tc.flag)
+			}
+			var output bytes.Buffer
+			config, err := parseConfig(args, &output)
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid effort accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.reasoningEffort != tc.want {
+				t.Fatalf("effort = %q, want %q", config.reasoningEffort, tc.want)
+			}
+		})
+	}
 }
 
 func TestParseConfigExplicitFlagsOverrideLocalConfig(t *testing.T) {

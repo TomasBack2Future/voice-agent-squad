@@ -21,6 +21,11 @@ compatibility, contract, migration, rollback, and critical-test defects. A
 preference is not a defect. Attempt to disprove a prospective finding against
 the supplied code and checks before returning it.
 
+Keep the final summary to one or two sentences. Describe each distinct defect
+once, with concise trigger, impact, and code evidence; omit walkthroughs of
+unaffected code and repeated explanations. Do not suppress a supported defect
+or skip any part of the supplied patch to shorten the response.
+
 Every finding must identify a supplied path and changed new-file line. The only
 valid model verdicts are `approved` and `blocking`; operational errors are owned
 by the trusted adapter. Complete the review in this single response. Return

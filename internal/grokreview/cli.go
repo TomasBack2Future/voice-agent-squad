@@ -20,6 +20,8 @@ import (
 
 const FindingsSchemaVersion = "squad.review.findings.v2"
 
+const DefaultReasoningEffort = "medium"
+
 type Verdict string
 
 type CLIFailureKind string
@@ -35,6 +37,10 @@ const (
 	CLIFailureInvalidArguments CLIFailureKind = "invalid_arguments"
 	CLIFailureLocalPermissions CLIFailureKind = "local_permissions"
 	CLIFailureTransport        CLIFailureKind = "transport"
+	CLIFailureTimeout          CLIFailureKind = "timeout"
+	CLIFailureCanceled         CLIFailureKind = "canceled"
+	CLIFailureInvalidOutput    CLIFailureKind = "invalid_output"
+	CLIFailureOutputTooLarge   CLIFailureKind = "output_too_large"
 	CLIFailureUnknown          CLIFailureKind = "unknown"
 )
 
@@ -68,17 +74,18 @@ type TokenUsage struct {
 }
 
 type CLIAudit struct {
-	RequestID      string
-	SessionID      string
-	RequestedModel string
-	ResolvedModel  string
-	StopReason     string
-	Usage          TokenUsage
-	NumTurns       int
-	CostUSD        float64
-	Duration       time.Duration
-	StderrSHA256   string
-	FailureKind    CLIFailureKind
+	RequestID       string
+	SessionID       string
+	RequestedModel  string
+	ReasoningEffort string
+	ResolvedModel   string
+	StopReason      string
+	Usage           TokenUsage
+	NumTurns        int
+	CostUSD         float64
+	Duration        time.Duration
+	StderrSHA256    string
+	FailureKind     CLIFailureKind
 }
 
 type CLIConfig struct {
@@ -99,8 +106,9 @@ type CLIRunner struct {
 }
 
 type CLIDoctor struct {
-	Version string
-	Model   string
+	Version         string
+	Model           string
+	ReasoningEffort string
 }
 
 type preparedCommand struct {
@@ -135,6 +143,12 @@ type modelUsage struct {
 }
 
 func NewCLIRunner(config CLIConfig) (*CLIRunner, error) {
+	if config.ReasoningEffort == "" {
+		config.ReasoningEffort = DefaultReasoningEffort
+	}
+	if err := ValidateReasoningEffort(config.ReasoningEffort); err != nil {
+		return nil, err
+	}
 	if !filepath.IsAbs(config.Binary) {
 		return nil, fmt.Errorf("grok CLI binary must be an absolute path")
 	}
@@ -229,7 +243,16 @@ func (r *CLIRunner) Doctor(ctx context.Context) (CLIDoctor, error) {
 	if !outputContainsModel(modelsOutput, r.config.Model) {
 		return CLIDoctor{}, fmt.Errorf("configured model %q is unavailable", r.config.Model)
 	}
-	return CLIDoctor{Version: version, Model: r.config.Model}, nil
+	return CLIDoctor{Version: version, Model: r.config.Model, ReasoningEffort: r.config.ReasoningEffort}, nil
+}
+
+func ValidateReasoningEffort(effort string) error {
+	switch effort {
+	case "low", "medium", "high", "xhigh":
+		return nil
+	default:
+		return fmt.Errorf("reasoning effort must be low, medium, high, or xhigh")
+	}
 }
 
 // verifyOneShotInvocationContract exercises the complete review argument shape
@@ -337,14 +360,15 @@ func outputContainsModel(output []byte, model string) bool {
 }
 
 func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsResult, CLIAudit, error) {
+	audit := CLIAudit{RequestedModel: r.config.Model, ReasoningEffort: r.config.ReasoningEffort}
 	if len(frozenBundle) == 0 {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("frozen review bundle is empty")
+		return FindingsResult{}, audit, fmt.Errorf("frozen review bundle is empty")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 	defer cancel()
 	prepared, err := r.prepare(callCtx, frozenBundle)
 	if err != nil {
-		return FindingsResult{}, CLIAudit{}, err
+		return FindingsResult{}, audit, err
 	}
 	defer prepared.cleanup()
 
@@ -356,9 +380,19 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 	err = prepared.command.Run()
 	duration := time.Since(started)
 	stderrSum := sha256.Sum256(stderr.Bytes())
-	audit := CLIAudit{Duration: duration, StderrSHA256: hex.EncodeToString(stderrSum[:])}
+	audit.Duration = duration
+	audit.StderrSHA256 = hex.EncodeToString(stderrSum[:])
 	if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		audit.FailureKind = CLIFailureTimeout
 		return FindingsResult{}, audit, fmt.Errorf("grok CLI exceeded %s", r.config.Timeout)
+	}
+	if errors.Is(callCtx.Err(), context.Canceled) {
+		audit.FailureKind = CLIFailureCanceled
+		return FindingsResult{}, audit, fmt.Errorf("grok CLI canceled: %w", context.Canceled)
+	}
+	if stdout.overflow || stderr.overflow {
+		audit.FailureKind = CLIFailureOutputTooLarge
+		return FindingsResult{}, audit, fmt.Errorf("grok CLI output exceeded %d bytes", r.config.MaxOutputBytes)
 	}
 	if err != nil {
 		audit.FailureKind = classifyCLIFailure(stderr.Bytes())
@@ -367,16 +401,15 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 			audit.FailureKind, audit.StderrSHA256, err,
 		)
 	}
-	if stdout.overflow || stderr.overflow {
-		return FindingsResult{}, audit, fmt.Errorf("grok CLI output exceeded %d bytes", r.config.MaxOutputBytes)
-	}
 	result, parsedAudit, err := ParseCLIEnvelope(stdout.Bytes())
 	if err != nil {
-		return FindingsResult{}, audit, err
+		audit.FailureKind = CLIFailureInvalidOutput
+		return FindingsResult{}, audit, fmt.Errorf("grok CLI returned invalid structured output")
 	}
 	parsedAudit.Duration = duration
 	parsedAudit.StderrSHA256 = audit.StderrSHA256
 	parsedAudit.RequestedModel = r.config.Model
+	parsedAudit.ReasoningEffort = r.config.ReasoningEffort
 	return result, parsedAudit, nil
 }
 

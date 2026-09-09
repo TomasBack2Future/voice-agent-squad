@@ -193,6 +193,96 @@ func TestCLIRunnerParsesStructuredOutputAndAudit(t *testing.T) {
 	if audit.Usage.TotalTokens != 17 || audit.NumTurns != 1 {
 		t.Fatalf("audit usage = %#v", audit)
 	}
+	if audit.ReasoningEffort != config.ReasoningEffort || audit.Usage.ReasoningTokens != 1 {
+		t.Fatalf("effort/usage missing: %#v", audit)
+	}
+}
+
+func TestCLIAlwaysPinsDefaultReasoningEffort(t *testing.T) {
+	config := testCLIConfig(t)
+	config.ReasoningEffort = ""
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := runner.commandArguments("/prompt", "/work")
+	for i, arg := range args {
+		if arg == "--reasoning-effort" && i+1 < len(args) && args[i+1] == "medium" {
+			return
+		}
+	}
+	t.Fatalf("default effort not pinned in args: %v", args)
+}
+
+func TestCLIRunnerReportsTimeoutWithoutLeakingOutput(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "fake-grok")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'private-output' >&2\nexec /bin/sleep 5\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := testCLIConfig(t)
+	config.Binary = binary
+	config.Timeout = 40 * time.Millisecond
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, audit, err := runner.Review(context.Background(), []byte("private-input"))
+	if err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("error = %v", err)
+	}
+	if audit.FailureKind != CLIFailureTimeout || audit.RequestedModel != config.Model || audit.ReasoningEffort != "high" || audit.Duration <= 0 {
+		t.Fatalf("timeout audit = %#v", audit)
+	}
+	if result.Verdict == VerdictApproved || strings.Contains(err.Error(), "private-") {
+		t.Fatalf("unsafe timeout result: %#v %v", result, err)
+	}
+}
+
+func TestCLIRunnerClassifiesInvalidAndOversizedOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+		kind  CLIFailureKind
+	}{
+		{"invalid", 1 << 20, CLIFailureInvalidOutput},
+		{"oversized", 4, CLIFailureOutputTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "fake-grok")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s' '{\"private-output\":true}'\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			config := testCLIConfig(t)
+			config.Binary = binary
+			config.MaxOutputBytes = tc.limit
+			runner, err := NewCLIRunner(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, audit, err := runner.Review(context.Background(), []byte("input"))
+			if err == nil || audit.FailureKind != tc.kind || audit.ReasoningEffort != "high" {
+				t.Fatalf("audit=%#v err=%v", audit, err)
+			}
+			if strings.Contains(err.Error(), "private-output") {
+				t.Fatalf("raw output leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestCLIRunnerClassifiesCancellation(t *testing.T) {
+	config := testCLIConfig(t)
+	config.Binary = "/bin/echo"
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, audit, err := runner.Review(ctx, []byte("input"))
+	if err == nil || audit.FailureKind != CLIFailureCanceled || audit.RequestedModel != config.Model {
+		t.Fatalf("audit=%#v err=%v", audit, err)
+	}
 }
 
 func TestCLIRunnerClassifiesFailureWithoutExposingStderr(t *testing.T) {

@@ -187,3 +187,68 @@ func TestLocalReviewServicePublishesFailClosedResultForModelError(t *testing.T) 
 		t.Fatalf("internal error leaked into publication: %q", github.publishedInput.Summary)
 	}
 }
+
+func TestLocalReviewServiceReportsFailureStageWithoutResampling(t *testing.T) {
+	for _, stage := range []string{"freezing", "sampling", "validating", "identity", "publishing"} {
+		t.Run(stage, func(t *testing.T) {
+			snapshot := PullRequestSnapshot{Repository: "owner/repo", Number: 9, BaseRef: "main", BaseSHA: "base", HeadSHA: "head", Title: "fix", Diff: "+fixed"}
+			model := &fakeModelReviewer{result: approvedFindings()}
+			github := &fakePullRequestGateway{snapshot: snapshot, current: snapshot}
+			failure := errors.New("private-error-marker")
+			switch stage {
+			case "freezing":
+				github.fetchErr = failure
+			case "sampling":
+				model.err = failure
+				model.audit.FailureKind = CLIFailureTimeout
+			case "validating":
+				model.result = FindingsResult{}
+			case "identity":
+				github.identityErr = failure
+			case "publishing":
+				github.publishErr = failure
+			}
+			observer := &recordingReviewObserver{}
+			service, err := NewLocalReviewService(model, github, "core", "policy", observer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err := service.ReviewPullRequest(context.Background(), "token", "grok-review-shadow", "owner/repo", 9)
+			if err == nil || report.FailureStage != stage {
+				t.Fatalf("report=%#v err=%v", report, err)
+			}
+			last := observer.observations[len(observer.observations)-1]
+			if last.State != ReviewStateError || last.FailureStage != stage {
+				t.Fatalf("observation=%#v", last)
+			}
+			if stage == "freezing" && model.calls != 0 || model.calls > 1 {
+				t.Fatalf("model calls=%d", model.calls)
+			}
+			if stage == "sampling" && (report.Result.Verdict != VerdictError || !strings.Contains(report.Result.Summary, "timed out")) {
+				t.Fatalf("timeout result=%#v", report.Result)
+			}
+			if stage == "publishing" && report.Result.Verdict != VerdictApproved {
+				t.Fatalf("lost model verdict: %#v", report.Result)
+			}
+			if strings.Contains(report.Result.Summary, "private-error-marker") {
+				t.Fatal("raw error leaked")
+			}
+		})
+	}
+}
+
+func TestLocalReviewServiceRejectsBaseChangeEvenWithSameHeadAndPatch(t *testing.T) {
+	snapshot := PullRequestSnapshot{Repository: "owner/repo", Number: 9, BaseRef: "main", BaseSHA: "base", HeadSHA: "head", Title: "fix", Diff: "+fixed"}
+	current := snapshot
+	current.BaseSHA = "new-base"
+	model := &fakeModelReviewer{result: approvedFindings()}
+	github := &fakePullRequestGateway{snapshot: snapshot, current: current}
+	service, err := NewLocalReviewService(model, github, "core", "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.ReviewPullRequest(context.Background(), "token", "grok-review", "owner/repo", 9)
+	if err == nil || report.FailureStage != "identity" || github.published != 0 || model.calls != 1 {
+		t.Fatalf("report=%#v err=%v published=%d calls=%d", report, err, github.published, model.calls)
+	}
+}

@@ -40,14 +40,15 @@ type config struct {
 }
 
 type localConfig struct {
-	AppID          int64  `json:"app_id"`
-	InstallationID int64  `json:"installation_id"`
-	AppPrivateKey  string `json:"app_private_key"`
-	GrokHome       string `json:"grok_home,omitempty"`
-	GrokBinary     string `json:"grok_bin,omitempty"`
-	GitHubBinary   string `json:"gh_bin,omitempty"`
-	StatusDir      string `json:"status_dir,omitempty"`
-	Model          string `json:"model,omitempty"`
+	AppID           int64  `json:"app_id"`
+	InstallationID  int64  `json:"installation_id"`
+	AppPrivateKey   string `json:"app_private_key"`
+	GrokHome        string `json:"grok_home,omitempty"`
+	GrokBinary      string `json:"grok_bin,omitempty"`
+	GitHubBinary    string `json:"gh_bin,omitempty"`
+	StatusDir       string `json:"status_dir,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type runtimeDependencies struct {
@@ -70,6 +71,7 @@ type doctorOutput struct {
 	GitHubBinary         string `json:"github_binary"`
 	GrokHome             string `json:"grok_home"`
 	Model                string `json:"model"`
+	ReasoningEffort      string `json:"reasoning_effort"`
 	GrokVersion          string `json:"grok_version"`
 	GrokAuthentication   string `json:"grok_authentication"`
 	GrokCLIContract      string `json:"grok_cli_contract"`
@@ -89,6 +91,11 @@ type commandOutput struct {
 	RequestID       string                    `json:"request_id,omitempty"`
 	SessionID       string                    `json:"session_id,omitempty"`
 	RequestedModel  string                    `json:"requested_model,omitempty"`
+	ReasoningEffort string                    `json:"reasoning_effort,omitempty"`
+	InputTokens     int64                     `json:"input_tokens,omitempty"`
+	OutputTokens    int64                     `json:"output_tokens,omitempty"`
+	ReasoningTokens int64                     `json:"reasoning_tokens,omitempty"`
+	FailureStage    string                    `json:"failure_stage,omitempty"`
 	ResolvedModel   string                    `json:"resolved_model,omitempty"`
 	TotalTokens     int64                     `json:"total_tokens,omitempty"`
 	CostUSD         float64                   `json:"cost_usd,omitempty"`
@@ -132,7 +139,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			InstallationID: configuration.installationID,
 			GrokBinary:     dependencies.grokBinary, GitHubBinary: dependencies.githubBinary,
 			GrokHome: configuration.grokHome, Model: grokHealth.Model,
-			GrokVersion: grokHealth.Version, GrokAuthentication: "ok",
+			ReasoningEffort: grokHealth.ReasoningEffort,
+			GrokVersion:     grokHealth.Version, GrokAuthentication: "ok",
 			GrokCLIContract: "ok", GrokSessionStorage: "writable",
 			GitHubAuthentication: "ok", ReviewerBundle: "ok",
 		})
@@ -241,7 +249,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.StringVar(&configuration.grokHome, "grok-home", "", "home directory containing the dedicated Grok login")
 	flags.StringVar(&configuration.statusDir, "status-dir", "", "directory for safe local review status JSON")
 	flags.StringVar(&configuration.model, "model", "grok-4.6", "Grok CLI model selector")
-	flags.StringVar(&configuration.reasoningEffort, "reasoning-effort", "", "optional Grok reasoning effort")
+	flags.StringVar(&configuration.reasoningEffort, "reasoning-effort", grokreview.DefaultReasoningEffort, "Grok reasoning effort: low, medium, high, or xhigh (never inherits global effort)")
 	flags.DurationVar(&configuration.timeout, "timeout", 10*time.Minute, "Grok review timeout")
 	flags.IntVar(&configuration.maxGitHubOutput, "max-github-output", 8<<20, "maximum GitHub CLI response bytes")
 	flags.IntVar(&configuration.maxReviewerOutput, "max-reviewer-output", 1<<20, "maximum Grok CLI response bytes")
@@ -278,6 +286,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if found {
 		applyLocalConfig(&configuration, fileConfiguration, visited)
+	}
+	if err := grokreview.ValidateReasoningEffort(configuration.reasoningEffort); err != nil {
+		return config{}, err
 	}
 	switch configuration.mode {
 	case "shadow":
@@ -369,6 +380,9 @@ func applyLocalConfig(configuration *config, local localConfig, visited map[stri
 	if !visited["model"] && local.Model != "" {
 		configuration.model = local.Model
 	}
+	if !visited["reasoning-effort"] && local.ReasoningEffort != "" {
+		configuration.reasoningEffort = local.ReasoningEffort
+	}
 }
 
 func encodeJSON(stdout, stderr io.Writer, value any) int {
@@ -408,6 +422,9 @@ func newCommandOutput(report grokreview.ReviewReport) commandOutput {
 		Findings:  report.Result.Findings,
 		RequestID: report.Audit.RequestID, SessionID: report.Audit.SessionID,
 		RequestedModel: report.Audit.RequestedModel, ResolvedModel: report.Audit.ResolvedModel,
+		ReasoningEffort: report.Audit.ReasoningEffort,
+		InputTokens:     report.Audit.Usage.InputTokens, OutputTokens: report.Audit.Usage.OutputTokens,
+		ReasoningTokens: report.Audit.Usage.ReasoningTokens, FailureStage: report.FailureStage,
 		TotalTokens: report.Audit.Usage.TotalTokens, CostUSD: report.Audit.CostUSD,
 		DurationMillis: report.Audit.Duration.Milliseconds(),
 		FailureKind:    report.Audit.FailureKind,
