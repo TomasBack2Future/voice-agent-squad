@@ -5,7 +5,9 @@ Status: accepted for implementation
 ## Decision
 
 Use a cooperative local review flow. The owning Codex Worker invokes one
-reviewed command after its pull request is ready and deterministic CI passes:
+reviewed command after its pull request is stable and quick local checks pass.
+The review runs alongside full deterministic CI; both outcomes are joined
+before merge readiness:
 
 ```text
 Worker -> squad-grok-review -> grok CLI -> validate result
@@ -29,7 +31,7 @@ Worker with control of the host. That narrower trust model is intentional.
    and repository policy, no tools, no web search, no subagents, and strict JSON
    output.
 4. Validates the verdict and findings.
-5. Re-reads the PR and refuses publication if the head changed during review.
+5. Re-reads the PR and refuses publication if the base or head changed during review.
 6. Uses a short-lived GitHub App installation token to publish a sanitized PR
    comment and a Check Run on the reviewed head.
 7. Atomically updates a safe observation record under
@@ -61,7 +63,8 @@ Create the per-user configuration at the platform user-config location under
 {
   "app_id": 4862345,
   "installation_id": 12323344,
-  "app_private_key": "/secure/path/voice-agent-grok-reviewer.pem"
+  "app_private_key": "/secure/path/voice-agent-grok-reviewer.pem",
+  "reasoning_effort": "medium"
 }
 ```
 
@@ -79,7 +82,7 @@ model, and writable Grok session storage without making a model call or
 publishing a comment or Check:
 
 ```bash
-squad-grok-review doctor
+squad-grok-review doctor --reasoning-effort medium
 ```
 
 The Grok CLI persists its own session metadata under the configured Grok home.
@@ -89,18 +92,44 @@ reviewer access only: it does not acquire a Squad environment claim and does
 not authorize any deployment, merge, or unrelated filesystem operation. A
 filesystem denial is reported as `local_permissions`, not authentication.
 
-After the doctor succeeds, a Worker needs only the repository and pull request:
+After doctor succeeds, a Worker passes repository, PR, derived mode and effort:
 
 ```bash
 squad-grok-review \
   --repo TomasBack2Future/voice-agent-studio \
-  --pr 705
+  --pr 705 --mode shadow --reasoning-effort medium
 ```
 
-Run the command once for a substantive head. A provider or transport failure
-may be retried. A valid blocking result requires verifying the finding and
+The wrapper pins effort instead of inheriting the user's global Grok settings.
+Precedence is explicit flag, local configuration, then built-in `medium`.
+Use `high` for security/authentication, migration, concurrency/locking, or
+deployment/rollback changes. Select effort before sampling, not after seeing
+a verdict. The 10-minute hard timeout is unchanged.
+
+Start the local command as a managed asynchronous process with a retained
+session handle, while full CI/integration checks and already-required isolated
+builds run for the same frozen revision. Workers can prepare acceptance and
+rollback notes outside the frozen input. Do not edit code/PR description during
+sampling, duplicate workflows, occupy a hosted runner waiting for Grok, or hold
+ENV. Collect both results before the merge gate. Required CI always applies;
+only enforced mode requires App-pinned success. Timeout is incomplete in every
+mode, never approval. Base/head changes invalidate the old tuple even for a
+patch-identical rebase. Cancel/join obsolete owned work before a corrected head.
+
+Run the command once for a substantive head. A pre-sampling failure may be
+retried only after its operational cause is materially repaired; a sampled
+timeout does not authorize blind retries. A valid blocking result requires verifying the finding and
 pushing a real correction; do not repeatedly sample the same head or add a
 no-op commit to obtain a different verdict.
+
+Safe status records expose `reasoning_effort`, `reviewer_duration_ms` (CLI
+invocation), `duration_ms` (whole review workflow), and token counts including
+`reasoning_tokens` when reported. Missing usage is unknown, not zero cost.
+`failure_kind` distinguishes timeout, cancellation, argument/authentication,
+transport, output-limit and invalid-output errors; `failure_stage` distinguishes
+freezing, sampling, validation, identity checks and publication. An approved
+model result followed by a publishing error is not a successfully published
+review. These fields never include raw output or hidden reasoning.
 
 ## GitHub publication
 

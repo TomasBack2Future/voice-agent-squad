@@ -47,7 +47,8 @@ func TestReviewStatusWriterAtomicallyTracksSafeLifecycle(t *testing.T) {
 		},
 		Result: result,
 		Audit: CLIAudit{
-			ResolvedModel: "grok-4.6", Usage: TokenUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+			ResolvedModel: "grok-4.6", Usage: TokenUsage{InputTokens: 10, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 15},
+			ReasoningEffort: "medium", Duration: 9 * time.Second,
 			CostUSD: 0.012, FailureKind: CLIFailurePromptFileFormat,
 		},
 		Publication: Publication{
@@ -83,6 +84,9 @@ func TestReviewStatusWriterAtomicallyTracksSafeLifecycle(t *testing.T) {
 	if status.CompletedAt != started.Add(12*time.Second).Unix() || status.DurationMS != 12_000 {
 		t.Fatalf("completion = %#v", status)
 	}
+	if status.ReasoningEffort != "medium" || status.ReviewerDurationMS != 9_000 || status.ReasoningTokens != 3 {
+		t.Fatalf("latency/effort/usage = %#v", status)
+	}
 	info, err := os.Stat(writer.path)
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +102,44 @@ func TestReviewStatusWriterAtomicallyTracksSafeLifecycle(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), ".review-status-") {
 			t.Fatalf("temporary file remains: %s", entry.Name())
 		}
+	}
+}
+
+func TestReviewStatusPreservesTimeoutAndPublicationDistinction(t *testing.T) {
+	for _, tc := range []struct {
+		stage   string
+		verdict Verdict
+		kind    CLIFailureKind
+	}{
+		{"sampling", VerdictError, CLIFailureTimeout},
+		{"publishing", VerdictApproved, ""},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			writer, err := NewReviewStatusWriter(t.TempDir(), "shadow", 10*time.Minute)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := approvedFindings()
+			result.Verdict = tc.verdict
+			if err := writer.Observe(ReviewObservation{
+				State: ReviewStateError, FailureStage: tc.stage,
+				Snapshot: PullRequestSnapshot{Repository: "owner/repo", Number: 1, HeadSHA: "head"},
+				Result:   result, Audit: CLIAudit{RequestedModel: "grok-4.6", ReasoningEffort: "high", FailureKind: tc.kind},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(writer.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status ReviewStatus
+			if err := json.Unmarshal(raw, &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.State != ReviewStateError || status.Verdict != tc.verdict || status.FailureStage != tc.stage || status.FailureKind != tc.kind || status.Model != "grok-4.6" {
+				t.Fatalf("status=%#v", status)
+			}
+		})
 	}
 }
 
