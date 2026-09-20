@@ -1,15 +1,10 @@
 # squad
 
 This is the Voice Agent Squad fork. Start with [AGENTS.md](AGENTS.md),
-[the architecture map](docs/architecture.md), [Studio integration](docs/studio-agent-loop.md)
-and [CI/distribution boundaries](docs/environments-and-ci.md).
-The upstream installation/tutorial examples below describe the generic Squad
-product, not the configured local Studio dispatcher or its shared ledger.
-
-[![CI](https://github.com/zsiec/squad/actions/workflows/ci.yml/badge.svg)](https://github.com/zsiec/squad/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
-> Project management for software work done with AI coding agents.
+[the architecture map](docs/architecture.md) and [CI/distribution boundaries](docs/environments-and-ci.md).
+The installation/tutorial examples below describe optional product adoption,
+not source-repository contributor requirements. Source changes do not update
+an installed binary or authorize changes to a user's ledger.
 
 Squad gives Claude Code the durable coordination layer it lacks on its own — atomic claims, typed chat verbs, file-touch tracking, an evidence ledger, and a multi-agent dashboard. The full squad CLI surface is exposed as MCP tools, so Claude does the squad work for you. You describe what you want; squad's plumbing makes it happen.
 

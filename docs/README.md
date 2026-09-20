@@ -2,17 +2,15 @@
 
 ## Maintained fork entry points
 
-- [Working contract](../CLAUDE.md), reached from generated [AGENTS.md](../AGENTS.md).
+- [Agent guide](../AGENTS.md) and [Contributing](contributing.md).
 - [Architecture](architecture.md): source boundaries and durable state ownership.
-- [Studio Agent Loop](studio-agent-loop.md): local integration, role separation,
-  coordination and documentation ownership; not an automatic scheduler.
 - [Environments and CI](environments-and-ci.md): test/release capabilities and
-  the absence of a Studio deployment lane in this repository.
+  local distribution rather than application deployment.
 - [Workspace templates](../workspace/README.md): optional outer workspace routing.
 
-The tutorials below document generic Squad adoption. In the Studio integration,
-use the configured wrapper/ledger and its explicit assignment; do not initialize
-a second ledger, auto-pick work, or install upstream binaries as an implicit step.
+The tutorials below document optional product adoption, not requirements for
+contributing to this source repository. Installing hooks, generating instruction
+snapshots or running an adoption loop requires a separate deliberate choice.
 Reference pages describe implemented commands; `proposals/` describes design intent
 until linked implementation and enforcement evidence exists. README is a map,
 not a second command reference. Update the owning topic alongside behavior.

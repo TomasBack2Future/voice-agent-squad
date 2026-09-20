@@ -13,7 +13,7 @@ func TestMaintainedDocumentationLinks(t *testing.T) {
 	_, source, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
 	link := regexp.MustCompile(`\[[^\]]+\]\(([^)[:space:]]+)\)`)
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "docs/README.md", "docs/architecture.md", "docs/studio-agent-loop.md", "docs/environments-and-ci.md", "workspace/README.md"} {
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "docs/README.md", "docs/architecture.md", "docs/environments-and-ci.md", "workspace/README.md"} {
 		t.Run(name, func(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(root, name))
 			if err != nil {
