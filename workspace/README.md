@@ -7,7 +7,7 @@ studio/
   AGENTS.md                      # optional routing from this template
   README.md                      # local workspace map
   voice-agent-studio/AGENTS.md    # independently versioned entry
-  voice-agent-squad/AGENTS.md     # generated route to CLAUDE.md
+  voice-agent-squad/AGENTS.md     # independently versioned entry
   convoai-studio-importer/AGENTS.md
   interceptor/AGENTS.md
 ```
@@ -23,8 +23,7 @@ an enclosing Git repository simply to make instructions inherit. Do not commit
 sibling checkouts, credentials, private state or live task queues here.
 
 Before a physical migration inventory source checkouts, linked worktree common
-directories, user WIP/stashes, installed tool and skill paths, wrapper ledger
-configuration, saved app projects and automation prompts. Moving the source
+directories, user WIP/stashes, installed tool and skill paths, external tool configuration, saved app projects and automation prompts. Moving the source
 directory alone changes none of those references. Coordinate active owners
 before switching/removing their checkout. The local migration audit is separate
 from this portable documentation template.
