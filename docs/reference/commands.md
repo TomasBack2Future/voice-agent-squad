@@ -287,19 +287,19 @@ squad recover ENV-001 \
 
 ### `squad dispatch`
 
-Maintain durable, generation-fenced reservations around Worker task creation.
-Reservations prevent duplicate periodic dispatch but never replace the Worker's
-normal Issue claim.
+Maintain durable, generation-fenced reservations around task creation.
+Reservations prevent duplicate dispatch but never replace the task owner's
+normal item claim. The API does not define a scheduler or development-agent roles.
 
 ```bash
-squad dispatch reserve DISPATCH-STUDIO-501 \
-  --source github:TomasBack2Future/voice-agent-studio#501 \
+squad dispatch reserve DISPATCH-FEAT-501 \
+  --source github:owner/repository#501 \
   --ttl 15m --json
-squad dispatch attach DISPATCH-STUDIO-501 --item STUDIO-501 --generation 1
-squad dispatch bind DISPATCH-STUDIO-501 --generation 1 --thread-id 0199abcd
+squad dispatch attach DISPATCH-FEAT-501 --item FEAT-501 --generation 1
+squad dispatch bind DISPATCH-FEAT-501 --generation 1 --thread-id 0199abcd
 squad dispatch list --active --json
-squad dispatch close DISPATCH-STUDIO-501 --generation 1 --state completed \
-  --note "issue closed after staging acceptance"
+squad dispatch close DISPATCH-FEAT-501 --generation 1 --state completed \
+  --note "source task completed"
 ```
 
 ### `squad handoff`

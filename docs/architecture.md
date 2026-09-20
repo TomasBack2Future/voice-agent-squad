@@ -46,7 +46,7 @@ Tests use isolated state; never substitute the live database.
 
 The checked-in AGENTS.md is a stable, hand-maintained source contributor guide;
 CLAUDE.md points to it. Neither file contains live queue state or specifies a
-consumer's dispatcher/worker/reviewer implementation.
+consumer's development workflow.
 
 `squad scaffold agents-md` retains its optional ledger snapshot behavior for
 consumer compatibility. Do not run it over this source repository's guide.

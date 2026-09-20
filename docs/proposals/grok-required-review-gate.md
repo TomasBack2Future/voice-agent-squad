@@ -1,172 +1,127 @@
-# Local Grok pull-request review
+# Grok review command reference
 
-Status: accepted for implementation
+This page describes the optional `squad-grok-review` product command, not a
+consumer's development-agent roles, scheduling loop or repository workflow.
+Whether and when a workspace invokes it is external policy. Installing or
+building Squad does not enable a review gate in another repository.
 
-## Decision
+## Command behavior
 
-Use a cooperative local review flow. The owning Codex Worker invokes one
-reviewed command after its pull request is stable and quick local checks pass.
-The review runs alongside full deterministic CI; both outcomes are joined
-before merge readiness:
+The command:
 
-```text
-Worker -> squad-grok-review -> grok CLI -> validate result
-       -> GitHub App comment + SHA-bound Check
-```
+1. Reads PR metadata and diff through the installed GitHub CLI.
+2. Freezes repository, PR, base SHA and head SHA.
+3. Runs the installed Grok CLI headlessly with its bundled review policy,
+   tools/web/subagents disabled and strict structured output.
+4. Validates the returned verdict and findings.
+5. Re-reads the PR and rejects publication if its base or head changed.
+6. Publishes a sanitized comment and a SHA-bound Check through the configured
+   GitHub App installation.
+7. Updates a safe observation record under `~/.squad/grok-reviews/`.
 
-There is no webhook service, external scheduler, reviewer Agent, xAI HTTP
-adapter, or reviewer database. The Dispatcher does not participate.
+There is no webhook service or external review scheduler. The command does not
+merge, deploy, acquire environment ownership, assign tasks or modify product code.
+Its local trust model protects against accidental stale-input publication; it
+does not protect against a malicious operator controlling the host.
 
-This decision trusts the local Worker to follow `AGENTS.md`. It is designed to
-prevent accidental omission and stale-SHA merging, not to resist a malicious
-Worker with control of the host. That narrower trust model is intentional.
+The Grok child receives neither the GitHub token nor the App private key.
+Publication and observation records exclude hidden reasoning, raw output,
+prompts, command arguments, environment values and credentials.
 
-## Local command
+## Installation and configuration
 
-`squad-grok-review`:
-
-1. Reads the current PR metadata and diff with the installed GitHub CLI.
-2. Records the exact repository, PR, base SHA, and head SHA being reviewed.
-3. Runs the installed `grok` CLI once in headless mode with the immutable core
-   and repository policy, no tools, no web search, no subagents, and strict JSON
-   output.
-4. Validates the verdict and findings.
-5. Re-reads the PR and refuses publication if the base or head changed during review.
-6. Uses a short-lived GitHub App installation token to publish a sanitized PR
-   comment and a Check Run on the reviewed head.
-7. Atomically updates a safe observation record under
-   `~/.squad/grok-reviews/` for the local read-only Squad monitor.
-
-The command never gives the GitHub token or App private key to the Grok child.
-It never publishes Grok's hidden thought, raw stdout/stderr, prompt, command
-arguments, environment, or credentials.
-
-The observation record contains only the review mode and stage, PR/base/head
-identity, sanitized verdict/summary/finding titles, model usage and cost,
-timings, and GitHub comment/Check links. It never contains the frozen diff,
-prompt, private key, installation token, Grok hidden thought, stdout, or stderr.
-Its lifecycle is `freezing -> sampling -> validating -> publishing`, followed
-by `approved`, `blocking`, `error`, or `stale`. Monitor availability does not
-change the review or merge result.
-
-Build and run it locally:
+Build the optional binary explicitly:
 
 ```bash
 go install ./cmd/squad-grok-review
 ```
 
-Create the per-user configuration at the platform user-config location under
-`squad/grok-review.json` (`~/Library/Application Support/squad/` on macOS or
-`$XDG_CONFIG_HOME/squad/` on Linux):
+The per-user configuration is `squad/grok-review.json` beneath the platform
+user-config directory: `~/Library/Application Support/squad/` on macOS or
+`$XDG_CONFIG_HOME/squad/` on Linux. A synthetic example:
 
 ```json
 {
-  "app_id": 4862345,
-  "installation_id": 12323344,
-  "app_private_key": "/secure/path/voice-agent-grok-reviewer.pem",
+  "app_id": 123456,
+  "installation_id": 12345678,
+  "app_private_key": "/secure/path/review-app.pem",
+  "model": "grok-4.6",
   "reasoning_effort": "medium"
 }
 ```
 
-The optional `SQUAD_GROK_REVIEW_CONFIG` environment variable or `--config`
-flag may point to another absolute JSON path. CLI identity flags remain
-available for controlled overrides, but Workers should use the shared local
-configuration instead of assembling publisher identity arguments themselves.
-The installation ID and key path are local setup values. Do not commit the
-configuration, private key, or private-key contents, or include them in Agent
-prompts, logs, comments, or Squad messages.
+`SQUAD_GROK_REVIEW_CONFIG` or `--config` can select another absolute JSON path.
+App identity flags support explicit overrides; all IDs and key locations must
+come from the actual installation, not these example values. Do not commit the
+configuration or private key, or include them in model input or evidence.
 
-Validate the installed binary, reviewer bundle, private key, GitHub App
-authentication, Grok CLI version and required flags, Grok login, configured
-model, and writable Grok session storage without making a model call or
-publishing a comment or Check:
+Run the non-sampling diagnostic before using the command:
 
 ```bash
 squad-grok-review doctor --reasoning-effort medium
 ```
 
-The Grok CLI persists its own session metadata under the configured Grok home.
-Codex Workers must therefore run both `doctor` and the real review command as a
-narrowly approved command outside the Codex filesystem sandbox. This is local
-reviewer access only: it does not acquire a Squad environment claim and does
-not authorize any deployment, merge, or unrelated filesystem operation. A
-filesystem denial is reported as `local_permissions`, not authentication.
+It validates the binary, bundled policy, App authentication, Grok CLI flags and
+login, selected model and writable Grok session storage without a model call,
+comment or Check publication. Filesystem denial is a local-permissions failure,
+not proof of invalid authentication. The host execution environment must permit
+the configured session storage and required network access.
 
-After doctor succeeds, a Worker passes repository, PR, derived mode and effort:
+## Invocation contract
 
 ```bash
 squad-grok-review \
-  --repo TomasBack2Future/voice-agent-studio \
-  --pr 705 --mode shadow --reasoning-effort medium
+  --repo owner/repository \
+  --pr 123 --mode shadow --reasoning-effort medium --timeout 20m
 ```
 
-The wrapper pins effort instead of inheriting the user's global Grok settings.
-Precedence is explicit flag, local configuration, then built-in `medium`.
-Use `high` for security/authentication, migration, concurrency/locking, or
-deployment/rollback changes. Select effort before sampling, not after seeing
-a verdict. The 10-minute hard timeout is unchanged.
+`--mode` accepts `shadow` or `required`; it selects publication names, not
+GitHub branch protection. `--model` defaults to `grok-4.6`.
+Reasoning effort precedence is explicit flag, per-user configuration, then
+built-in `medium`; supported values are `low`, `medium`, `high` and `xhigh`.
+The CLI's default timeout is ten minutes; the example explicitly selects twenty.
+Use `--help` and [the CLI source](../../cmd/squad-grok-review/main.go) for all
+options and output limits.
 
-Start the local command as a managed asynchronous process with a retained
-session handle, while full CI/integration checks and already-required isolated
-builds run for the same frozen revision. Workers can prepare acceptance and
-rollback notes outside the frozen input. Do not edit code/PR description during
-sampling, duplicate workflows, occupy a hosted runner waiting for Grok, or hold
-ENV. Collect both results before the merge gate. Required CI always applies;
-only enforced mode requires App-pinned success. Timeout is incomplete in every
-mode, never approval. Base/head changes invalidate the old tuple even for a
-patch-identical rebase. Cancel/join obsolete owned work before a corrected head.
+A review is evidence for one frozen base/head tuple. A new base or head makes
+the old tuple stale even when the textual patch is unchanged. Timeout, transport
+failure and invalid output are incomplete results, never approval. Do not
+reinterpret an error as a passing Check or repeatedly sample unchanged input
+to seek a different verdict. Correct verified defects before requesting a new
+review of changed input.
 
-Run the command once for a substantive head. A pre-sampling failure may be
-retried only after its operational cause is materially repaired; a sampled
-timeout does not authorize blind retries. A valid blocking result requires verifying the finding and
-pushing a real correction; do not repeatedly sample the same head or add a
-no-op commit to obtain a different verdict.
+## Publication and authorization
 
-Safe status records expose `reasoning_effort`, `reviewer_duration_ms` (CLI
-invocation), `duration_ms` (whole review workflow), and token counts including
-`reasoning_tokens` when reported. Missing usage is unknown, not zero cost.
+The configured App needs metadata/read, pull-requests/read-write,
+contents/read and checks/write on the selected repository. It does not need
+Actions, deployment, environment, administration or contents-write permission.
+
+The comment includes the exact head, verdict, summary and sanitized findings.
+The Check is `grok-review-shadow` or `grok-review`. A comment alone is not a
+merge gate. Enforcement exists only when the repository actually requires the
+correct App-pinned Check on the current head; the CLI cannot install that policy.
+A model approval followed by publication failure is not a successfully published
+review. Model findings require source verification and do not replace tests.
+
+## Observation schema
+
+Safe observations include mode, stage, PR/base/head identity, sanitized
+verdict/summary/finding titles, model usage and cost, durations and publication
+links. Stages are `freezing -> sampling -> validating -> publishing`, followed
+by `approved`, `blocking`, `error` or `stale`.
+
+`reasoning_effort`, `reviewer_duration_ms`, `duration_ms` and safe token counts
+describe the invocation. Missing usage is unknown, not zero.
 `failure_kind` distinguishes timeout, cancellation, argument/authentication,
-transport, output-limit and invalid-output errors; `failure_stage` distinguishes
-freezing, sampling, validation, identity checks and publication. An approved
-model result followed by a publishing error is not a successfully published
-review. These fields never include raw output or hidden reasoning.
+transport, output-limit and invalid-output failures; `failure_stage` identifies
+freezing, sampling, validation, identity checks or publication.
 
-## GitHub publication
+These records are read-only observations, not merge authority. Monitor
+availability does not change the command result.
 
-The App publishes two representations of the same result:
+## Regression boundaries
 
-- A PR comment containing the exact head SHA, verdict, summary, and sanitized
-  findings for human review.
-- `grok-review-shadow` or `grok-review` on the exact head SHA for machine use.
-
-A comment alone is not a merge gate. When enforcement is desired, repository
-rules must require `grok-review` from the dedicated App and require the branch
-to be up to date. The Worker revalidates the current head and Check after
-acquiring the environment lock.
-
-The App needs only metadata/read, pull-requests/read-write, contents/read, and
-checks/write for the selected repository. It does not need a webhook, Actions,
-deployment, environment, administration, or contents-write permission.
-
-## Rollout
-
-1. **Inactive:** the wrapper/App is unavailable; existing deterministic gates
-   remain authoritative.
-2. **Shadow:** Workers run the wrapper and publish `grok-review-shadow`, but its
-   result does not block merging.
-3. **Enforced:** branch policy requires the App-pinned `grok-review` Check on
-   the current, up-to-date head.
-
-Start with shadow on real Studio PRs. Enable enforcement only after the command
-is reliable enough that provider availability and false blocks are acceptable.
-
-## Acceptance
-
-- A local command reviews one current PR with `grok` CLI and no model tools.
-- The App posts a sanitized comment and Check bound to the reviewed head SHA.
-- A head change during review produces no publication.
-- Approved maps to Check success; blocking or error maps to failure.
-- The Grok child environment contains no GitHub credential.
-- Workers invoke the wrapper outside the environment lock and verify findings
-  before changing code.
-- Dispatcher and monitor remain read-only with respect to review execution.
+Tests must preserve frozen input identity, stale-result rejection, strict
+output validation, credential isolation, sanitized publication, timeout/error
+classification and the distinction between model approval and publication.
+No test should use live credentials or a real environment as its fixture.
