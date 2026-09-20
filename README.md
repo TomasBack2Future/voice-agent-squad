@@ -1,5 +1,11 @@
 # squad
 
+This is the Voice Agent Squad fork. Start with [AGENTS.md](AGENTS.md),
+[the architecture map](docs/architecture.md), [Studio integration](docs/studio-agent-loop.md)
+and [CI/distribution boundaries](docs/environments-and-ci.md).
+The upstream installation/tutorial examples below describe the generic Squad
+product, not the configured local Studio dispatcher or its shared ledger.
+
 [![CI](https://github.com/zsiec/squad/actions/workflows/ci.yml/badge.svg)](https://github.com/zsiec/squad/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 

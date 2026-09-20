@@ -1,5 +1,12 @@
 # Contributing
 
+For this fork, first read [the working contract](../CLAUDE.md) and
+[Studio integration](studio-agent-loop.md). The generic examples below are
+opt-in adoption instructions; Studio uses its configured wrapper/shared ledger,
+Codex-managed worktrees, actual branch policy and independent PR lifecycle.
+Do not run `squad go`, install hooks/binaries, auto-fold to main, or create extra
+reviewer agents merely because an upstream example below does so.
+
 Squad uses squad. If you contribute, you'll work the same loop the docs describe.
 
 For day-to-day item work in this repo (claim, chat, done, attest), drive squad through Claude Code the same way users do — *"claim BUG-042 and start"*, *"mark this done with summary X"*. The CLI commands below are useful when you want to test the local build of the binary or script something; otherwise let Claude call the MCP tools.
