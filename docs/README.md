@@ -1,5 +1,22 @@
 # squad documentation
 
+## Maintained fork entry points
+
+- [Working contract](../CLAUDE.md), reached from generated [AGENTS.md](../AGENTS.md).
+- [Architecture](architecture.md): source boundaries and durable state ownership.
+- [Studio Agent Loop](studio-agent-loop.md): local integration, role separation,
+  coordination and documentation ownership; not an automatic scheduler.
+- [Environments and CI](environments-and-ci.md): test/release capabilities and
+  the absence of a Studio deployment lane in this repository.
+- [Workspace templates](../workspace/README.md): optional outer workspace routing.
+
+The tutorials below document generic Squad adoption. In the Studio integration,
+use the configured wrapper/ledger and its explicit assignment; do not initialize
+a second ledger, auto-pick work, or install upstream binaries as an implicit step.
+Reference pages describe implemented commands; `proposals/` describes design intent
+until linked implementation and enforcement evidence exists. README is a map,
+not a second command reference. Update the owning topic alongside behavior.
+
 ## What squad is
 
 Squad is a project-management framework for software work done with AI coding agents. It encodes an operating loop — atomic claims, typed chat verbs, file-touch tracking, hygiene sweeps, web dashboard, and an optional Claude Code plugin — into a single static binary. One binary works for solo and multi-agent setups; multi-agent is a configuration, not a separate product.
