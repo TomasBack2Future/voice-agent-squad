@@ -15,8 +15,9 @@ Do not treat sibling repositories as one Git history, copy credentials between
 them, or assume a change to one has updated the others. Use independent branches,
 tests and delivery evidence. Preserve unrelated work and active worktrees.
 
-Keep this file short: routing and repository boundaries only. Each repository's
-AGENTS.md owns development rules; topic documents own architecture and runbooks.
-Live task state and any chosen development-agent orchestration belong outside
-product repository instructions. Source work does not authorize installation,
+Each repository's AGENTS.md owns portable development rules; topic documents own
+architecture and runbooks. Workspace-specific working policy belongs in this
+outer file and separately maintained skills, not in product repository documents.
+No such policy is configured by this routing template. Keep live task state out
+of maintained documentation. Source work does not authorize installation,
 shared-environment changes or active-task migration.
