@@ -16,6 +16,7 @@ large prompt:
 | Concern | Canonical source |
 | --- | --- |
 | Generic Worker lifecycle | `roles/worker/SKILL.md` |
+| Review admission, single-flight and freeze | `roles/worker/references/review-readiness.md` |
 | Studio repository and delivery capabilities | `projects/studio/profile.json` |
 | Bounded dispatch input | `schemas/assignment-envelope.schema.json` |
 | Compact/resume continuity | `schemas/checkpoint.schema.json` |
