@@ -73,6 +73,21 @@ class ContextPackageTests(unittest.TestCase):
         self.assertNotIn("Data Analyze", skill)
         self.assertIn("Phase-scoped context", skill)
 
+    def test_worker_review_contract_is_pr_wide_single_flight(self):
+        skill = (ROOT / "roles" / "worker" / "SKILL.md").read_text()
+        review = (
+            ROOT / "roles" / "worker" / "references" / "review-readiness.md"
+        ).read_text()
+        profile = json.loads((ROOT / "projects" / "studio" / "profile.json").read_text())
+
+        self.assertIn("references/review-readiness.md", skill)
+        self.assertIn("complete `base...head` PR diff", skill)
+        self.assertIn("at most one review invocation in flight for the PR", skill)
+        self.assertIn("authoring history, not separate review units", review)
+        self.assertIn("Allow at most one in-flight independent review", review)
+        self.assertIn("write barrier", review)
+        self.assertIn("final complete frozen diff", " ".join(profile["gates"]["review"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,8 +42,19 @@ context, not ownership or permission beyond its explicit authorization fields.
 - Run the profile's fast checks before freezing a PR tuple. For durability,
   idempotency, concurrency, retry or migration changes, run the profile's risk
   probes before the first independent review.
-- Freeze the substantive PR body and base/head tuple before starting full CI and
-  review concurrently. Verify findings; fix valid ones on a substantive new head.
+- Before independent review, follow [review readiness](references/review-readiness.md).
+  Admit one final, complete `base...head` PR diff only after the companion audit,
+  fast gates and author self-review pass. A reviewer evaluates that aggregate
+  diff; it does not review the branch one commit at a time.
+- Keep at most one review invocation in flight for the PR, even when its head
+  changes. Treat the frozen review receipt as a write barrier: do not edit,
+  commit, push, rebase or change the substantive PR body until review and full CI
+  are joined or the invocation is explicitly cancelled and joined.
+- A verified blocking finding may require a substantive fix and one new review
+  of the resulting final complete diff. Worker-discovered omissions during an
+  in-flight review are admission failures, not a reason to start another review
+  alongside it: cancel or join the obsolete invocation, finish all corrections,
+  rerun admission, then sample the new stable tuple once.
 - Acquire an environment only when the current tuple satisfies the project's
   admission gates. Production requires an explicit `production: true` assignment
   and the project production contract; staging permission never implies it.
@@ -68,9 +79,12 @@ in checkpoints or review inputs.
 ## Checkpoints and resume
 
 Write a schema-valid checkpoint at each durable transition: ownership acquired,
-worktree/base established, local gates passed, PR tuple frozen, review/CI joined,
-environment operation started or completed, and terminal cleanup. Record safe
-receipts and relevant failed approaches, not the whole conversation.
+worktree/base established, local gates passed, review admitted and PR tuple
+frozen, review/CI joined, environment operation started or completed, and
+terminal cleanup. Record safe receipts and relevant failed approaches, not the
+whole conversation. Review checkpoints also record the invocation count,
+superseded count and any post-freeze mutation so wasted review work remains
+visible.
 
 After compaction or provider handoff, load the latest checkpoint, re-read its
 canonical Issue/PR references and revalidate ownership plus any external
@@ -85,4 +99,3 @@ exact PR and revision, deterministic checks, review result, environment and
 acceptance disposition, released resources, remaining limitations and safe
 follow-ups. The Dispatcher reconciles the reservation; the Worker does not
 rewrite scheduler state owned by another role.
-

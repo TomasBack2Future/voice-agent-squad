@@ -35,7 +35,8 @@
       "CI classifier validation"
     ],
     "review": [
-      "one managed Grok review per substantive frozen tuple",
+      "one PR-wide managed Grok review admitted only for the final complete frozen diff",
+      "one in-flight review per PR with a freeze write barrier and deterministic join",
       "full deterministic CI joined with the review result"
     ],
     "staging": [
