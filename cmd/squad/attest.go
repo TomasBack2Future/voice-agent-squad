@@ -34,6 +34,7 @@ type AttestArgs struct {
 
 	AttDir   string `json:"att_dir,omitempty"`
 	RepoRoot string `json:"repo_root,omitempty"`
+	WorkDir  string `json:"work_dir,omitempty"`
 
 	Now func() time.Time `json:"-"`
 }
@@ -61,6 +62,9 @@ func Attest(ctx context.Context, args AttestArgs) (*AttestResult, error) {
 	L := attest.New(args.DB, args.RepoID, args.Now)
 
 	if k == attest.KindReview {
+		if args.WorkDir != "" {
+			return nil, fmt.Errorf("work_dir is only supported for command attestations")
+		}
 		rec, err := recordReviewAttestation(ctx, L, recordReviewArgs{
 			ItemID:        args.ItemID,
 			AgentID:       args.AgentID,
@@ -94,6 +98,7 @@ func Attest(ctx context.Context, args AttestArgs) (*AttestResult, error) {
 		AgentID:  args.AgentID,
 		AttDir:   args.AttDir,
 		RepoRoot: args.RepoRoot,
+		WorkDir:  args.WorkDir,
 	})
 	if err != nil {
 		return nil, err
@@ -115,7 +120,7 @@ func recordToResult(r attest.Record) *AttestResult {
 }
 
 func newAttestCmd() *cobra.Command {
-	var item, kind, command, findingsFile, reviewerAgent string
+	var item, kind, command, findingsFile, reviewerAgent, workDir string
 	cmd := &cobra.Command{
 		Use:   "attest [<item-id>]",
 		Short: "Record a verification artifact (test/lint/build/typecheck/manual) into the evidence ledger",
@@ -152,6 +157,7 @@ func newAttestCmd() *cobra.Command {
 				ReviewerAgent: reviewerAgent,
 				AttDir:        attDir,
 				RepoRoot:      repoRoot,
+				WorkDir:       workDir,
 			})
 			if err != nil {
 				if errors.Is(err, ErrInvalidKind) {
@@ -175,6 +181,7 @@ func newAttestCmd() *cobra.Command {
 	cmd.Flags().StringVar(&item, "item", "", "item id (or pass as the positional argument)")
 	cmd.Flags().StringVar(&kind, "kind", "", "test|lint|typecheck|build|review|manual")
 	cmd.Flags().StringVar(&command, "command", "", "shell command to run and capture")
+	cmd.Flags().StringVar(&workDir, "work-dir", "", "absolute execution directory (default: selected Squad repository)")
 	cmd.Flags().StringVar(&findingsFile, "findings-file", "", "review findings file (kind=review only)")
 	cmd.Flags().StringVar(&reviewerAgent, "reviewer-agent", "", "reviewer agent id (kind=review only)")
 	return cmd

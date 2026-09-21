@@ -461,6 +461,15 @@ squad touches list-others --json
 
 ### `squad attest`
 
+For an external coordination ledger, pass `--work-dir /absolute/source/worktree`
+(MCP: `work_dir`). This changes only command execution, not the ledger or artifact
+directory. The directory must exist and be absolute; its resolved path is included
+in the hashed artifact and replayable recorded command, so identical output from
+different explicitly selected directories is not deduplicated. Omission preserves
+the existing repository-root execution behavior. It is invalid for review-file
+attestations. A directory receipt is not proof of the tested Git revision; verify
+the command and suite against the assigned revision as well.
+
 Record a verification artifact (test/lint/build/typecheck/manual/review) into the evidence ledger. Items with `evidence_required: [...]` in their frontmatter need an attestation per kind before `squad done` will close them out (without `--force`).
 
 Priority and risk are scheduling metadata; they never synthesize evidence kinds

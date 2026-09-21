@@ -174,6 +174,26 @@ func (g *GitHubCLI) MintInstallationToken(ctx context.Context, appJWT string, in
 	return tokenResponse.Token, nil
 }
 
+// CheckRepositoryAccess probes pull-request read access using the same App token
+// as review. A globally healthy reviewer may still lack this repository.
+func (g *GitHubCLI) CheckRepositoryAccess(ctx context.Context, repository, token string) error {
+	if err := validateRepository(repository); err != nil {
+		return err
+	}
+	if token == "" {
+		return fmt.Errorf("GitHub installation token is required")
+	}
+	body, err := g.call(ctx, token, []string{"api", "repos/" + repository + "/pulls?state=open&per_page=1"}, nil)
+	if err != nil {
+		return fmt.Errorf("reviewer repository access: %w", err)
+	}
+	var pulls []json.RawMessage
+	if err := json.Unmarshal(body, &pulls); err != nil || pulls == nil {
+		return fmt.Errorf("reviewer repository access: expected a pull request list")
+	}
+	return nil
+}
+
 func (g *GitHubCLI) FetchPullRequest(ctx context.Context, repository string, number int, token string) (PullRequestSnapshot, error) {
 	if err := validateRepository(repository); err != nil {
 		return PullRequestSnapshot{}, err

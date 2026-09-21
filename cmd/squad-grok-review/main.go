@@ -61,6 +61,8 @@ type runtimeDependencies struct {
 }
 
 type doctorOutput struct {
+	Repository           string `json:"repository,omitempty"`
+	RepositoryAccess     string `json:"repository_access"`
 	Status               string `json:"status"`
 	Version              string `json:"version"`
 	Revision             string `json:"revision,omitempty"`
@@ -127,6 +129,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if configuration.doctor {
+		repositoryAccess := "not_checked"
+		if configuration.repository != "" {
+			if err := dependencies.github.CheckRepositoryAccess(ctx, configuration.repository, dependencies.installationToken); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			if configuration.pullRequest > 0 {
+				if _, err := dependencies.github.FetchPullRequestIdentity(ctx, configuration.repository, configuration.pullRequest, dependencies.installationToken); err != nil {
+					_, _ = fmt.Fprintln(stderr, err)
+					return 1
+				}
+			}
+			repositoryAccess = "readable"
+		}
 		grokHealth, err := dependencies.model.Doctor(ctx)
 		if err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
@@ -135,6 +151,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		version, revision := buildIdentity()
 		return encodeJSON(stdout, stderr, doctorOutput{
 			Status: "ok", Version: version, Revision: revision,
+			Repository: configuration.repository, RepositoryAccess: repositoryAccess,
 			ConfigPath: configuration.configPath, AppID: configuration.appID,
 			InstallationID: configuration.installationID,
 			GrokBinary:     dependencies.grokBinary, GitHubBinary: dependencies.githubBinary,
@@ -297,6 +314,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		configuration.checkName = "grok-review"
 	default:
 		return config{}, fmt.Errorf("mode must be shadow or required")
+	}
+	if configuration.doctor && (configuration.pullRequest < 0 || (configuration.pullRequest > 0 && configuration.repository == "")) {
+		return config{}, fmt.Errorf("doctor --pr requires --repo and a positive PR number")
 	}
 	if !configuration.doctor && (configuration.repository == "" || configuration.pullRequest <= 0) {
 		return config{}, fmt.Errorf("--repo and --pr are required")

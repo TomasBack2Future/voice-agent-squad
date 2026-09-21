@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 type RunOpts struct {
@@ -17,6 +18,7 @@ type RunOpts struct {
 	AgentID  string
 	AttDir   string
 	RepoRoot string
+	WorkDir  string // Optional absolute execution directory; RepoRoot still owns evidence.
 }
 
 func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
@@ -27,9 +29,30 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 		return Record{}, fmt.Errorf("attest.Run: invalid kind %q", opts.Kind)
 	}
 
+	workDir := opts.RepoRoot
+	recordedCommand := opts.Command
+	if opts.WorkDir != "" {
+		if !filepath.IsAbs(opts.WorkDir) {
+			return Record{}, fmt.Errorf("attest.Run: work_dir must be absolute")
+		}
+		resolved, err := filepath.EvalSymlinks(opts.WorkDir)
+		if err != nil {
+			return Record{}, fmt.Errorf("attest.Run: resolve work_dir: %w", err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || !info.IsDir() {
+			return Record{}, fmt.Errorf("attest.Run: work_dir must be an existing directory")
+		}
+		workDir = resolved
+		recordedCommand = "cd " + shellQuote(workDir) + " && sh -c " + shellQuote(opts.Command)
+	}
 	var buf bytes.Buffer
+	if opts.WorkDir != "" {
+		fmt.Fprintf(&buf, "squad execution directory: %s\n", workDir)
+	}
+
 	cmd := exec.CommandContext(ctx, "sh", "-c", opts.Command)
-	cmd.Dir = opts.RepoRoot
+	cmd.Dir = workDir
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	exitCode := 0
@@ -54,7 +77,7 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 	rec := Record{
 		ItemID:     opts.ItemID,
 		Kind:       opts.Kind,
-		Command:    opts.Command,
+		Command:    recordedCommand,
 		ExitCode:   exitCode,
 		OutputHash: hash,
 		OutputPath: out,
@@ -67,4 +90,8 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 	rec.ID = id
 	rec.RepoID = l.repoID
 	return rec, nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
