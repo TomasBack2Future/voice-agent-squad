@@ -19,6 +19,7 @@ large prompt:
 | Studio repository and delivery capabilities | `projects/studio/profile.json` |
 | Bounded dispatch input | `schemas/assignment-envelope.schema.json` |
 | Compact/resume continuity | `schemas/checkpoint.schema.json` |
+| Live cmux session transport | `tools/cmux-sessions/SKILL.md` |
 
 `examples/assignment.studio-worker.json` is 1–2 KB when compactly serialized and
 contains identities and authorization, not a copy of the Issue. A Worker starts
@@ -39,6 +40,13 @@ explicit kubeconfig/context selection. It contains no cluster nickname,
 credential, customer data, local home path, or live deployment state. The
 assignment must say whether staging and production are authorized; production
 defaults are never inferred from merge or staging success.
+
+The workspace `AGENTS.md` owns skill routing. Product workflow skills remain in
+their owning repositories; cross-repository or machine capabilities have one
+versioned source and are installed rather than copied. In particular, Studio
+Simulation/Evaluation is not routed from the word `eval` to ConvoAI task logs,
+and `studio-sls-logs` is the single target identity for staging and production
+SLS reads.
 
 ## Single-session provider selection
 
