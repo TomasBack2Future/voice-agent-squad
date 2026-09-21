@@ -19,7 +19,8 @@
       "docs/deployment.md",
       "docs/environments-and-ci.md",
       "docs/release-acceptance.md",
-      "the component-specific staging capability reference"
+      "the component-specific staging capability reference",
+      "references/actions-sls-fallback.md only for an existing synthetic logging run when direct SLS credentials are unavailable"
     ],
     "production": [
       "docs/deployment.md",
@@ -57,4 +58,3 @@
     "For auth, credentials or privacy changes, test deny-by-default and negative data-flow paths."
   ]
 }
-

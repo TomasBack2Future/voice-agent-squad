@@ -29,3 +29,42 @@ requirements; do not copy the Dispatcher's conversation into the Worker prompt.
 Load phase-specific references only when that phase begins, and resume from a
 schema-valid checkpoint rather than transcript replay. Data Analyze is historical
 migration evidence, not a runtime dependency of this workspace.
+
+## Session control plane
+
+Squad is durable authority for assignment, ownership, dependency and environment
+state. cmux is only the live-session transport and visibility layer.
+
+- Use `tools/cmux-sessions/SKILL.md` and the cmux CLI for session launch,
+  observation and narrowly authorized intervention. Prefer the bundled absolute
+  CLI path when `cmux` is not on `PATH`; Computer Use is not the control plane.
+- Create one new cmux workspace and native agent session per Worker. Persist the
+  workspace ID, surface ID and native session ID with the reservation. Titles
+  begin `[#<issue>][<item>]` and add the PR when known.
+- Observation is bounded and read-only. Address exact IDs and never interpret a
+  quiet session as terminal while durable ownership or an external operation is
+  live.
+- Input to a Worker is limited to its initial assignment, explicit user
+  override, immediate safety/scope correction, or one verified dependency
+  transition. Never send routine status requests or acknowledgements.
+
+## Skill authority
+
+Choose by object and operation, never an ambiguous keyword. Repository-owned
+product/API skills at the checked-out revision are authoritative; global skills
+are for machine-level or cross-repository capabilities and must be installed
+from one versioned source. Do not use Data Analyze skills for new work.
+
+| Object | Route | Exclusion |
+| --- | --- | --- |
+| Assigned Studio Issue | `studio-issue-worker` + Studio profile | Exact Issue/item only; no queue scan |
+| Dispatch and Worker launch | `squad-dispatcher` + `cmux-sessions` | No implementation or environment claim |
+| Stopped `ENV-*` holder | `squad-env-recovery` | Not ordinary lock contention |
+| Studio Simulation → Evaluation | Studio repository `voice-agent-studio-simulation-evaluation` | Not a ConvoAI task investigation |
+| Simulation materialization | `studio-simulation-materializer` | `dispatcher_runs` / `ai_ai` materialization only |
+| ConvoAI call runtime task | `convoai-task-investigation` | Requires task ID/appid/bundle/transcript/stop reason; generic `eval` excluded |
+| ConvoAI Session import | Importer repository `convoai-call-studio-import` | Import workflow only |
+| Studio SLS evidence | Studio repository `.agents/skills/studio-sls-logs` | Explicit environment, UTC window and selector; read-only |
+
+The old `studio-staging-sls-logs` name is a migration alias only. New references
+use `studio-sls-logs` for both staging and production.
