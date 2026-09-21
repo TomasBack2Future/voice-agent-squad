@@ -203,7 +203,14 @@ data: {"kind":"<kind>","payload":{...}}
 
 ```
 
-Subscribers should match on the `event:` line. Comment-only `: ping` heartbeats arrive at the configured ping interval to keep proxies from idle-closing the connection. A `lag` event is emitted when the server-side bus has dropped events for this subscriber; its `payload.dropped` is the count.
+Subscribers should match on the `event:` line. Comment-only `: ping` heartbeats arrive at the configured ping interval to keep proxies from idle-closing the connection. A `lag` event is emitted when the server-side bus has dropped events for this subscriber; its `payload.dropped` is a best-effort drop count.
+
+The subscription is registered before the initial response is flushed, so events
+published immediately after connection acknowledgement enter that subscription.
+The stream does not replay events published before subscription. Slow consumers
+can still overflow the bounded queue: treat `lag` as a signal to refetch current
+state, not as a lossless-delivery guarantee or an exact accounting total. Pending
+drops are also flushed independently of heartbeats and subsequent publications.
 
 The two events landed in the round that introduced specs/epics/learnings/attestations endpoints:
 
