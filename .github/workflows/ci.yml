@@ -21,6 +21,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: test optional session entrypoint without model calls
+        run: python3 -m unittest discover -s workspace/agent-loop/tests -v
       - run: go vet ./...
       - run: go test -race ./...
         env:
