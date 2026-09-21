@@ -1,0 +1,60 @@
+{
+  "schema_version": "agent-loop.project-profile.v1",
+  "id": "studio",
+  "version": 1,
+  "repository": "TomasBack2Future/voice-agent-studio",
+  "context_by_phase": {
+    "implementation": [
+      "AGENTS.md",
+      "CONTRIBUTING.md",
+      "docs/README.md",
+      "the owning component or contract document selected by touched paths"
+    ],
+    "review": [
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      "the frozen Issue contract and AC-to-evidence mapping",
+      "the current repository review policy"
+    ],
+    "staging": [
+      "docs/deployment.md",
+      "docs/environments-and-ci.md",
+      "docs/release-acceptance.md",
+      "the component-specific staging capability reference"
+    ],
+    "production": [
+      "docs/deployment.md",
+      "the separately authorized production capability reference"
+    ]
+  },
+  "gates": {
+    "fast": [
+      "format and diff checks for touched components",
+      "compile or typecheck touched components",
+      "targeted regression tests",
+      "CI classifier validation"
+    ],
+    "review": [
+      "one managed Grok review per substantive frozen tuple",
+      "full deterministic CI joined with the review result"
+    ],
+    "staging": [
+      "explicit kubeconfig and context selection",
+      "current PR tuple and required checks revalidated before and after ownership",
+      "exact-revision rollout, functional acceptance, bounded SLS evidence and rollback disposition"
+    ]
+  },
+  "resources": {
+    "staging": "ENV-001",
+    "production": "ENV-002",
+    "cluster_selection": "explicit kubeconfig and context; never a shell nickname",
+    "production_default": "forbidden unless the assignment explicitly sets production=true"
+  },
+  "risk_probes": [
+    "For at-most-once publication, exercise a lost success response followed by bounded reconciliation.",
+    "For paginated reconciliation, prove a full page budget is inconclusive rather than proof of absence.",
+    "For retry or requeue changes, preserve monotonic evidence that a side effect may already have occurred.",
+    "For schema upgrades, open a prior-version database and verify the migrated invariant.",
+    "For auth, credentials or privacy changes, test deny-by-default and negative data-flow paths."
+  ]
+}
+

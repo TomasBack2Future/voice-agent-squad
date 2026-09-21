@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://voice-agent.local/schemas/agent-loop/project-profile.v1.json",
+  "title": "Agent Loop project profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "version", "repository", "context_by_phase", "gates", "resources", "risk_probes"],
+  "properties": {
+    "schema_version": {"const": "agent-loop.project-profile.v1"},
+    "id": {"type": "string", "minLength": 1},
+    "version": {"type": "integer", "minimum": 1},
+    "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "context_by_phase": {"type": "object"},
+    "gates": {"type": "object"},
+    "resources": {"type": "object"},
+    "risk_probes": {"type": "array", "items": {"type": "string"}}
+  }
+}
+

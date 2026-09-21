@@ -14,8 +14,10 @@ unless explicitly identified as existing behavior. No live task queue,
 subscription balance, environment health snapshot, or release status belongs here.
 
 The [optional bootstrap package](../../workspace/agent-loop/README.md) implements
-only new-session Codex route selection. The scheduler, role skills, quota admission,
-handoff and context enforcement below are not activated by that helper.
+new-session Codex route selection plus the first portable Worker context slice:
+one Worker skill, one Studio profile and assignment/checkpoint schemas. The
+scheduler, remaining role skills, quota admission and automatic installation or
+enforcement below are not activated by that package.
 Muse is deferred by design decision and is not an initial candidate or prerequisite.
 
 Reading guide: [roles](#4-role-contracts),
@@ -229,8 +231,8 @@ It must not become this repository's contributor policy.
 ```text
 voice-agent-squad/
   docs/proposals/studio-multi-model-agent-loop.md
-  workspace/agent-loop/                 # bootstrap exists; role package below is proposed
-    skills/
+  workspace/agent-loop/                 # opt-in source package; no automatic install
+    roles/
       investigator/SKILL.md
       dispatcher/SKILL.md
       worker/SKILL.md
@@ -253,9 +255,11 @@ voice-agent-squad/
   coordination ledger / bindings / redacted events / checkpoints
 ```
 
-The exact packaging location is a decision to approve, not a request to create
-these folders now. Runtime databases, session logs, private deployment overlays,
-and credentials must not be committed into this layout.
+The package now includes the first qualified slice: a generic Worker skill, a
+Studio profile, assignment/checkpoint schemas and examples. Other role skills,
+runtime adapters and automatic installation remain proposals. Runtime databases,
+session logs, private deployment overlays and credentials must not be committed
+into this layout.
 
 ### Separation of concerns
 

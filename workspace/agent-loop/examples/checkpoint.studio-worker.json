@@ -1,0 +1,41 @@
+{
+  "schema_version": "agent-loop.checkpoint.v1",
+  "assignment_id": "studio/979/1",
+  "attempt_id": "claude-session-example",
+  "phase": "review",
+  "contract_revision": "issue-979@dispatch",
+  "code": {
+    "repository": "TomasBack2Future/voice-agent-studio",
+    "worktree": "/workspace/.worktrees/issue-979-report-intake",
+    "branch": "codex/issue-979-report-intake",
+    "base_sha": "a33ade6b757c46002b85fd11cf8f3b709f195e14",
+    "head_sha": "d5804df2aeb1caf761693e32ca1ad26097c1f96a",
+    "dirty": false
+  },
+  "completed": [
+    "primary claim acquired",
+    "AC-01 through AC-12 mapped",
+    "targeted tests and fast gates passed",
+    "PR tuple frozen"
+  ],
+  "unresolved": [
+    "full CI and managed review are still running"
+  ],
+  "ownership": {
+    "item": "STUDIO-083",
+    "holder": "worker-attempt-example",
+    "generation": 1
+  },
+  "external_operations": [
+    "github-pr:TomasBack2Future/voice-agent-studio#980",
+    "github-actions:35559949243"
+  ],
+  "next_action": "Join CI and review without changing the frozen tuple.",
+  "forbidden_actions": [
+    "production deployment",
+    "starting another Issue"
+  ],
+  "evidence_receipts": [
+    "local-fast-gates:passed"
+  ]
+}

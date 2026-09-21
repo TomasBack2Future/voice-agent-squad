@@ -1,11 +1,44 @@
 # Optional workspace bootstrap
 
-This package implements only a new-session Codex entrypoint and documents
-workspace preparation. It does not install skills, switch an App, migrate state,
-collect usage, dispatch work, approve releases or activate the proposed loop.
-The [design](../../docs/proposals/studio-multi-model-agent-loop.md) and
+This opt-in package implements a new-session Codex entrypoint plus the minimum
+portable context layer needed for a bounded Worker pilot. It does not install
+skills, switch an App, migrate state, collect usage, dispatch work, approve
+releases or activate the proposed loop. The broader
+[design](../../docs/proposals/studio-multi-model-agent-loop.md) and
 [context contracts](../../docs/proposals/agent-loop-context-contracts.md) remain
-proposals beyond the small implemented surface described here.
+proposals beyond the implemented surfaces listed here.
+
+## Portable Worker context package
+
+The package separates four concerns that the first Studio pilot carried in one
+large prompt:
+
+| Concern | Canonical source |
+| --- | --- |
+| Generic Worker lifecycle | `roles/worker/SKILL.md` |
+| Studio repository and delivery capabilities | `projects/studio/profile.json` |
+| Bounded dispatch input | `schemas/assignment-envelope.schema.json` |
+| Compact/resume continuity | `schemas/checkpoint.schema.json` |
+
+`examples/assignment.studio-worker.json` is 1–2 KB when compactly serialized and
+contains identities and authorization, not a copy of the Issue. A Worker starts
+from that envelope, the workspace and repository `AGENTS.md`, and the canonical
+Issue. It reads project references progressively by phase. The checkpoint keeps
+durable progress and the next authorized action outside model conversation.
+
+Validate the schemas, examples, cross-file identity and envelope budget without
+network or provider access:
+
+```bash
+python3 workspace/agent-loop/validate_context_package.py
+python3 -m unittest discover -s workspace/agent-loop/tests -v
+```
+
+The Studio profile deliberately names logical environment resources and requires
+explicit kubeconfig/context selection. It contains no cluster nickname,
+credential, customer data, local home path, or live deployment state. The
+assignment must say whether staging and production are authorized; production
+defaults are never inferred from merge or staging success.
 
 ## Single-session provider selection
 
@@ -90,9 +123,10 @@ python3 -m unittest discover -s workspace/agent-loop/tests -v
 
 These cover plans, independent overrides, launch argument construction, parent
 environment preservation, no configuration/history writes, missing credentials,
-invalid configuration and refusal of arbitrary overrides. They do not establish
-live provider health or cross-model semantic correctness. The existing CI test
-matrix runs these tests; no separate model-calling Actions workflow is added.
+invalid configuration, refusal of arbitrary overrides, context schemas,
+assignment size and cross-file identity. They do not establish live provider
+health, cross-model semantic correctness or staging readiness. The existing CI
+test matrix runs these tests; no separate model-calling Actions workflow is added.
 
 Use [workspace migration](workspace-migration.md) before relocating anything,
 and the [baseline receipt template](baseline-receipt.md) for environment evidence.

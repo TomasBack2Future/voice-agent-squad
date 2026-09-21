@@ -8,8 +8,8 @@ studio/
   AGENTS.md                     thin routing, safety and selected contract versions
   README.md                     repository map and documentation links
   .agents/
-    project-profiles/           approved capability and environment references
-    skills/                    managed discovery links, not hand-edited copies
+    project-profiles/           installed links to approved versioned profiles
+    skills/                     installed links to approved versioned role skills
   .worktrees/                  optional new owned worktrees
   voice-agent-studio/
   interceptor/
@@ -23,8 +23,10 @@ User-level configuration
   provider definitions / credential references / qualified per-client settings
 ```
 
-Only the package files explicitly checked in are implemented. The proposed skill,
-profile and runtime layout is not created or installed by the entrypoint.
+Only the package files explicitly checked in are implemented. A reference Worker
+skill, Studio profile and assignment/checkpoint schemas now live under
+`voice-agent-squad/workspace/agent-loop/`; the entrypoint does not install them
+into `.agents`, activate dispatch or migrate runtime state.
 Provider-specific discovery must load the selected workspace policy explicitly:
 an isolated repository/worktree may not discover its former parent's AGENTS.md.
 Repository contributor rules remain self-contained and free of role orchestration.
@@ -68,6 +70,11 @@ because source checkouts have moved.
    cannot dispatch the same queue before activating a replacement.
 6. Run a single explicitly assigned staging delivery with durable context and
    exact-revision acceptance; only then expand concurrency and recurring roles.
+
+After that pilot, remove the old Data Analyze role/profile copies from discovery
+only when every active consumer resolves the new package and the old scheduler
+cannot launch the same queue. Historical ledgers and receipts may remain retained;
+they are not a runtime import path for new assignments.
 
 Rollback is to the last qualified source/configuration package with the same
 ledger and preserved external receipts, not restoring an old database over live
