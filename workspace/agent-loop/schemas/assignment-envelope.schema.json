@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://voice-agent.local/schemas/agent-loop/assignment-envelope.v1.json",
+  "title": "Agent Loop assignment envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "assignment_id",
+    "issue",
+    "item",
+    "reservation",
+    "repository",
+    "worktree",
+    "branch",
+    "base_sha",
+    "role",
+    "project_profile",
+    "authorization",
+    "evidence_required"
+  ],
+  "properties": {
+    "schema_version": {"const": "agent-loop.assignment.v1"},
+    "assignment_id": {"type": "string", "pattern": "^[A-Za-z0-9._/-]{1,160}$"},
+    "issue": {"type": "string", "pattern": "^[^/\\s]+/[^#\\s]+#[1-9][0-9]*$"},
+    "item": {"type": "string", "pattern": "^[A-Z][A-Z0-9_-]*-[0-9]+$"},
+    "reservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "generation"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "worktree": {"type": "string", "pattern": "^/"},
+    "branch": {"type": "string", "minLength": 1},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "skill", "version"],
+      "properties": {
+        "id": {"const": "worker"},
+        "skill": {"const": "agent-loop-worker"},
+        "version": {"const": 1}
+      }
+    },
+    "project_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "path"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "version": {"type": "integer", "minimum": 1},
+        "path": {"type": "string", "minLength": 1}
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_mutation", "pull_request", "merge", "staging", "production", "issue_close"],
+      "properties": {
+        "source_mutation": {"type": "boolean"},
+        "pull_request": {"type": "boolean"},
+        "merge": {"type": "boolean"},
+        "staging": {"type": "boolean"},
+        "production": {"type": "boolean"},
+        "issue_close": {"type": "boolean"}
+      }
+    },
+    "evidence_required": {
+      "type": "array",
+      "items": {"enum": ["test", "lint", "typecheck", "build", "review", "manual"]}
+    }
+  }
+}
+

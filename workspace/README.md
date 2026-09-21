@@ -12,6 +12,11 @@ studio/
   interceptor/AGENTS.md
 ```
 
+The optional [Agent Loop package](agent-loop/README.md) supplies a versioned
+Worker skill, Studio project profile, bounded assignment schema and checkpoint
+schema. Adopting it is an explicit workspace action: this repository does not
+copy it into `.agents`, install provider hooks or migrate a live ledger.
+
 [AGENTS.md](AGENTS.md) is the source-controlled outer-workspace template.
 Copy it deliberately when creating a workspace; this repository does not install
 or overwrite an existing workspace file automatically. Relative paths in that

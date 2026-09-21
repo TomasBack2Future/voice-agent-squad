@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://voice-agent.local/schemas/agent-loop/checkpoint.v1.json",
+  "title": "Agent Loop handoff checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "assignment_id",
+    "attempt_id",
+    "phase",
+    "contract_revision",
+    "code",
+    "completed",
+    "unresolved",
+    "ownership",
+    "external_operations",
+    "next_action",
+    "forbidden_actions"
+  ],
+  "properties": {
+    "schema_version": {"const": "agent-loop.checkpoint.v1"},
+    "assignment_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 1},
+    "phase": {"enum": ["ownership", "implementation", "review", "environment", "acceptance", "terminal"]},
+    "contract_revision": {"type": "string", "minLength": 1},
+    "code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "worktree", "branch", "base_sha", "head_sha", "dirty"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "worktree": {"type": "string", "pattern": "^/"},
+        "branch": {"type": "string", "minLength": 1},
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "dirty": {"type": "boolean"}
+      }
+    },
+    "completed": {"type": "array", "items": {"type": "string"}},
+    "unresolved": {"type": "array", "items": {"type": "string"}},
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item", "holder", "generation"],
+      "properties": {
+        "item": {"type": "string", "minLength": 1},
+        "holder": {"type": "string", "minLength": 1},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "external_operations": {"type": "array", "items": {"type": "string"}},
+    "next_action": {"type": "string", "minLength": 1},
+    "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+    "evidence_receipts": {"type": "array", "items": {"type": "string"}}
+  }
+}
+

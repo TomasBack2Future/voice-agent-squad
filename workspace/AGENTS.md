@@ -17,7 +17,15 @@ tests and delivery evidence. Preserve unrelated work and active worktrees.
 
 Each repository's AGENTS.md owns portable development rules; topic documents own
 architecture and runbooks. Workspace-specific working policy belongs in this
-outer file and separately maintained skills, not in product repository documents.
-No such policy is configured by this routing template. Keep live task state out
-of maintained documentation. Source work does not authorize installation,
-shared-environment changes or active-task migration.
+outer file and the explicitly selected versioned package under
+`voice-agent-squad/workspace/agent-loop`, not in product repository documents.
+Keep live task state out of maintained documentation. Source work does not
+authorize package installation, shared-environment changes or active-task
+migration.
+
+For an Agent Loop Worker, require one schema-valid assignment envelope and select
+one role skill plus one project profile by ID/version. The canonical Issue owns
+requirements; do not copy the Dispatcher's conversation into the Worker prompt.
+Load phase-specific references only when that phase begins, and resume from a
+schema-valid checkpoint rather than transcript replay. Data Analyze is historical
+migration evidence, not a runtime dependency of this workspace.
