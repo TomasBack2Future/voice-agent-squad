@@ -27,6 +27,9 @@ Bound command output and search only the assigned repository and relevant paths.
 Before the first mutation, independently verify the repository, worktree,
 branch/base, reservation generation and primary-work ownership. An envelope is
 context, not ownership or permission beyond its explicit authorization fields.
+Use [operational readiness](references/operational-readiness.md) at startup,
+when a shared blocker appears, and before environment admission. Keep its
+startup receipt separate from ownership and release evidence.
 
 ## Execution contract
 

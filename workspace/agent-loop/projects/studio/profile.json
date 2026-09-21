@@ -40,6 +40,7 @@
       "full deterministic CI joined with the review result"
     ],
     "staging": [
+      "read-only prerequisite receipt before environment ownership; for report intake use node scripts/report_intake_preflight.mjs with the explicit target and exact CI tuple when that repository capability is available",
       "explicit kubeconfig and context selection",
       "current PR tuple and required checks revalidated before and after ownership",
       "exact-revision rollout, functional acceptance, bounded SLS evidence and rollback disposition"
@@ -52,6 +53,7 @@
     "production_default": "forbidden unless the assignment explicitly sets production=true"
   },
   "risk_probes": [
+    "For new deployed components, exercise first publication without a prior image, unchanged-source revision stamping, and rollback tool-cache miss; check image, Secret and storage prerequisites before the environment lock.",
     "For at-most-once publication, exercise a lost success response followed by bounded reconciliation.",
     "For paginated reconciliation, prove a full page budget is inconclusive rather than proof of absence.",
     "For retry or requeue changes, preserve monotonic evidence that a side effect may already have occurred.",

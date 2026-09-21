@@ -658,6 +658,7 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 				ItemID        string `json:"item_id"`
 				Kind          string `json:"kind"`
 				Command       string `json:"command"`
+				WorkDir       string `json:"work_dir"`
 				FindingsFile  string `json:"findings_file"`
 				ReviewerAgent string `json:"reviewer_agent"`
 				AgentID       string `json:"agent_id"`
@@ -677,6 +678,7 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 				ItemID:        args.ItemID,
 				Kind:          args.Kind,
 				Command:       args.Command,
+				WorkDir:       args.WorkDir,
 				FindingsFile:  args.FindingsFile,
 				ReviewerAgent: args.ReviewerAgent,
 				AttDir:        attDirOf(repoRoot),

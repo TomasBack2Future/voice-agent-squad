@@ -27,6 +27,11 @@ it or the CLI capability is genuinely unavailable.
 
 ## Create and bind one Worker
 
+Run the selected package's `worker_preflight.py` before session creation, using
+the actual client's skill entries and required executable names. Resolve missing
+capabilities or stale assignment identity before paying for a Worker startup.
+This local receipt does not replace Squad ownership or runtime approval checks.
+
 Create a new workspace with an owned worktree and a reviewed launcher:
 
 ```sh

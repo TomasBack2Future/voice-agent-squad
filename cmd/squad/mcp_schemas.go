@@ -233,6 +233,7 @@ const schemaAttest = `{
   "properties": {
     "item_id":        {"type": "string"},
     "kind":           {"type": "string", "enum": ["test", "lint", "typecheck", "build", "review", "manual"]},
+    "work_dir": {"type": "string", "description": "Absolute command execution directory; evidence stays in the selected ledger."},
     "command":        {"type": "string", "description": "Shell command to run and capture (required for non-review kinds)."},
     "findings_file":  {"type": "string", "description": "Review findings file (kind=review only)."},
     "reviewer_agent": {"type": "string", "description": "Reviewer agent id (kind=review only)."},

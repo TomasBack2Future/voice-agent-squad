@@ -59,6 +59,7 @@ Run the non-sampling diagnostic before using the command:
 
 ```bash
 squad-grok-review doctor --reasoning-effort medium
+squad-grok-review doctor --repo owner/repository --reasoning-effort medium
 ```
 
 It validates the binary, bundled policy, App authentication, Grok CLI flags and
@@ -66,6 +67,13 @@ login, selected model and writable Grok session storage without a model call,
 comment or Check publication. Filesystem denial is a local-permissions failure,
 not proof of invalid authentication. The host execution environment must permit
 the configured session storage and required network access.
+
+`--repo` additionally reads one bounded pull-request listing with the reviewer's
+installation token. With `--pr`, it also reads that PR's identity. Neither probe
+samples a model or publishes. The JSON `repository_access` is `readable` only
+after that check; without `--repo` it is `not_checked`. Read access does not prove
+Check/comment write permission. Use the repository probe during Worker startup
+instead of discovering missing App coverage at final review.
 
 ## Invocation contract
 

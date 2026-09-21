@@ -49,6 +49,29 @@ Simulation/Evaluation is not routed from the word `eval` to ConvoAI task logs,
 and `studio-sls-logs` is the single target identity for staging and production
 SLS reads.
 
+## Worker startup probe
+
+From an installed or reviewed package, before creating the session:
+
+```bash
+python3 worker_preflight.py --assignment /absolute/assignment.json \
+  --profile /absolute/selected/profile.json --runtime claude \
+  --skill /absolute/workspace/.claude/skills/agent-loop-worker/SKILL.md \
+  --tool squad --tool squad-grok-review
+```
+
+Supply each required client-visible skill with another `--skill`. Relative
+profile paths in the assignment resolve from its worktree; an absolute installed
+profile path is preferable. The receipt fingerprints inputs, checks a clean
+cold-start Git root/branch/base/origin, resolves skill links and executables, and
+explicitly leaves ownership, API access, approval and environment `not_checked`.
+It does not certify model behavior or inspect effective client configuration.
+An isolated deterministic pilot is included in the existing Python test suite.
+
+The Worker's [operational readiness](roles/worker/references/operational-readiness.md)
+defines shared-blocker ownership, lock-free preparation, explicit attestation cwd
+and durable terminal events independent of a provider's callback tools.
+
 ## Single-session provider selection
 
 Use Python 3.11+ and a qualified Codex CLI (the configuration interface was
