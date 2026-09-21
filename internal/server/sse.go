@@ -34,14 +34,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
+	// Clients may publish as soon as the initial response reaches them.
+	ch := s.Bus().Subscribe()
+	defer s.Bus().Unsubscribe(ch)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	ch := s.Bus().Subscribe()
-	defer s.Bus().Unsubscribe(ch)
 
 	ping := time.NewTicker(s.cfg.pingInterval)
 	defer ping.Stop()

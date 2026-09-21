@@ -62,25 +62,73 @@ func TestSSE_RoundTripsPostedMessage(t *testing.T) {
 	t.Fatal("did not observe message event within 3s")
 }
 
-// Regression: bus-level drops occurred but no lag event ever reached SSE.
-// Two faults: lag-flush rode the 15s ping-tick (test ran shorter than
-// that), and the in-band sentinel has a different JSON shape than the
-// out-of-band one. Force drops by saturating the channel and keeping
-// the consumer slow; assert lag arrives within the dedicated lagFlush
-// interval and carries the standard Event envelope.
+type firstFlushResponseWriter struct {
+	http.ResponseWriter
+	onFirstFlush func()
+}
+
+func (w *firstFlushResponseWriter) Flush() {
+	w.ResponseWriter.(http.Flusher).Flush()
+	if publish := w.onFirstFlush; publish != nil {
+		w.onFirstFlush = nil
+		publish()
+	}
+}
+
+func TestSSE_SubscribedBeforeResponseFlush(t *testing.T) {
+	s := New(newTestDB(t), testRepoID, Config{pingInterval: time.Hour})
+	defer s.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.handleEvents(&firstFlushResponseWriter{ResponseWriter: w, onFirstFlush: func() {
+			s.Bus().Publish(chat.Event{Kind: "message", Payload: map[string]any{"body": "ready"}})
+		}}, r)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/events", nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("message published at initial response flush was lost: %v", err)
+		}
+		if strings.HasPrefix(line, "data:") && strings.Contains(line, `"body":"ready"`) {
+			return
+		}
+	}
+}
+
 func TestSSE_LagEventReachesStream(t *testing.T) {
-	db := newTestDB(t)
-	registerAgent(t, db, "agent-x", "X")
-	s := New(db, testRepoID, Config{
+	s := New(newTestDB(t), testRepoID, Config{
 		RepoID:           testRepoID,
-		pingInterval:     200 * time.Millisecond,
+		pingInterval:     time.Hour,
 		lagFlushInterval: 50 * time.Millisecond,
 	})
 	defer s.Close()
-	srv := httptest.NewServer(s.Handler())
+	probe := s.Bus().Subscribe()
+	bufferSize := cap(probe)
+	s.Bus().Unsubscribe(probe)
+	const overflow = 8
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.handleEvents(&firstFlushResponseWriter{ResponseWriter: w, onFirstFlush: func() {
+			// The handler cannot drain its subscription until this flush returns.
+			// Stop publishing after overflow so only the independent lag tick can report it.
+			for i := 0; i < bufferSize+overflow; i++ {
+				s.Bus().Publish(chat.Event{Kind: "message", Payload: map[string]any{"id": int64(i + 1)}})
+			}
+		}}, r)
+	}))
 	defer srv.Close()
 
-	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	reqCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, srv.URL+"/api/events", nil)
 	resp, err := srv.Client().Do(req)
@@ -89,39 +137,27 @@ func TestSSE_LagEventReachesStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Fire-and-forget enough publishes to exceed the per-subscriber
-	// buffer before the subscriber drains. The Publish loop runs faster
-	// than the SSE handler can write+flush, so drops accumulate.
-	go func() {
-		for i := 0; i < 2500; i++ {
-			s.Bus().Publish(chat.Event{
-				Kind:    "message",
-				Payload: map[string]any{"id": int64(i + 1)},
-			})
-		}
-	}()
-
 	reader := bufio.NewReader(resp.Body)
-	deadline := time.Now().Add(3 * time.Second)
-	var sawLag bool
-	for time.Now().Before(deadline) {
+	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			break
+			t.Fatalf("expected event: lag within 3s of forced overflow: %v", err)
 		}
 		if strings.HasPrefix(line, "event: lag") {
-			sawLag = true
-			// Next non-blank line should be the data envelope. Both lag
-			// emit paths must produce {"kind":"lag","payload":{...}}.
-			data, _ := reader.ReadString('\n')
-			if !strings.Contains(data, `"kind":"lag"`) || !strings.Contains(data, `"dropped":`) {
-				t.Fatalf("unexpected lag data shape: %q", data)
+			data, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
 			}
-			break
+			var event chat.Event
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(data, "data: ")), &event); err != nil {
+				t.Fatalf("invalid lag envelope %q: %v", data, err)
+			}
+			dropped, ok := event.Payload["dropped"].(float64)
+			if event.Kind != "lag" || !ok || dropped < overflow {
+				t.Fatalf("unexpected lag envelope: %#v", event)
+			}
+			return
 		}
-	}
-	if !sawLag {
-		t.Fatal("expected event: lag in stream within 3s of forced overflow")
 	}
 }
 
