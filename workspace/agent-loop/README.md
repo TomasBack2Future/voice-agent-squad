@@ -1,9 +1,9 @@
 # Optional workspace bootstrap
 
 This opt-in package implements a new-session Codex entrypoint plus the minimum
-portable context layer needed for a bounded Worker pilot. It does not install
-skills, switch an App, migrate state, collect usage, dispatch work, approve
-releases or activate the proposed loop. The broader
+portable context layer needed for a bounded Worker pilot, with opt-in local
+skill synchronization. It does not switch an App, migrate live task state,
+collect usage, dispatch work, approve releases or activate the proposed loop. The broader
 [design](../../docs/proposals/studio-multi-model-agent-loop.md) and
 [context contracts](../../docs/proposals/agent-loop-context-contracts.md) remain
 proposals beyond the implemented surfaces listed here.
@@ -48,6 +48,78 @@ versioned source and are installed rather than copied. In particular, Studio
 Simulation/Evaluation is not routed from the word `eval` to ConvoAI task logs,
 and `studio-sls-logs` is the single target identity for staging and production
 SLS reads.
+
+## Local repository skill synchronization
+
+`skill_sync.py` installs local Git `post-merge`, `post-checkout` and
+`post-rewrite` hooks. A pull/merge, checkout or completed rebase in the selected
+checkout and branch refreshes committed skills into **one versioned snapshot**.
+`.codex/skills`, `.claude/skills` and Codex's `.agents/skills` discovery entries
+all link to that snapshot. It needs Python 3 on macOS/Linux and does not use
+client-specific hook support, the Squad daemon, an MCP connection or network.
+
+Install deliberately, while the source checkout is on the selected branch:
+
+```bash
+python3 workspace/agent-loop/skill_sync.py install \
+  --repo /absolute/path/to/voice-agent-squad \
+  --source workspace/agent-loop \
+  --target /absolute/path/to/workspace \
+  --branch main
+```
+
+`--target` is explicit: use a workspace by default; choosing your home directory
+installs user-level entries. One source package/target is allowed per repository
+hook registration. `--source` can also select another repository's `skills` or
+`.agents/skills` directory. Skills require an unquoted lowercase `name:` in
+SKILL.md frontmatter; names must be unique. The entire **committed** package is
+preserved, including sibling scripts, profiles and reference documents. Symlinks
+and submodules inside it are rejected. Untracked and uncommitted files are never
+published. Source edits made without these Git events require a manual run:
+
+```bash
+python3 workspace/agent-loop/skill_sync.py run \
+  --config /absolute/source/repository/.git/hooks/squad-skill-sync.json --check
+# Remove --check to synchronize immediately.
+```
+
+For a linked source worktree, use the hooks path reported by
+`git rev-parse --path-format=absolute --git-path hooks`. The config pins the
+source checkout and branch: other worktrees, feature branches and detached HEADs
+skip automatic publication. Existing executable hooks run first with their
+original arguments; their failure prevents synchronization. A custom
+`core.hooksPath` is rejected rather than replacing the user's hook manager.
+
+Existing skill directories, unowned links, locally edited managed links and
+modified installed snapshots fail with an explicit conflict before client
+updates. This includes legacy manually installed links: inventory and preserve
+those installations before deliberately migrating their ownership. There is no
+force-overwrite flag. Different repositories cannot silently take over the same
+skill name. A target lock serializes synchronization; receipts record the commit,
+file hashes and exact managed links. An atomic `current` pointer changes the
+package revision; unchanged skill names retain stable discovery links. Renamed
+or removed skills remove only still-owned links. Filesystem errors may leave
+partial new-name entries; the ownership journal permits a subsequent retry.
+`--check` validates/plans without switching skills (it may create lock/state
+directories). Old snapshots are retained for inspection and pinned consumers;
+there is no automatic garbage collection.
+
+Disable the hooks and restore their predecessors without removing installed
+skills or historical snapshots:
+
+```bash
+python3 workspace/agent-loop/skill_sync.py uninstall \
+  --repo /absolute/path/to/voice-agent-squad
+```
+
+Hook installation copies the reviewed runner into Git's local hooks directory;
+repository updates do not silently replace executable hook code. Re-run install
+to update that runner. Hook failures are visible but cannot undo the Git operation
+that already completed. There is no watcher, fetch, session restart or live
+assignment/profile rewrite. New Workers must still pass startup validation
+against a matching selected package/profile; running sessions are not assumed to
+reload skill instructions. These are local setup operations, not a ledger API or
+new MCP coordination surface.
 
 ## Worker startup probe
 
