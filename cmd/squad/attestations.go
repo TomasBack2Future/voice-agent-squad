@@ -17,16 +17,17 @@ type AttestationsArgs struct {
 // underlying type has no json tags, so we re-tag here to lock in
 // snake_case for the wire format.
 type AttestationRow struct {
-	ID         int64  `json:"id"`
-	ItemID     string `json:"item_id"`
-	Kind       string `json:"kind"`
-	Command    string `json:"command"`
-	ExitCode   int    `json:"exit_code"`
-	OutputHash string `json:"output_hash"`
-	OutputPath string `json:"output_path"`
-	CreatedAt  int64  `json:"created_at"`
-	AgentID    string `json:"agent_id"`
-	RepoID     string `json:"repo_id"`
+	Revocation *attest.Revocation `json:"revocation,omitempty"`
+	ID         int64              `json:"id"`
+	ItemID     string             `json:"item_id"`
+	Kind       string             `json:"kind"`
+	Command    string             `json:"command"`
+	ExitCode   int                `json:"exit_code"`
+	OutputHash string             `json:"output_hash"`
+	OutputPath string             `json:"output_path"`
+	CreatedAt  int64              `json:"created_at"`
+	AgentID    string             `json:"agent_id"`
+	RepoID     string             `json:"repo_id"`
 }
 
 type AttestationsResult struct {
@@ -44,6 +45,7 @@ func Attestations(ctx context.Context, args AttestationsArgs) (*AttestationsResu
 	for _, r := range recs {
 		rows = append(rows, AttestationRow{
 			ID:         r.ID,
+			Revocation: r.Revocation,
 			ItemID:     r.ItemID,
 			Kind:       string(r.Kind),
 			Command:    r.Command,

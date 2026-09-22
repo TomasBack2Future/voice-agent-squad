@@ -315,6 +315,28 @@ func (sw *Sweeper) Sweep(ctx context.Context) ([]Finding, error) {
 		}
 	}
 
+	// Corrections remain visible even when the item has no required evidence.
+	rows, err = sw.db.QueryContext(ctx, `SELECT a.id,a.item_id,v.reason,COALESCE(v.replacement_id,0)
+ FROM attestation_revocations v JOIN attestations a ON a.id=v.attestation_id
+ WHERE a.repo_id=? ORDER BY a.id`, sw.repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, replacement int64
+		var item, reason string
+		if err := rows.Scan(&id, &item, &reason, &replacement); err != nil {
+			return nil, err
+		}
+		findings = append(findings, Finding{Severity: SeverityInfo, Code: "attestation_revoked",
+			Message: fmt.Sprintf("item %s attestation %d revoked: %s (replacement=%d); excluded from evidence gates", item, id, reason, replacement),
+			Fix:     "retain the audit record; verify active replacement evidence before acceptance"})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	return findings, nil
 }
 
@@ -437,6 +459,7 @@ func isValidDateField(s string) bool {
 func evidenceMissing(ctx context.Context, db *sql.DB, repoID, itemID string, required []string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT kind FROM attestations WHERE repo_id = ? AND item_id = ? AND exit_code = 0
+ AND NOT EXISTS (SELECT 1 FROM attestation_revocations v WHERE v.attestation_id=attestations.id)
 	`, repoID, itemID)
 	if err != nil {
 		return nil, err

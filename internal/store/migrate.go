@@ -245,6 +245,14 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 	if hasResourceDefinitions > 0 {
 		legacy = append(legacy, legacyRow{16, "resource_scopes"})
 	}
+	var hasRevocations int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='attestation_revocations'`).Scan(&hasRevocations); err != nil {
+		return err
+	}
+	if hasRevocations > 0 {
+		legacy = append(legacy, legacyRow{17, "attestation_revocations"})
+	}
+
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

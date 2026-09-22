@@ -3,6 +3,7 @@ package attest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ type RunOpts struct {
 	ItemID   string
 	Kind     Kind
 	Command  string
+	Argv     []string
 	AgentID  string
 	AttDir   string
 	RepoRoot string
@@ -22,15 +24,26 @@ type RunOpts struct {
 }
 
 func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
-	if opts.ItemID == "" || opts.Command == "" || opts.AgentID == "" || opts.AttDir == "" {
-		return Record{}, fmt.Errorf("attest.Run: ItemID, Command, AgentID, AttDir required")
+	if opts.ItemID == "" || opts.AgentID == "" || opts.AttDir == "" {
+		return Record{}, fmt.Errorf("attest.Run: ItemID, AgentID, AttDir required")
 	}
 	if !opts.Kind.Valid() {
 		return Record{}, fmt.Errorf("attest.Run: invalid kind %q", opts.Kind)
 	}
 
+	if (opts.Command == "") == (len(opts.Argv) == 0) {
+		return Record{}, fmt.Errorf("provide exactly one of command or argv")
+	}
+	if len(opts.Argv) > 0 && strings.TrimSpace(opts.Argv[0]) == "" {
+		return Record{}, fmt.Errorf("argv executable must not be empty")
+	}
+
 	workDir := opts.RepoRoot
 	recordedCommand := opts.Command
+	if len(opts.Argv) > 0 {
+		raw, _ := json.Marshal(opts.Argv)
+		recordedCommand = "argv: " + string(raw)
+	}
 	if opts.WorkDir != "" {
 		if !filepath.IsAbs(opts.WorkDir) {
 			return Record{}, fmt.Errorf("attest.Run: work_dir must be absolute")
@@ -44,14 +57,23 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 			return Record{}, fmt.Errorf("attest.Run: work_dir must be an existing directory")
 		}
 		workDir = resolved
-		recordedCommand = "cd " + shellQuote(workDir) + " && sh -c " + shellQuote(opts.Command)
+		if len(opts.Argv) > 0 {
+			recordedCommand = "cwd: " + shellQuote(workDir) + "; " + recordedCommand
+		} else {
+			recordedCommand = "cd " + shellQuote(workDir) + " && sh -c " + shellQuote(opts.Command)
+		}
 	}
 	var buf bytes.Buffer
 	if opts.WorkDir != "" {
 		fmt.Fprintf(&buf, "squad execution directory: %s\n", workDir)
 	}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", opts.Command)
+	var cmd *exec.Cmd
+	if len(opts.Argv) > 0 {
+		cmd = exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", opts.Command)
+	}
 	cmd.Dir = workDir
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf

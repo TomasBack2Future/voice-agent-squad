@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,9 +29,10 @@ type AttestArgs struct {
 	ItemID string `json:"item_id"`
 	Kind   string `json:"kind"`
 
-	Command       string `json:"command,omitempty"`
-	FindingsFile  string `json:"findings_file,omitempty"`
-	ReviewerAgent string `json:"reviewer_agent,omitempty"`
+	Command       string   `json:"command,omitempty"`
+	Argv          []string `json:"argv,omitempty"`
+	FindingsFile  string   `json:"findings_file,omitempty"`
+	ReviewerAgent string   `json:"reviewer_agent,omitempty"`
 
 	AttDir   string `json:"att_dir,omitempty"`
 	RepoRoot string `json:"repo_root,omitempty"`
@@ -62,8 +64,8 @@ func Attest(ctx context.Context, args AttestArgs) (*AttestResult, error) {
 	L := attest.New(args.DB, args.RepoID, args.Now)
 
 	if k == attest.KindReview {
-		if args.WorkDir != "" {
-			return nil, fmt.Errorf("work_dir is only supported for command attestations")
+		if args.WorkDir != "" || len(args.Argv) > 0 || args.Command != "" {
+			return nil, fmt.Errorf("command, argv and work_dir are only supported for non-review attestations")
 		}
 		rec, err := recordReviewAttestation(ctx, L, recordReviewArgs{
 			ItemID:        args.ItemID,
@@ -88,13 +90,14 @@ func Attest(ctx context.Context, args AttestArgs) (*AttestResult, error) {
 		return recordToResult(rec), nil
 	}
 
-	if args.Command == "" {
-		return nil, fmt.Errorf("command is required for kind=%s", args.Kind)
+	if args.Command == "" && len(args.Argv) == 0 {
+		return nil, fmt.Errorf("command or argv is required for kind=%s", args.Kind)
 	}
 	rec, err := L.Run(ctx, attest.RunOpts{
 		ItemID:   args.ItemID,
 		Kind:     k,
 		Command:  args.Command,
+		Argv:     args.Argv,
 		AgentID:  args.AgentID,
 		AttDir:   args.AttDir,
 		RepoRoot: args.RepoRoot,
@@ -120,12 +123,21 @@ func recordToResult(r attest.Record) *AttestResult {
 }
 
 func newAttestCmd() *cobra.Command {
-	var item, kind, command, findingsFile, reviewerAgent, workDir string
+	var item, kind, command, findingsFile, reviewerAgent, workDir, argvJSON string
 	cmd := &cobra.Command{
 		Use:   "attest [<item-id>]",
 		Short: "Record a verification artifact (test/lint/build/typecheck/manual) into the evidence ledger",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var argv []string
+			if argvJSON != "" {
+				if err := json.Unmarshal([]byte(argvJSON), &argv); err != nil {
+					return fmt.Errorf("argv must be a JSON string array: %w", err)
+				}
+				if len(argv) == 0 {
+					return fmt.Errorf("argv must not be empty")
+				}
+			}
 			itemID := item
 			if len(args) == 1 {
 				if itemID != "" && itemID != args[0] {
@@ -153,6 +165,7 @@ func newAttestCmd() *cobra.Command {
 				ItemID:        itemID,
 				Kind:          kind,
 				Command:       command,
+				Argv:          argv,
 				FindingsFile:  findingsFile,
 				ReviewerAgent: reviewerAgent,
 				AttDir:        attDir,
@@ -180,6 +193,8 @@ func newAttestCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&item, "item", "", "item id (or pass as the positional argument)")
 	cmd.Flags().StringVar(&kind, "kind", "", "test|lint|typecheck|build|review|manual")
+	cmd.AddCommand(newAttestRevokeCmd(), newAttestListCmd())
+	cmd.Flags().StringVar(&argvJSON, "argv", "", "JSON argument array executed directly, mutually exclusive with --command")
 	cmd.Flags().StringVar(&command, "command", "", "shell command to run and capture")
 	cmd.Flags().StringVar(&workDir, "work-dir", "", "absolute execution directory (default: selected Squad repository)")
 	cmd.Flags().StringVar(&findingsFile, "findings-file", "", "review findings file (kind=review only)")
