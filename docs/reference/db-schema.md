@@ -270,3 +270,16 @@ after-insert triggers fill legacy ownership/history snapshots. Existing rows are
 unchanged until explicit idle policy adoption. `claim_waits` stores leased
 agent/item/scope requests by repository and wait ID; expired entries are excluded
 from the wait graph, never used to reclaim ownership. Keep triggers on rollback.
+
+### `attestation_revocations`
+
+Migration 017 adds one append-only correction per original attestation:
+`attestation_id` (primary key/FK), nonblank `reason` and `agent_id`, `created_at`,
+and nullable `replacement_id` (FK, greater than the original id). The correction
+API validates replacement repo/item/kind, successful exit and active status in
+one conditional write. No original execution result or artifact is overwritten.
+Acceptance queries exclude all rows referenced by this table, independently of
+whether a replacement exists or remains valid. CLI `attest list` and MCP
+`squad_attestations` expose corrections; `doctor` reports them without requiring
+an item's `evidence_required` to be nonempty. Historical execution statistics
+continue to count original process results.

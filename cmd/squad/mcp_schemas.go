@@ -235,7 +235,8 @@ const schemaAttest = `{
     "item_id":        {"type": "string"},
     "kind":           {"type": "string", "enum": ["test", "lint", "typecheck", "build", "review", "manual"]},
     "work_dir": {"type": "string", "description": "Absolute command execution directory; evidence stays in the selected ledger."},
-    "command":        {"type": "string", "description": "Shell command to run and capture (required for non-review kinds)."},
+    "argv": {"type":"array","minItems":1,"items":{"type":"string"},"description":"Execute directly without shell expansion."},
+    "command":        {"type": "string", "description": "Shell command to run and capture; mutually exclusive with argv. Exit zero is process status, not semantic acceptance."},
     "findings_file":  {"type": "string", "description": "Review findings file (kind=review only)."},
     "reviewer_agent": {"type": "string", "description": "Reviewer agent id (kind=review only)."},
     "agent_id":       {"type": "string"}
@@ -590,4 +591,14 @@ const schemaResourcesDefine = `{
  "required":["item_id","group","default_scope","service_scope"],
  "properties":{"item_id":{"type":"string"},"group":{"type":"string"},"default_scope":{"type":"string"},"service_scope":{"type":"string"}}
  }}}
+}`
+
+const schemaAttestRevoke = `{
+ "type":"object","required":["id","reason"],"additionalProperties":false,
+ "properties":{
+ "id":{"type":"integer","minimum":1},
+ "reason":{"type":"string","minLength":1},
+ "replacement_id":{"type":"integer","minimum":1},
+ "agent_id":{"type":"string"}
+ }
 }`

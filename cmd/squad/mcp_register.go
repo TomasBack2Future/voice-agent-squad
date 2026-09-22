@@ -682,13 +682,14 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		InputSchema: json.RawMessage(schemaAttest),
 		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var args struct {
-				ItemID        string `json:"item_id"`
-				Kind          string `json:"kind"`
-				Command       string `json:"command"`
-				WorkDir       string `json:"work_dir"`
-				FindingsFile  string `json:"findings_file"`
-				ReviewerAgent string `json:"reviewer_agent"`
-				AgentID       string `json:"agent_id"`
+				ItemID        string   `json:"item_id"`
+				Kind          string   `json:"kind"`
+				Command       string   `json:"command"`
+				Argv          []string `json:"argv"`
+				WorkDir       string   `json:"work_dir"`
+				FindingsFile  string   `json:"findings_file"`
+				ReviewerAgent string   `json:"reviewer_agent"`
+				AgentID       string   `json:"agent_id"`
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
@@ -705,6 +706,7 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 				ItemID:        args.ItemID,
 				Kind:          args.Kind,
 				Command:       args.Command,
+				Argv:          args.Argv,
 				WorkDir:       args.WorkDir,
 				FindingsFile:  args.FindingsFile,
 				ReviewerAgent: args.ReviewerAgent,
@@ -713,6 +715,22 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 			})
 		},
 	})
+
+	srv.Register(mcp.Tool{Name: "squad_attest_revoke", Description: "Append a repo-scoped correction excluding evidence from gates; preserve the original.", InputSchema: json.RawMessage(schemaAttestRevoke), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args AttestRevokeArgs
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := resolveAgentID(args.AgentID)
+		if err != nil {
+			return nil, err
+		}
+		args.DB, args.RepoID, args.AgentID = db, repoID, actor
+		return AttestRevoke(ctx, args)
+	}})
 
 	srv.Register(mcp.Tool{
 		Name:        "squad_attestations",

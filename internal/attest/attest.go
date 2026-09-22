@@ -42,6 +42,7 @@ func (k Kind) Valid() bool {
 }
 
 type Record struct {
+	Revocation *Revocation `json:"revocation,omitempty"`
 	ID         int64
 	ItemID     string
 	Kind       Kind
@@ -102,9 +103,13 @@ func (l *Ledger) Insert(ctx context.Context, r Record) (int64, error) {
 	if err != nil {
 		if isUniqueViolation(err) {
 			var existing int64
+			var revoked bool
 			if qerr := l.db.QueryRowContext(ctx,
-				`SELECT id FROM attestations WHERE repo_id = ? AND item_id = ? AND kind = ? AND output_hash = ?`,
-				l.repoID, r.ItemID, string(r.Kind), r.OutputHash).Scan(&existing); qerr == nil {
+				`SELECT id, EXISTS(SELECT 1 FROM attestation_revocations v WHERE v.attestation_id=attestations.id) FROM attestations WHERE repo_id = ? AND item_id = ? AND kind = ? AND output_hash = ?`,
+				l.repoID, r.ItemID, string(r.Kind), r.OutputHash).Scan(&existing, &revoked); qerr == nil {
+				if revoked {
+					return 0, fmt.Errorf("output duplicates revoked attestation %d; original remains invalid", existing)
+				}
 				return existing, nil
 			}
 		}
@@ -148,6 +153,9 @@ func (l *Ledger) Verify(ctx context.Context, itemID string) error {
 		return err
 	}
 	for _, r := range recs {
+		if r.Revocation != nil {
+			continue
+		}
 		data, err := os.ReadFile(r.OutputPath)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -171,6 +179,7 @@ func (l *Ledger) MissingKinds(ctx context.Context, itemID string, required []Kin
 	rows, err := l.db.QueryContext(ctx, `
 		SELECT kind FROM attestations
 		WHERE repo_id = ? AND item_id = ? AND exit_code = 0
+ AND NOT EXISTS (SELECT 1 FROM attestation_revocations v WHERE v.attestation_id=attestations.id)
 	`, l.repoID, itemID)
 	if err != nil {
 		return nil, err
@@ -206,6 +215,7 @@ func (l *Ledger) DistinctReviewers(ctx context.Context, itemID string) ([]string
 	rows, err := l.db.QueryContext(ctx, `
 		SELECT command FROM attestations
 		WHERE repo_id = ? AND item_id = ? AND kind = ? AND exit_code = 0
+ AND NOT EXISTS (SELECT 1 FROM attestation_revocations v WHERE v.attestation_id=attestations.id)
 	`, l.repoID, itemID, string(KindReview))
 	if err != nil {
 		return nil, err
@@ -238,14 +248,15 @@ func (l *Ledger) DistinctReviewers(ctx context.Context, itemID string) ([]string
 // ListForItem returns every attestation for itemID. A Ledger with
 // repoID == "" widens the query across all repos (workspace mode).
 func (l *Ledger) ListForItem(ctx context.Context, itemID string) ([]Record, error) {
-	q := `SELECT id, item_id, kind, command, exit_code, output_hash, output_path, created_at, agent_id, repo_id
-	      FROM attestations WHERE item_id = ?`
+	q := `SELECT a.id, a.item_id, a.kind, a.command, a.exit_code, a.output_hash, a.output_path, a.created_at, a.agent_id, a.repo_id,
+ COALESCE(v.reason,''), COALESCE(v.agent_id,''), COALESCE(v.created_at,0), COALESCE(v.replacement_id,0)
+ FROM attestations a LEFT JOIN attestation_revocations v ON v.attestation_id=a.id WHERE a.item_id = ?`
 	args := []any{itemID}
 	if l.repoID != "" {
-		q += ` AND repo_id = ?`
+		q += ` AND a.repo_id = ?`
 		args = append(args, l.repoID)
 	}
-	q += ` ORDER BY created_at ASC, id ASC`
+	q += ` ORDER BY a.created_at ASC, a.id ASC`
 	rows, err := l.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -254,11 +265,15 @@ func (l *Ledger) ListForItem(ctx context.Context, itemID string) ([]Record, erro
 	var out []Record
 	for rows.Next() {
 		var r Record
+		var v Revocation
 		var k string
-		if err := rows.Scan(&r.ID, &r.ItemID, &k, &r.Command, &r.ExitCode, &r.OutputHash, &r.OutputPath, &r.CreatedAt, &r.AgentID, &r.RepoID); err != nil {
+		if err := rows.Scan(&r.ID, &r.ItemID, &k, &r.Command, &r.ExitCode, &r.OutputHash, &r.OutputPath, &r.CreatedAt, &r.AgentID, &r.RepoID, &v.Reason, &v.AgentID, &v.CreatedAt, &v.ReplacementID); err != nil {
 			return nil, err
 		}
 		r.Kind = Kind(k)
+		if v.Reason != "" {
+			r.Revocation = &v
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()

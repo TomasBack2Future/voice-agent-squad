@@ -501,11 +501,56 @@ squad attest --item FEAT-001 --kind test --command "go test ./..."
 |---|---|---|
 | (positional) or `--item` | always | Item id; the attestation is scoped to one item. |
 | `--kind <kind>` | always | One of `test`, `lint`, `typecheck`, `build`, `review`, `manual`. |
-| `--command <cmd>` | always except `kind=review` | Shell command to run; squad captures stdout and exit code into the ledger. |
+| `--command <cmd>` | non-review, when not using `--argv` | Shell command to run; squad captures stdout and exit code into the ledger. |
 | `--findings-file <path>` | `kind=review` | File whose body becomes the review record. |
 | `--reviewer-agent <id>` | `kind=review` | The agent id of the reviewer. |
 
 The attestation is stored under `.squad/attestations/<hash>.txt` (committed) and indexed in `~/.squad/global.db` (operational). Records are deduplicated on `(repo_id, item_id, kind, output_hash)` — re-running an identical attestation is a no-op.
+
+#### Direct execution and evidence corrections
+
+Prefer `--argv` (MCP `argv`, a string array) for acceptance scripts. It executes
+an executable and arguments directly without shell substitution or nested quoting.
+It is mutually exclusive with `--command` and unavailable for review-file records.
+For example:
+
+```bash
+squad attest TASK-001 --kind test --work-dir /absolute/owned/worktree \
+  --argv '["python3","scripts/acceptance.py"]'
+squad attest list TASK-001
+squad attest revoke 42 --reason 'outer shell hid failed checks' --replacement 43
+```
+
+`--command` retains its existing `sh -c` semantics for compatibility. `exit=0`
+means that process exited successfully; it does not prove assertions ran. Direct
+execution also cannot fix a script that ignores errors. Keep assertions in a
+versioned script and negative-test its failure path. Do not use a final echo or
+printf as acceptance. Doctor does not infer arbitrary command semantics from logs.
+
+`attest revoke` (MCP `squad_attest_revoke`: `id`, `reason`, optional
+`replacement_id`, optional `agent_id`) appends a correction without changing the
+original command, output, hash or exit code. It requires a nonblank reason and
+actor and is scoped to the selected repo. Any resolved agent may revoke evidence;
+this operation can remove eligibility, never turn failed evidence into success.
+A replacement must be a newer, active, exit-zero record of the same item and kind
+in that repo. It is an audit pointer, not proof of semantic correctness. Identical
+corrections are idempotent; conflicting corrections are rejected. Corrections
+cannot be undone through this API. Revoke a bad replacement separately; doing so
+never reactivates its predecessor. Re-recording the same revoked output is rejected,
+not silently returned as successful evidence; corrected acceptance must produce
+new evidence.
+
+Listing retains both records and includes `revocation` with actor, reason, time
+and replacement id. Required-kind and distinct-reviewer gates exclude revoked
+records; artifact verification for acceptance checks only active records. Doctor
+reports `attestation_revoked` even for items with no required evidence, and reports
+`evidence_missing` if a completed item's required kind loses its last active
+successful record. It does not reopen items or alter claims automatically.
+Historical execution statistics still describe the original process results.
+A revoked artifact remains audit evidence, not an input to acceptance.
+Upgrade every CLI/MCP reader before relying on corrections: older binaries do
+not consult this new table. Installing a binary or correcting a live ledger is
+a separate operational action; source tests use isolated state.
 
 ## Learning
 
