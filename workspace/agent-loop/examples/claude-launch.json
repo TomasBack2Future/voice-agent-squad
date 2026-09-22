@@ -1,0 +1,12 @@
+{
+  "schema_version": "agent-loop.claude-launch.v1",
+  "native_session_id": "00000000-0000-4000-8000-000000000001",
+  "agent_id": "worker-example",
+  "dispatcher_agent_id": "dispatcher-example",
+  "coordination_executable": "/absolute/path/to/squad",
+  "coordination_mode": "native",
+  "ledger_directory": "/absolute/path/to/coordination-repository",
+  "client_executable": "/absolute/path/to/claude",
+  "permission_mode": "auto",
+  "prompt_file": "/absolute/path/to/assignment-prompt.txt"
+}

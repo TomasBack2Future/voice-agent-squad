@@ -33,8 +33,24 @@ def repository_name(remote: str) -> str:
     raise ValidationError("origin must identify the assigned GitHub repository")
 
 
+def check_worktree(assignment: dict) -> None:
+    worktree = Path(assignment["worktree"]).resolve(strict=True)
+    if Path(git(worktree, "rev-parse", "--show-toplevel")).resolve() != worktree:
+        raise ValidationError("assignment worktree must be the Git root")
+    if git(worktree, "branch", "--show-current") != assignment["branch"]:
+        raise ValidationError("assignment branch mismatch")
+    if git(worktree, "rev-parse", "HEAD") != assignment["base_sha"]:
+        raise ValidationError("cold-start base changed; refresh the assignment before launch")
+    if repository_name(git(worktree, "remote", "get-url", "origin")) != assignment["repository"]:
+        raise ValidationError("assignment repository mismatch")
+    if git(worktree, "status", "--porcelain"):
+        raise ValidationError("cold-start worktree is dirty")
+    if not (worktree / "AGENTS.md").is_file():
+        raise ValidationError("repository AGENTS.md is missing")
+
+
 def check(assignment_path: Path, profile_path: Path, runtime: str,
-          skills: list[Path], tools: list[str]) -> dict:
+          skills: list[Path], tools: list[str], launch_config: Path | None = None) -> dict:
     assignment = validate_file(
         assignment_path, ROOT / "schemas/assignment-envelope.schema.json"
     )
@@ -51,19 +67,7 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         raise ValidationError("assignment/profile identity mismatch")
     if len(json.dumps(assignment, separators=(",", ":")).encode()) > 2048:
         raise ValidationError("assignment exceeds 2048-byte cold-start budget")
-    worktree = Path(assignment["worktree"]).resolve(strict=True)
-    if Path(git(worktree, "rev-parse", "--show-toplevel")).resolve() != worktree:
-        raise ValidationError("assignment worktree must be the Git root")
-    if git(worktree, "branch", "--show-current") != assignment["branch"]:
-        raise ValidationError("assignment branch mismatch")
-    if git(worktree, "rev-parse", "HEAD") != assignment["base_sha"]:
-        raise ValidationError("cold-start base changed; refresh the assignment before launch")
-    if repository_name(git(worktree, "remote", "get-url", "origin")) != assignment["repository"]:
-        raise ValidationError("assignment repository mismatch")
-    if git(worktree, "status", "--porcelain"):
-        raise ValidationError("cold-start worktree is dirty")
-    if not (worktree / "AGENTS.md").is_file():
-        raise ValidationError("repository AGENTS.md is missing")
+    check_worktree(assignment)
 
     # The launcher supplies the actual client-visible entries, not just canonical
     # source paths. Resolving a source file alone does not prove client discovery.
@@ -91,6 +95,12 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         if not shutil.which(tool):
             raise ValidationError("a required executable is unavailable")
         available.append(Path(tool).name)
+    launch_receipt = {"status": "not_checked"}
+    if launch_config is not None:
+        if runtime != "claude":
+            raise ValidationError("launch-config currently supports Claude only")
+        from claude_worker_launcher import check_launch
+        launch_receipt = check_launch(assignment, launch_config)
     return {
         "schema_version": "agent-loop.startup-receipt.v1", "status": "ready",
         "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -101,6 +111,7 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         "skills": receipts, "executables": available,
         "ownership": "not_checked", "repository_api_access": "not_checked",
         "runtime_approval": "not_checked", "environment": "not_checked",
+        "launcher": launch_receipt,
     }
 
 
@@ -111,9 +122,10 @@ def main() -> int:
     parser.add_argument("--runtime", choices=("claude", "codex"), required=True)
     parser.add_argument("--skill", type=Path, action="append", required=True)
     parser.add_argument("--tool", action="append", default=[])
+    parser.add_argument("--launch-config", type=Path, help="check the canonical Claude launcher with child identity")
     args = parser.parse_args()
     try:
-        receipt = check(args.assignment, args.profile, args.runtime, args.skill, args.tool)
+        receipt = check(args.assignment, args.profile, args.runtime, args.skill, args.tool, args.launch_config)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         # Do not echo input documents, OS errors or command output into receipts.
         reason = str(error) if isinstance(error, ValidationError) else "preflight input unavailable"

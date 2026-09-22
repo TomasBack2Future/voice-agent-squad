@@ -51,6 +51,14 @@ Run the selected package's `worker_preflight.py` before session creation, using
 the actual client's skill entries and required executable names. Resolve missing
 capabilities or stale assignment identity before paying for a Worker startup.
 This local receipt does not replace Squad ownership or runtime approval checks.
+For Claude cold starts, use the package's `claude_worker_launcher.py` with a
+separate schema-valid launch config and pass `--launch-config` to preflight.
+The same launcher must pass `--check` with inherited parent identity removed
+before creating the workspace. Use native Squad coordination when available;
+select the explicit Codex-wrapper compatibility adapter only for an installed
+wrapper requiring it. Do not handwrite identity/guard loops. Only a successful
+read of an exact unbound reservation is a binding wait; command errors and
+invalid output fail immediately with bounded, sanitized diagnostics.
 
 Create a new workspace with an owned worktree and a reviewed launcher:
 
