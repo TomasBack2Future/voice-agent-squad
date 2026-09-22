@@ -79,8 +79,12 @@ For terminal notifications, record a runtime-tagged callback route at launch:
 cmux workspace UUID, surface UUID, native session id and Squad agent id, or an
 actual App thread/host id. Resolve the endpoint read-only before dispatch; do
 not send a dummy prompt to test it. A Claude UUID is not a Codex App thread id.
-Missing transport must be recorded as pending reconciliation, not delegated to
-the user to copy messages.
+These cmux identifiers prove identity, not a safe callback channel. Background
+terminal events must be persisted in Squad; use only a verified message API or
+mailbox for wakeup. Never inject callbacks with send/send-key/paste/Enter, even
+when the input appears empty. Never save, clear, restore or submit a user draft
+to deliver an event. Missing safe transport means pending reconciliation, not
+a delivered callback or a user message-copying chore.
 
 ## Observe without disturbing
 
@@ -96,8 +100,10 @@ Do not focus, flash, move, close, kill or replace a healthy Worker for monitorin
 ## Send a bounded intervention
 
 Input is allowed only for the initial assignment, an explicit user override, an
-immediate safety/scope correction, one verified dependency transition, or one
-deduplicated terminal event to its explicitly assigned Dispatcher:
+immediate safety/scope correction, or one verified dependency transition.
+These permissions do not authorize altering unrelated pending input. If a draft
+or command is present or input ownership is uncertain, do not inject or submit.
+Background terminal callbacks are excluded; use the durable event path above:
 
 ```sh
 "$CMUX_BIN" send --workspace WORKSPACE --surface SURFACE 'message'

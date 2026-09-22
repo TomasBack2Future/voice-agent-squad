@@ -105,7 +105,11 @@ can start a new turn or steer an active Worker.
 
 Every new Worker prompt must carry this Dispatcher's verified runtime-specific
 callback route (App thread/host or cmux workspace/surface/native session), plus
-its Squad agent id; preserve the reservation key and generation. A Worker completion event triggers this same bounded cycle,
+its Squad agent id; preserve the reservation key and generation. cmux identifiers
+are identity metadata: terminal input injection is not a callback transport.
+Without a verified message API/mailbox, persist the event as pending reconciliation
+and consume it in the next existing cycle; do not promise automatic wakeup.
+A Worker completion event triggers this same bounded cycle,
 not a new scheduler. Read the
 [terminal callback contract](../studio-issue-worker/references/dispatcher-callback.md)
 when receiving an event. Verify the source task/reservation generation, live

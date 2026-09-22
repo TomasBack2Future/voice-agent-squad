@@ -30,9 +30,11 @@ Batch developers may end only through the explicit verified transfer below.
 At assignment and before ending, read
 [Dispatcher callback](references/dispatcher-callback.md). Record the originating
 Dispatcher identity; after durable closure, verified batch handoff, or a new
-terminal blocker, notify that exact Dispatcher once through the verified runtime
-transport (App task message or cmux). Ledger messages alone do not wake its task. Never treat callback delivery
-as acceptance or proven Worker termination.
+terminal blocker, persist the deduplicated event and notify that exact Dispatcher
+through a verified message API/mailbox when available. Never inject a background
+callback into cmux terminal input. Without a safe wakeup channel, record pending
+reconciliation; ledger messages alone do not wake its task. Never treat callback
+delivery as acceptance or proven Worker termination.
 
 ## Design handoff
 
