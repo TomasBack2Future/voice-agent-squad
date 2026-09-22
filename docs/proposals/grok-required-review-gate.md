@@ -12,7 +12,9 @@ The command:
 1. Reads PR metadata and diff through the installed GitHub CLI.
 2. Freezes repository, PR, base SHA and head SHA.
 3. Runs the installed Grok CLI headlessly with its bundled review policy,
-   tools/web/subagents disabled and strict structured output.
+   all tool executions denied, web/subagents disabled, at most three agent
+   turns, and strict structured output. The extra turns let the model recover
+   from a denied tool request and use the supplied patch.
 4. Validates the returned verdict and findings.
 5. Re-reads the PR and rejects publication if its base or head changed.
 6. Publishes a sanitized comment and a SHA-bound Check through the configured

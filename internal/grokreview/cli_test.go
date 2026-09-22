@@ -65,7 +65,7 @@ func testCLIConfig(t *testing.T) CLIConfig {
 	}
 }
 
-func TestCLICommandIsOneShotNoToolAndEnvironmentIsAllowlisted(t *testing.T) {
+func TestCLICommandDeniesEveryToolAndEnvironmentIsAllowlisted(t *testing.T) {
 	config := testCLIConfig(t)
 	config.SafeEnvironment = map[string]string{
 		"SSL_CERT_FILE": "/etc/ssl/cert.pem",
@@ -96,8 +96,8 @@ func TestCLICommandIsOneShotNoToolAndEnvironmentIsAllowlisted(t *testing.T) {
 		"--permission-mode", "dontAsk",
 		"--no-plan",
 		"--sandbox", config.SandboxProfile,
-		"--tools", "",
-		"--max-turns", "1",
+		"--deny", "*",
+		"--max-turns", "3",
 		"--model", config.Model,
 		"--reasoning-effort", config.ReasoningEffort,
 		"--cwd", prepared.workDir,
@@ -137,6 +137,47 @@ func TestCLICommandIsOneShotNoToolAndEnvironmentIsAllowlisted(t *testing.T) {
 	}
 	if !reflect.DeepEqual(prompt, frozenBundle) {
 		t.Fatalf("prompt content = %q", prompt)
+	}
+}
+
+func TestParseCLIEnvelopeAcceptsBoundedToolDenialRecovery(t *testing.T) {
+	var envelope map[string]any
+	if err := json.Unmarshal(approvedEnvelope(t), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["num_turns"] = 2
+	envelope["modelUsage"] = map[string]any{
+		"grok-review-model": map[string]any{"modelCalls": 2},
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, audit, err := ParseCLIEnvelope(raw)
+	if err != nil || audit.NumTurns != 2 {
+		t.Fatalf("audit=%#v err=%v", audit, err)
+	}
+	envelope["modelUsage"] = map[string]any{
+		"grok-review-model": map[string]any{"modelCalls": 1},
+	}
+	raw, err = json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ParseCLIEnvelope(raw); err == nil || !strings.Contains(err.Error(), "calls") {
+		t.Fatalf("mismatched model calls accepted: %v", err)
+	}
+
+	envelope["num_turns"] = 4
+	envelope["modelUsage"] = map[string]any{
+		"grok-review-model": map[string]any{"modelCalls": 4},
+	}
+	raw, err = json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ParseCLIEnvelope(raw); err == nil || !strings.Contains(err.Error(), "turns") {
+		t.Fatalf("unbounded review accepted: %v", err)
 	}
 }
 
@@ -345,7 +386,7 @@ case "$1" in
     printf '%s\n' 'grok 1.0.13 (test) [stable]'
     ;;
   --help)
-    printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --no-plan --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim'
+    printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --no-plan --deny --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim'
     ;;
   models)
     if [ "${GITHUB_TOKEN+x}" = x ] || [ "${GITHUB_APP_PRIVATE_KEY+x}" = x ]; then
@@ -408,7 +449,7 @@ func TestCLIRunnerDoctorRejectsUnavailableConfiguredModel(t *testing.T) {
 	script := `#!/bin/sh
 case "$1" in
   version) printf '%s\n' 'grok 1.0.13' ;;
-  --help) printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --no-plan --tools --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim' ;;
+  --help) printf '%s\n' '--prompt-file --json-schema --output-format --no-subagents --disable-web-search --permission-mode --no-plan --deny --max-turns --model --reasoning-effort --cwd --system-prompt-override --verbatim' ;;
   models) printf '%s\n' 'Available models:' '  - grok-4.5' ;;
   --prompt-file) printf '%s\n' 'Error: Failed to read doctor-missing-review-bundle.txt: No such file' >&2; exit 2 ;;
 esac
