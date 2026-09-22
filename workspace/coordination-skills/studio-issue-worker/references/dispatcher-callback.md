@@ -9,7 +9,8 @@ It does not replace claim release notifications to resource waiters.
 The assignment must provide `dispatcher_agent_id`, reservation key/generation,
 and a runtime-tagged callback route. For `codex-app`, record the actual
 `dispatcher_thread_id` and `dispatcher_host_id`. For `cmux`, record the
-Dispatcher workspace UUID, surface UUID and native agent session id. Verify
+Dispatcher workspace UUID, surface UUID and native agent session id as identity
+metadata, not as proof of a safe message transport. Verify
 endpoint identity read-only at launch; a native Claude session UUID must never
 be passed as an App thread id. Keep these fields in the assignment's existing
 launcher/coordination metadata, not unsupported envelope schema fields.
@@ -22,8 +23,8 @@ a callback route does not confer that ownership.
 For an older task without these fields, resolve its original dispatch message
 and reservation's reserved_by identity to a verified task once. An agent id is
 not a task id. If unresolved, record `callback-unroutable` in the item and final
-answer; use the existing heartbeat fallback, do not guess a recipient, scan raw
-session conversations or block an otherwise safe closure on a missing route.
+answer; use existing reconciliation when configured. Do not guess a recipient,
+scan raw session conversations or block an otherwise safe closure on a missing route.
 
 ## Trigger and order
 
@@ -52,13 +53,18 @@ generated on each attempt.
 
 1. Inspect the owned item's callback records for that event id. If already sent,
    do not resend. Record `callback-intent` with the event id and exact recipient.
-2. Use the verified transport once. For `codex-app`, call
+2. Use a verified message transport once. For `codex-app`, call
    `send_message_to_thread` with the recorded thread/host and compact prompt;
-   preserve model/effort. For `cmux`, revalidate the exact workspace/surface and
-   native session binding, then send the compact terminal event using the cmux
-   skill and read the target screen once. A queued event is not yet processed;
-   never repeat it just because the Dispatcher is busy. This terminal callback
-   is authorized coordination, not a routine progress ping.
+   preserve model/effort. For a cmux-hosted agent, the durable Squad event is
+   the delivery record. Wake the receiver only through an already configured,
+   verified message API or mailbox that does not touch terminal input. cmux
+   workspace/surface ids alone do not provide such a transport. Never use
+   `cmux send`, `send-key`, paste or Enter for background terminal callbacks,
+   even if a screen snapshot appears empty: input can change after inspection.
+   Never inspect, save, clear, restore or submit a user's draft to make room.
+   If no safe wakeup transport is available, record `pending-reconciliation`
+   with the full sanitized payload in Squad and use the existing reconciliation
+   cycle when it next runs. Do not claim a wakeup was scheduled or delivered.
 3. Record `callback-sent` on confirmed transport success. On explicit failure or
    uncertain delivery record `callback-failed` or `callback-unknown`, preserve
    the payload for heartbeat reconciliation and explain it in the final answer.
@@ -68,6 +74,7 @@ generated on each attempt.
    exists, report notification pending honestly while preserving durable state.
 4. Finish the user-visible final response without waiting for a Dispatcher ACK.
    A send success is transport acceptance, not proof that dispatch finished.
+   Durable persistence alone is not `callback-sent`.
 
 ## Payload
 

@@ -4,12 +4,16 @@ Every dispatched Worker prompt must be self-contained and contain:
 
 - runtime-tagged callback routing: actual App thread/host ids or cmux
   workspace/surface/native session ids, `dispatcher_agent_id`, plus the existing
-  reservation key/generation; verify the selected transport, never pass a native
+  reservation key/generation; cmux ids identify a session but do not supply a safe
+  message transport. Use a verified message API/mailbox for wakeup; otherwise
+  persist the event as pending reconciliation in Squad. Never use terminal input
+  injection for background callbacks. Verify the selected transport, never pass a native
   Claude UUID to an App thread API; require
   the Worker to record them and read the maintained
   `studio-issue-worker/references/dispatcher-callback.md`. After durable closure,
-  accepted batch transfer or a new terminal blocker, send one deduplicated
-  `worker-terminal-v1` event to this Dispatcher before ending, never to another
+  accepted batch transfer or a new terminal blocker, persist one deduplicated
+  `worker-terminal-v1` event for this Dispatcher before ending and notify only
+  through the safe transport when available, never to another
   Worker or a guessed task. No callback for routine progress/resource waiting;
   delivery failure falls back to the durable ledger/heartbeat, not a retry loop;
 
