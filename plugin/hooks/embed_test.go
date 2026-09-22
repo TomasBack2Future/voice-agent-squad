@@ -14,7 +14,7 @@ func TestAll_IncludesNewR1Hooks(t *testing.T) {
 		"stop-listen":         "Stop",
 		"post-tool-flush":     "PostToolUse",
 		"session-end-cleanup": "SessionEnd",
-		"async-rewake":        "asyncRewake",
+		"async-rewake":        "Stop",
 	}
 	got := map[string]string{}
 	for _, h := range All {
@@ -117,7 +117,7 @@ func TestHooksJSONIncludesShippedOptInHooks(t *testing.T) {
 	}
 
 	required := map[string]string{
-		"async_rewake.sh":       "asyncRewake",
+		"async_rewake.sh":       "Stop",
 		"loop_pre_bash_tick.sh": "PreToolUse",
 	}
 

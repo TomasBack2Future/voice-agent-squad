@@ -15,6 +15,7 @@ import (
 	"github.com/zsiec/squad/internal/items"
 	"github.com/zsiec/squad/internal/mcp"
 	"github.com/zsiec/squad/internal/notify"
+	"github.com/zsiec/squad/internal/terminalevents"
 )
 
 // errNoRepo is returned by per-repo handlers when MCP was started outside a
@@ -676,6 +677,28 @@ func registerInspectionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot strin
 }
 
 func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_ack", Description: "Acknowledge one delivered terminal event after recipient reconciliation.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","note"],"properties":{"event_id":{"type":"string"},"note":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			EventID string `json:"event_id"`
+			Note    string `json:"note"`
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := resolveAgentID(a.AgentID)
+		if err != nil {
+			return nil, err
+		}
+		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor}).Ack(ctx, a.EventID, a.Note); err != nil {
+			return nil, err
+		}
+		return map[string]string{"event_id": a.EventID, "state": "processed"}, nil
+	}})
+
 	srv.Register(mcp.Tool{
 		Name:        "squad_attest",
 		Description: "Record a verification artifact (test/lint/build/typecheck/review/manual) into the evidence ledger.",

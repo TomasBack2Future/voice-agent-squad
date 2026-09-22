@@ -51,6 +51,18 @@
             "squad": "stop-learning-prompt@0.2.0"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/async_rewake.sh",
+            "squad": "async-rewake@0.2.0",
+            "asyncRewake": true,
+            "timeout": 1900
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -120,18 +132,6 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre_tool_event.sh",
             "squad": "pre-tool-event@0.2.0"
-          }
-        ]
-      }
-    ],
-    "asyncRewake": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/async_rewake.sh",
-            "squad": "async-rewake@0.2.0"
           }
         ]
       }

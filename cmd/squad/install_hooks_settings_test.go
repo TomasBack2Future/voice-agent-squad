@@ -133,3 +133,33 @@ func TestMergeSettings_TwoSpaceIndent(t *testing.T) {
 		t.Fatalf("expected 2-space indent, got:\n%s", body)
 	}
 }
+
+func TestMergeSettingsAsyncRewakeUsesStopAndNativeField(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	p := filepath.Join(t.TempDir(), "settings.json")
+	if err := mergeSquadHooks(p, map[string]bool{"async-rewake": true}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				AsyncRewake bool `json:"asyncRewake"`
+				Timeout     int  `json:"timeout"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err = json.Unmarshal(raw, &d); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.Hooks["asyncRewake"]; ok {
+		t.Fatal("asyncRewake is not an event")
+	}
+	entries := d.Hooks["Stop"]
+	if len(entries) != 1 || len(entries[0].Hooks) != 1 || !entries[0].Hooks[0].AsyncRewake || entries[0].Hooks[0].Timeout < 1800 {
+		t.Fatalf("invalid native wake config: %s", raw)
+	}
+}

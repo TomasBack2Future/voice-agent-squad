@@ -109,31 +109,17 @@ func runListen(ctx context.Context, c *chat.Chat, db *sql.DB, agentID, repoID st
 		return 2
 	}
 
-	wakeCh := make(chan struct{}, 1)
-	go func() {
-		_, _ = l.WaitLoop(wakeCtx, a.FallbackInt, func() {
-			if pollMailbox() || pollTimeBox() {
-				select {
-				case wakeCh <- struct{}{}:
-				default:
-				}
-			}
-		})
-		select {
-		case wakeCh <- struct{}{}:
-		default:
+	// Read and consume once, on one goroutine. The previous fallback consumed
+	// the mailbox before the return path checked it, losing the wake exit code.
+	for {
+		if _, err := l.WaitWake(wakeCtx, a.FallbackInt); err != nil {
+			return 0
 		}
-	}()
-
-	select {
-	case <-wakeCh:
 		if pollMailbox() || pollTimeBox() {
 			return 2
 		}
-		return 0
-	case <-wakeCtx.Done():
-		return 0
 	}
+
 }
 
 func resolveInstance(explicit string) string {

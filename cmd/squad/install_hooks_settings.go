@@ -40,6 +40,11 @@ func mergeSquadHooks(settingsPath string, enabled map[string]bool) error {
 			}},
 			"squad": h.Name + "@" + versionString,
 		}
+		if h.Name == "async-rewake" {
+			child := entry["hooks"].([]map[string]any)[0]
+			child["asyncRewake"] = true
+			child["timeout"] = 1900
+		}
 		list, _ := hooksRaw[h.EventType].([]any)
 		hooksRaw[h.EventType] = append(list, entry)
 	}
