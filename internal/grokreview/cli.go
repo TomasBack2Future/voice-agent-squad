@@ -22,6 +22,10 @@ const FindingsSchemaVersion = "squad.review.findings.v2"
 
 const DefaultReasoningEffort = "medium"
 
+// MaxReviewerTurns leaves bounded room for the model to use the supplied
+// snapshot after a denied tool request consumes the first Grok agent turn.
+const MaxReviewerTurns = 3
+
 type Verdict string
 
 type CLIFailureKind string
@@ -219,7 +223,7 @@ func (r *CLIRunner) Doctor(ctx context.Context) (CLIDoctor, error) {
 	}
 	requiredOptions := []string{
 		"--prompt-file", "--json-schema", "--output-format", "--no-subagents",
-		"--disable-web-search", "--permission-mode", "--no-plan", "--tools", "--max-turns",
+		"--disable-web-search", "--permission-mode", "--no-plan", "--deny", "--max-turns",
 		"--model", "--cwd", "--system-prompt-override", "--verbatim",
 	}
 	if r.config.SandboxProfile != "" {
@@ -449,9 +453,9 @@ func (r *CLIRunner) commandArguments(promptPath, workDir string) []string {
 		"--no-subagents",
 		"--disable-web-search",
 		// Plan mode is not a read-only permission boundary. It changes the model's
-		// task behavior and can make a one-shot review emit an intermediate plan as
-		// its final structured result. Filesystem isolation and an empty tool set
-		// provide the boundary; dontAsk plus no-plan require a terminal answer.
+		// task behavior and can make a bounded review emit an intermediate plan as
+		// its final structured result. Deny every tool: an empty --tools value is
+		// ignored by Grok and still exposes file and terminal tools.
 		"--permission-mode", "dontAsk",
 		"--no-plan",
 	}
@@ -459,8 +463,8 @@ func (r *CLIRunner) commandArguments(promptPath, workDir string) []string {
 		args = append(args, "--sandbox", r.config.SandboxProfile)
 	}
 	args = append(args,
-		"--tools", "",
-		"--max-turns", "1",
+		"--deny", "*",
+		"--max-turns", fmt.Sprint(MaxReviewerTurns),
 		"--model", r.config.Model,
 	)
 	if r.config.ReasoningEffort != "" {
@@ -503,16 +507,16 @@ func ParseCLIEnvelope(raw []byte) (FindingsResult, CLIAudit, error) {
 	if envelope.SessionID == "" || envelope.RequestID == "" {
 		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI envelope lacks session or request identity")
 	}
-	if envelope.NumTurns != 1 {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI used %d turns, expected one", envelope.NumTurns)
+	if envelope.NumTurns < 1 || envelope.NumTurns > MaxReviewerTurns {
+		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI used %d turns, expected 1-%d", envelope.NumTurns, MaxReviewerTurns)
 	}
 	if len(envelope.ModelUsage) != 1 {
 		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI reported %d models, expected one", len(envelope.ModelUsage))
 	}
 	model := ""
 	for name, usage := range envelope.ModelUsage {
-		if usage.ModelCalls != 1 {
-			return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI model %q made %d calls, expected one", name, usage.ModelCalls)
+		if usage.ModelCalls != envelope.NumTurns {
+			return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI model %q made %d calls, expected %d", name, usage.ModelCalls, envelope.NumTurns)
 		}
 		model = name
 	}
