@@ -10,6 +10,15 @@ Git identity and files; it neither launches a model nor claims work. Resolve a
 missing skill or changed base once in the assignment before launch, rather than
 making the Worker repeatedly rediscover the mismatch.
 
+For a new Claude Worker, pass `--launch-config` to preflight and use the
+canonical `claude_worker_launcher.py` as the actual workspace command. Validate
+`schemas/claude-launch.schema.json` separately from the assignment; do not add
+runtime ids or new authorization keys to the envelope. The launch probe removes
+inherited session identity and executes the same coordination read as startup.
+A local files/tools-only receipt leaves launcher access unverified. Resolve a
+failed child probe before creating the session; do not diagnose it from a
+successful command in the Dispatcher's differently configured parent shell.
+
 Record whether the Issue delivers source, a merged change, staging availability
 or production availability, together with its observable acceptance target. If a
 user-facing feature is split into source and deployment items, the parent delivery

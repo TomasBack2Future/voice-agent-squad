@@ -49,6 +49,65 @@ Simulation/Evaluation is not routed from the word `eval` to ConvoAI task logs,
 and `studio-sls-logs` is the single target identity for staging and production
 SLS reads.
 
+## Verified Claude Worker launch
+
+Use `claude_worker_launcher.py` instead of copying per-task Python launchers.
+Keep the schema-valid assignment separate from
+`examples/claude-launch.json`: session ids, executable paths and runtime mode
+belong to the launch config, not arbitrary new assignment authorization keys.
+Keep delivery receipts and callback routing in coordination metadata. The
+assignment branch must be a real checked-out branch, not a branch-creation plan.
+
+Reserve and attach the canonical item before checking. Supply the actual
+Dispatcher owner, child native UUID, fresh agent id, executable paths, ledger
+working directory and already-authorized permission mode. In `native` mode,
+point at the Squad executable directly; it uses `SQUAD_SESSION_ID` and
+`SQUAD_AGENT` without requiring Codex identity variables. Explicit ledger cwd
+replaces the machine-specific coordination wrapper's directory switch.
+
+Some existing installations use `squad-coordination -> squad-codex`, whose
+implicit contract requires `CODEX_THREAD_ID` or `CODEX_SESSION_ID` and exits 2
+without one. When that exact installed wrapper must be retained, select
+`codex-wrapper-compat`; both aliases are derived from the child UUID, never the
+Dispatcher's environment. This adapter does not install/change a wrapper or
+migrate an active session's identity. `codex_session.py` configures a Codex
+provider/model launch; it is not this Claude/Squad identity adapter.
+
+```bash
+python3 workspace/agent-loop/worker_preflight.py \
+  --assignment /absolute/assignment.json --profile /absolute/profile.json \
+  --runtime claude --skill /absolute/.claude/skills/agent-loop-worker/SKILL.md \
+  --launch-config /absolute/claude-launch.json
+# Independent reproduction uses the same canonical path, with parent ids removed:
+env -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u SQUAD_SESSION_ID -u SQUAD_AGENT \
+  python3 workspace/agent-loop/claude_worker_launcher.py \
+  --assignment /absolute/assignment.json --config /absolute/claude-launch.json --check
+```
+
+`--check` performs one read-only coordination query with the same child identity
+used at launch. A valid reserved/unbound entry passes with `binding: pending`;
+that is preparation, not ownership or permission to execute work. It never
+starts a model, claims, binds or mutates an environment. Preflight without
+`--launch-config` explicitly reports `launcher.status: not_checked`.
+
+Use the same command without `--check` as the new cmux workspace command, then
+bind the returned native id to the reservation. Only a successful, well-formed
+read of that exact still-unbound reservation may wait for binding. Nonzero exits
+(including unknown errors), command timeouts, malformed JSON, wrong ownership,
+source/item/generation or another bound session fail immediately. Diagnostics
+include exit status and bounded, credential-filtered stderr; an empty or unknown
+error is not evidence of transient contention. The wait is bounded; do not
+resubmit an ambiguous creation attempt. Revalidate actual binding before any
+manual retry. Launch rechecks the assigned Git identity and clean worktree.
+
+The receipt proves coordination access in an identity-sanitized environment;
+it does not prove model authentication, effective runtime approval, browser
+login or deployment access. Keep those as separate checks. `--check` deliberately
+retains normal PATH/HOME/auth configuration: it strips inherited identity, not
+all credentials. This is a cold-start launcher, not a resume or owner-transfer
+tool; preserve existing session identities during resume. No existing local
+wrapper or live Worker is changed by adding this source capability.
+
 ## Local repository skill synchronization
 
 `skill_sync.py` installs local Git `post-merge`, `post-checkout` and
