@@ -63,13 +63,13 @@ func (s *Store) Recover(ctx context.Context, req RecoveryRequest) (*RecoveryResu
 
 	var result RecoveryResult
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		var holder, intent string
+		var holder, intent, group, scope string
 		var claimedAt, generation int64
 		row := tx.QueryRowContext(ctx, `
-			SELECT agent_id, claimed_at, generation, COALESCE(intent, '')
+			SELECT agent_id, claimed_at, generation, COALESCE(intent, ''),resource_group,resource_scope
 			FROM claims WHERE repo_id=? AND item_id=?
 		`, s.repoID, req.ItemID)
-		if err := row.Scan(&holder, &claimedAt, &generation, &intent); err != nil {
+		if err := row.Scan(&holder, &claimedAt, &generation, &intent, &group, &scope); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotClaimed
 			}
@@ -116,9 +116,9 @@ func (s *Store) Recover(ctx context.Context, req RecoveryRequest) (*RecoveryResu
 
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO claim_history
-			  (repo_id, item_id, agent_id, claimed_at, released_at, outcome)
-			VALUES (?, ?, ?, ?, ?, 'recovered')
-		`, s.repoID, req.ItemID, holder, claimedAt, now); err != nil {
+			  (repo_id, item_id, agent_id, claimed_at, released_at, outcome,resource_group,resource_scope)
+			VALUES (?, ?, ?, ?, ?, 'recovered',?,?)
+		`, s.repoID, req.ItemID, holder, claimedAt, now, group, scope); err != nil {
 			return fmt.Errorf("recovery history: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -148,6 +148,16 @@ func (s *Store) Recover(ctx context.Context, req RecoveryRequest) (*RecoveryResu
 		if err := postSystemMessage(ctx, tx, s.repoID, now, req.RecoveringAgent,
 			req.ItemID, "recovery", body, mentions, "high"); err != nil {
 			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM claim_waits WHERE repo_id=? AND agent_id=? AND item_id=?`, s.repoID, req.RecoveringAgent, req.ItemID); err != nil {
+			return err
+		}
+		cycle, err := deadlockCycle(ctx, tx, s.repoID, s.nowUnix())
+		if err != nil {
+			return err
+		}
+		if len(cycle) > 0 {
+			return &DeadlockError{Cycle: cycle}
 		}
 		result = RecoveryResult{
 			ItemID: req.ItemID, FromAgent: holder, ToAgent: req.RecoveringAgent,

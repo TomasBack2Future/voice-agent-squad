@@ -804,3 +804,16 @@ Print the squad version.
 ```bash
 squad version
 ```
+
+## Protected resource scopes
+
+- `squad resources define policy.json`: atomically register an array of
+  `{item_id, group, default_scope, service_scope}` definitions while affected
+  resources and live waiters are idle. Does not create item files.
+- `squad claim ITEM --scope SERVICE [--wait]`: claim registered service coverage;
+  omission preserves legacy/default behavior. `*` requests whole-group coverage.
+- Deadlock or same-owner overlap fails without releasing existing ownership.
+- `squad doctor`: also diagnoses live claim wait cycles.
+
+MCP equivalents are `squad_resources_define` with `definitions`, and `squad_claim`
+with optional `scope`. MCP claims remain immediate; blocking wait is a CLI facility.

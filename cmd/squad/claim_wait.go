@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"database/sql"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/zsiec/squad/internal/claims"
@@ -84,26 +85,40 @@ func ClaimWithWait(ctx context.Context, args ClaimWaitArgs) (*ClaimResult, error
 
 	waitCtx, cancel := context.WithTimeout(ctx, args.Timeout)
 	defer cancel()
+	ledger := claims.New(args.Claim.DB, args.Claim.RepoID, nil)
+	waitID := fmt.Sprintf("%x", makeWaitID())
+	defer func() { _ = ledger.EndWait(context.Background(), waitID) }()
+	// Renew frequently even when notification fallback is disabled. A crashed
+	// waiter expires without deleting or transferring its held claims.
+	interval := 10 * time.Second
+	if args.Fallback > 0 && args.Fallback < interval {
+		interval = args.Fallback
+	}
 	for {
-		holder, holderErr := claims.HolderOf(waitCtx, args.Claim.DB, args.Claim.RepoID, args.Claim.ItemID)
-		switch {
-		case holderErr == nil && holder != "":
-		case errors.Is(holderErr, sql.ErrNoRows):
+		if err := claimWaitContextError(ctx, waitCtx, args); err != nil {
+			return nil, err
+		}
+		blockers, waitErr := ledger.Wait(waitCtx, waitID, args.Claim.AgentID, args.Claim.ItemID, args.Claim.Scope, 30*time.Second)
+		if waitErr != nil {
+			if contextErr := claimWaitContextError(ctx, waitCtx, args); contextErr != nil {
+				return nil, contextErr
+			}
+			return nil, waitErr
+		}
+		if len(blockers) == 0 {
 			res, err = Claim(waitCtx, args.Claim)
 			if err == nil {
 				return res, nil
 			}
 			if !isClaimHeld(err) {
+				if contextErr := claimWaitContextError(ctx, waitCtx, args); contextErr != nil {
+					return nil, contextErr
+				}
 				return nil, err
 			}
-		case holderErr != nil:
-			if waitErr := claimWaitContextError(ctx, waitCtx, args); waitErr != nil {
-				return nil, waitErr
-			}
-			return nil, fmt.Errorf("claim --wait: holder lookup: %w", holderErr)
 		}
 
-		if _, err := l.WaitWake(waitCtx, args.Fallback); err != nil {
+		if _, err := l.WaitWake(waitCtx, interval); err != nil {
 			if waitErr := claimWaitContextError(ctx, waitCtx, args); waitErr != nil {
 				return nil, waitErr
 			}
@@ -114,7 +129,8 @@ func ClaimWithWait(ctx context.Context, args ClaimWaitArgs) (*ClaimResult, error
 
 func isClaimHeld(err error) bool {
 	var held *ClaimHeldError
-	return errors.As(err, &held)
+	var resource *claims.ResourceConflictError
+	return errors.As(err, &held) || errors.As(err, &resource)
 }
 
 func claimWaitContextError(parent, waitCtx context.Context, args ClaimWaitArgs) error {
@@ -128,5 +144,26 @@ func claimWaitContextError(parent, waitCtx context.Context, args ClaimWaitArgs) 
 }
 
 func notifyClaimWaiters(ctx context.Context, registry *notify.Registry, repoID, itemID string) {
-	_ = notify.WakeKind(ctx, registry, repoID, notify.ClaimWaitKind(itemID), 100*time.Millisecond)
+	// A release can unblock a different item through legacy/group scope.
+	endpoints, err := registry.LookupRepo(ctx, repoID)
+	if err != nil {
+		return
+	}
+	kinds := map[string]bool{notify.ClaimWaitKind(itemID): true}
+	for _, e := range endpoints {
+		if strings.HasPrefix(e.Kind, notify.ClaimWaitKind("")) {
+			kinds[e.Kind] = true
+		}
+	}
+	for kind := range kinds {
+		_ = notify.WakeKind(ctx, registry, repoID, kind, 100*time.Millisecond)
+	}
+}
+
+func makeWaitID() []byte {
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		panic(err)
+	}
+	return id
 }

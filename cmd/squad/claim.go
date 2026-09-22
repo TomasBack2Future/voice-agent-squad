@@ -58,6 +58,7 @@ type ClaimArgs struct {
 	AgentID        string   `json:"agent_id"`
 	ItemID         string   `json:"item_id"`
 	Intent         string   `json:"intent,omitempty"`
+	Scope          string   `json:"scope,omitempty"`
 	Touches        []string `json:"touches,omitempty"`
 	Long           bool     `json:"long,omitempty"`
 	ItemsDir       string   `json:"items_dir,omitempty"`
@@ -103,7 +104,7 @@ func Claim(ctx context.Context, args ClaimArgs) (*ClaimResult, error) {
 
 	var worktreePath string
 	var clOpts []claims.ClaimOption
-	clOpts = append(clOpts, claims.ClaimWithPreflight(args.ItemsDir, args.DoneDir))
+	clOpts = append(clOpts, claims.ClaimWithPreflight(args.ItemsDir, args.DoneDir), claims.ClaimWithScope(args.Scope))
 	if args.Worktree {
 		if args.RepoRoot == "" {
 			return nil, fmt.Errorf("claim --worktree: repo root not discovered")
@@ -163,6 +164,7 @@ func lookupClaimHolderDB(ctx context.Context, db *sql.DB, repoID, itemID string)
 func newClaimCmd() *cobra.Command {
 	var (
 		intent       string
+		scope        string
 		touches      string
 		long         bool
 		worktreeFlag bool
@@ -200,6 +202,7 @@ func newClaimCmd() *cobra.Command {
 				AgentID:        bc.agentID,
 				ItemID:         itemID,
 				Intent:         intent,
+				Scope:          scope,
 				Touches:        touchList,
 				Long:           long,
 				ItemsDir:       bc.itemsDir,
@@ -273,6 +276,7 @@ func newClaimCmd() *cobra.Command {
 			return err
 		},
 	}
+	cmd.Flags().StringVar(&scope, "scope", "", "Registered service scope; omitted keeps legacy resource coverage")
 	cmd.Flags().StringVar(&intent, "intent", "", "short sentence describing intent")
 	cmd.Flags().StringVar(&touches, "touches", "", "comma-separated file paths you'll modify")
 	cmd.Flags().BoolVar(&long, "long", false, "use the 2h long-running threshold instead of hygiene.stale_claim_minutes")

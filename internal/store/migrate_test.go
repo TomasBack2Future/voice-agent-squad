@@ -283,8 +283,8 @@ func TestMigrate_BootstrapsLegacyDBWithoutIntakeColumns(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 15 {
-		t.Fatalf("want version 15 after bootstrap; got %d", maxV)
+	if maxV != 16 {
+		t.Fatalf("want version 16 after bootstrap; got %d", maxV)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestMigrate_BootstrapPreservesWorktreeAndSeedsAllVersions(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM migration_versions`).Scan(&rows); err != nil {
 		t.Fatalf("count migration_versions: %v", err)
 	}
-	if rows != 15 {
-		t.Errorf("migration_versions row count = %d, want 15 (bootstrap missed markers)", rows)
+	if rows != 16 {
+		t.Errorf("migration_versions row count = %d, want 16 (bootstrap missed markers)", rows)
 	}
 }
 
@@ -633,8 +633,8 @@ func TestMigrate_IntakeInterviewIdempotent_From008(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 15 {
-		t.Fatalf("want max version 15 after 008→015 upgrade; got %d", maxV)
+	if maxV != 16 {
+		t.Fatalf("want max version 16 after 008→016 upgrade; got %d", maxV)
 	}
 }
 
@@ -654,4 +654,38 @@ func pragmaCols(t *testing.T, db *sql.DB, table string) map[string]string {
 		out[name] = typ
 	}
 	return out
+}
+
+func TestResourceMigrationPreservesActiveLegacyClaim(t *testing.T) {
+	db := openEmptyDBNoMigrate(t)
+	entries, err := fs.ReadDir(defaultMigrationsFS, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.Name() < "016_" {
+			prior["migrations/"+entry.Name()] = readMigration(t, entry.Name())
+		}
+	}
+	if err := Migrate(context.Background(), db, prior); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,generation) VALUES('repo','ENV-002','old',1,2,7)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(context.Background(), db, defaultMigrationsFS); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(context.Background(), db, defaultMigrationsFS); err != nil {
+		t.Fatal(err)
+	}
+	var agent, group, scope string
+	var generation int
+	if err := db.QueryRow(`SELECT agent_id,generation,resource_group,resource_scope FROM claims WHERE item_id='ENV-002'`).Scan(&agent, &generation, &group, &scope); err != nil {
+		t.Fatal(err)
+	}
+	if agent != "old" || generation != 7 || group != "" || scope != "" {
+		t.Fatalf("active claim changed: %s %d %s %s", agent, generation, group, scope)
+	}
 }

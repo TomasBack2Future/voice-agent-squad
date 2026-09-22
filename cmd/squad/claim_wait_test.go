@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zsiec/squad/internal/claims"
 	"github.com/zsiec/squad/internal/notify"
 )
 
@@ -249,5 +250,44 @@ func releaseWithWaitWake(t *testing.T, env *testEnv, registry *notify.Registry, 
 	})
 	if err != nil {
 		t.Fatalf("Release(%s): %v", agentID, err)
+	}
+}
+
+func TestClaimWithWait_WakesWhenLegacyResourceIsReleased(t *testing.T) {
+	env := newTestEnv(t)
+	for _, id := range []string{"ENV-002", "ENV-004"} {
+		writeMinimalItem(t, env.ItemsDir, id)
+	}
+	ledger := claims.New(env.DB, env.RepoID, nil)
+	if err := ledger.DefineResources(context.Background(), []claims.ResourceDefinition{
+		{ItemID: "ENV-002", Group: "production", DefaultScope: "*", ServiceScope: "studio"},
+		{ItemID: "ENV-004", Group: "production", DefaultScope: "importer", ServiceScope: "importer"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Claim(context.Background(), "ENV-002", "old", "", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	registry := notify.NewRegistry(env.DB)
+	done := make(chan error, 1)
+	go func() {
+		_, err := ClaimWithWait(context.Background(), ClaimWaitArgs{
+			Claim:    ClaimArgs{DB: env.DB, RepoID: env.RepoID, AgentID: "new", ItemID: "ENV-004", ItemsDir: env.ItemsDir, DoneDir: env.DoneDir},
+			Registry: registry, Instance: "resource-wait", Timeout: 2 * time.Second, Fallback: 0,
+		})
+		done <- err
+	}()
+	waitForClaimWaiter(t, registry, env.RepoID, "ENV-004", 1)
+	if err := ledger.Release(context.Background(), "ENV-002", "old", ""); err != nil {
+		t.Fatal(err)
+	}
+	notifyClaimWaiters(context.Background(), registry, env.RepoID, "ENV-002")
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = env.DB.QueryRow(`SELECT count(*) FROM claim_waits`).Scan(&n)
+	if n != 0 {
+		t.Fatal("successful acquisition left a wait edge")
 	}
 }

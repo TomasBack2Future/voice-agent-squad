@@ -471,3 +471,34 @@ func TestStripLineSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestSweep_ReportsWaitCycleWithoutReleasingClaims(t *testing.T) {
+	db := newDB(t)
+	now := time.Now()
+	insertClaim(t, db, "repo-test", "ENV-001", "a", now.Unix(), 1)
+	insertClaim(t, db, "repo-test", "ENV-002", "b", now.Unix(), 1)
+	// Simulate a legacy/external writer introducing a cycle outside the guarded API.
+	for _, w := range [][3]string{{"a", "a", "ENV-002"}, {"b", "b", "ENV-001"}} {
+		if _, err := db.Exec(`INSERT INTO claim_waits(repo_id,wait_id,agent_id,item_id,resource_group,resource_scope,expires_at) VALUES('repo-test',?,?,?,'','',?)`, w[0], w[1], w[2], now.Add(time.Minute).Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	findings, err := NewWithClock(db, "repo-test", emptyItems{}, func() time.Time { return now }).Sweep(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range findings {
+		if f.Code == "claim_deadlock" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing cycle finding")
+	}
+	var n int
+	_ = db.QueryRow(`SELECT count(*) FROM claims`).Scan(&n)
+	if n != 2 {
+		t.Fatal("doctor removed ownership")
+	}
+}

@@ -45,6 +45,7 @@ func (s *Store) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 type ClaimOption func(*claimOpts)
 
 type claimOpts struct {
+	resourceScope     string
 	preflightItemsDir string
 	preflightDoneDir  string
 	worktreePath      string
@@ -89,6 +90,26 @@ func (s *Store) Claim(ctx context.Context, itemID, agentID, intent string, touch
 		longVal = 1
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
+		group, scope, err := resolveResource(ctx, tx, s.repoID, itemID, co.resourceScope)
+		if err != nil {
+			return err
+		}
+		blockers, err := resourceBlockers(ctx, tx, s.repoID, itemID, group, scope)
+		if err != nil {
+			return err
+		}
+		for _, b := range blockers {
+			if b.AgentID == agentID {
+				return ErrAlreadyHeld
+			}
+		}
+		if len(blockers) > 0 {
+			if group == "" {
+				return ErrClaimTaken
+			}
+			return &ResourceConflictError{Blockers: blockers}
+		}
+
 		if len(conflictPaths) > 0 {
 			placeholders := make([]string, 0, len(conflictPaths))
 			args := []any{s.repoID, itemID}
@@ -116,15 +137,25 @@ LIMIT 1`
 				return fmt.Errorf("conflicts_with check: %w", err)
 			}
 		}
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO claims (repo_id, item_id, agent_id, claimed_at, last_touch, intent, long, worktree)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, s.repoID, itemID, agentID, now, now, intent, longVal, co.worktreePath)
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO claims (repo_id, item_id, agent_id, claimed_at, last_touch, intent, long, worktree, resource_group, resource_scope)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, s.repoID, itemID, agentID, now, now, intent, longVal, co.worktreePath, group, scope)
 		if err != nil {
 			if isUniqueViolation(err) {
 				return ErrClaimTaken
 			}
 			return fmt.Errorf("insert claim: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM claim_waits WHERE repo_id=? AND agent_id=? AND item_id=?`, s.repoID, agentID, itemID); err != nil {
+			return err
+		}
+		cycle, err := deadlockCycle(ctx, tx, s.repoID, s.nowUnix())
+		if err != nil {
+			return err
+		}
+		if len(cycle) > 0 {
+			return &DeadlockError{Cycle: cycle}
 		}
 		for _, p := range touches {
 			p = strings.TrimSpace(p)
