@@ -50,6 +50,22 @@ class ContextPackageTests(unittest.TestCase):
         with self.assertRaises(module.ValidationError):
             module.validate(document, schema)
 
+    def test_design_reference_is_bounded_and_requires_ready_revision(self):
+        module = load_module()
+        document = json.loads(ASSIGNMENT.read_text())
+        schema = json.loads((ROOT / "schemas" / "assignment-envelope.schema.json").read_text())
+        document["design_admission"] = {"section": "Design / admission", "revision": "d2", "status": "READY"}
+        module.validate(document, schema)
+        self.assertLessEqual(len(json.dumps(document).encode()), 2048)
+        for invalid in (
+            {"section": "Design / admission", "status": "READY"},
+            {"section": "Design / admission", "revision": "d2", "status": "needs-decision"},
+            {"section": "Design / admission", "revision": "", "status": "READY"},
+        ):
+            document["design_admission"] = invalid
+            with self.assertRaises(module.ValidationError):
+                module.validate(document, schema)
+
     def test_checkpoint_must_match_assignment(self):
         checkpoint = json.loads(
             (ROOT / "examples" / "checkpoint.studio-worker.json").read_text()

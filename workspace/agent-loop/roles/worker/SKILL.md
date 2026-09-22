@@ -17,7 +17,11 @@ Read, in order:
    missing reservation generation, mismatched role/profile, or ambiguous
    authorization boundary.
 2. The workspace `AGENTS.md`, then the assigned repository's `AGENTS.md`.
-3. The canonical Issue and only the dependency records named by it.
+3. The canonical Issue and only the dependency records named by it. For new
+   Dispatcher assignments, verify the assigned design-section locator and READY
+   revision before product edits. A stale/missing decision is an admission
+   blocker, not permission to invent the product behavior. Older active
+   assignments are not automatically restarted by this contract change.
 4. The selected project profile. Load only the references for the current phase.
 
 Do not begin with a recursive workspace scan, full repository documentation,
@@ -35,6 +39,12 @@ startup receipt separate from ownership and release evidence.
 
 - Own one Issue and one implementation attempt. Never discover or start the next
   Issue.
+- Keep product naming, entry points, scope, compatibility and cross-Issue
+  behavior aligned with the admitted Issue design revision. Send the Dispatcher
+  one bounded decision request when those need to change, with evidence and
+  affected scope; continue independent authorized work. Routine implementation
+  choices remain yours. Record an accepted new revision without discarding
+  valid work.
 - Treat the Issue's stable acceptance criteria and decisions as authoritative.
   Report contradictions or missing safety-critical scope; do not repair them by
   guessing from chat history.

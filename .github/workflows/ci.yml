@@ -26,6 +26,11 @@ jobs:
           python-version: "3.12"
       - name: test optional session entrypoint without model calls
         run: python3 -m unittest discover -s workspace/agent-loop/tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: test coordination skill guards
+        run: node --test workspace/coordination-skills/studio-issue-worker/scripts/*.test.mjs
       - run: go vet ./...
       - run: go test -race ./...
         env:
