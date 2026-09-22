@@ -79,6 +79,39 @@ After two no-progress observations, or ten minutes of preparation without a
 credible completion estimate, diagnose the current stage once before retrying.
 Preserve useful work and do not relax required criteria to manufacture progress.
 
+## Automated acceptance and human fallback
+
+The Worker owns authorized operation, verification and evidence collection,
+including component restarts, browser submission/replay and synthetic-fixture
+cleanup. Do not make the user run shell commands, paste DevTools scripts, relay
+outputs or notify another agent when available authorized tools can do that work.
+Check the actual capabilities before declaring an operation manual. Reuse an
+existing authenticated browser surface when authorized; otherwise prepare the
+browser and request only a genuinely user-only login/MFA step. Browser-managed
+same-origin authentication does not require exporting or inspecting cookies.
+Do not extract tokens, copy cookie values or bypass application authentication.
+Preserve the test key/payload and collect only sanitized acceptance receipts.
+
+Separate an operation from one implementation path. A deploy workflow that
+requires a new source revision is not automatically the mechanism for a
+same-revision restart. With existing authorization and the correct ENV claim,
+resolve the live target name/context and use a supported component-scoped path.
+A changed mechanism must still meet the governing project contract; never
+route around an actual permission denial or mutate a broader target. Verify
+restart using instance identity/start time, readiness and image identity;
+public health probes alone do not prove replacement. Check an operator-reported
+operation before repeating it. Retain valid rehearsal and release evidence;
+repeat only the checks invalidated by changed behavior or provenance.
+
+Escalate only a material product/scope decision, a verified external access or
+approval blocker, a user-only interaction, or an unsafe state requiring human
+direction. Report the exact blocked action, observed cause, bounded diagnosis,
+work already completed and the smallest human action needed. A failed command,
+missing executable or unfamiliar tool is not by itself proof of a human-only
+step. Resolve routine local setup within authority and continue independent
+work. Bundle known prerequisites into one request instead of serial permission
+questions; do not ask users to transport coordination messages.
+
 ## Accounting and completion
 
 At meaningful transitions record start/end, task/Issue/PR, revision, phase,

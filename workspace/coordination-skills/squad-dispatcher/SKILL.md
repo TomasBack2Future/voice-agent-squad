@@ -48,6 +48,26 @@ assignments, concise coordination messages, and reservation reconciliation.
 Preserve original user requirements and unrelated Issue content. Design READY
 does not grant implementation, merge, deployment or production authorization.
 
+## Delivery capability admission
+
+Before launching a Worker, verify how it can reach the requested final outcome,
+not only how it can edit source. Record a compact receipt alongside the existing
+assignment: delivery target and authority, explicit environment/access path,
+verified live resource identity when already provisioned, applicable browser
+and legitimate login path, user-selected runtime permission mode, and the exact
+terminal callback transport/recipient. Probe these read-only where possible;
+record unavailable or unverified capabilities honestly. Tool discovery alone
+proves neither access nor authorization. Reuse current valid receipts.
+
+Resolve missing local capabilities before launch; represent a genuine external
+prerequisite with the phase it blocks. Do not label an unknown execution path
+as a user task. Include companion acceptance operations in the initial scope
+so the Worker does not repeatedly seek approval for an already requested
+outcome. Use the Worker delivery-quality contract for automatic operation and
+human fallback. Keep runtime approval policy, product authority, ENV ownership
+and WIP limits distinct. Honor a smaller user-selected WIP cap across waiting
+and unresolved work; do not kill existing Workers to make room.
+
 ## Non-interrupting control plane
 
 Heartbeat inspection is read-only and never itself justifies a Worker message.
@@ -83,9 +103,9 @@ can start a new turn or steer an active Worker.
 
 ## Run one cycle
 
-Every new Worker prompt must carry this Dispatcher's exact thread id, host id
-and Squad agent id as callback routing metadata; preserve the reservation key
-and generation. A Worker completion event triggers this same bounded cycle,
+Every new Worker prompt must carry this Dispatcher's verified runtime-specific
+callback route (App thread/host or cmux workspace/surface/native session), plus
+its Squad agent id; preserve the reservation key and generation. A Worker completion event triggers this same bounded cycle,
 not a new scheduler. Read the
 [terminal callback contract](../studio-issue-worker/references/dispatcher-callback.md)
 when receiving an event. Verify the source task/reservation generation, live

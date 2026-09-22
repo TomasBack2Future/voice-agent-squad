@@ -30,8 +30,8 @@ Batch developers may end only through the explicit verified transfer below.
 At assignment and before ending, read
 [Dispatcher callback](references/dispatcher-callback.md). Record the originating
 Dispatcher identity; after durable closure, verified batch handoff, or a new
-terminal blocker, notify that exact Dispatcher once through the App task-message
-tool. Ledger messages alone do not wake its task. Never treat callback delivery
+terminal blocker, notify that exact Dispatcher once through the verified runtime
+transport (App task message or cmux). Ledger messages alone do not wake its task. Never treat callback delivery
 as acceptance or proven Worker termination.
 
 ## Design handoff
@@ -46,6 +46,11 @@ issue-local decision request with evidence and affected scope; continue useful
 independent work. On a revised decision, record the new revision and preserve
 valid work. Existing active assignments are not automatically cancelled or
 restarted merely because they predate this contract.
+
+Use [automated acceptance and human fallback](references/delivery-quality.md#automated-acceptance-and-human-fallback)
+when deciding who executes acceptance steps. Shell commands, browser replay,
+result capture and terminal notification are Worker responsibilities whenever
+available authorized tools support them.
 
 ## Standing authorization
 
