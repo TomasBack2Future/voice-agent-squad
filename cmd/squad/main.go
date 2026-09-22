@@ -94,6 +94,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newInstallPluginCmd())
 	root.AddCommand(newInstallHooksCmd())
 	root.AddCommand(newListenCmd())
+	root.AddCommand(newTerminalEventsCmd())
 	root.AddCommand(newNotifyCleanupCmd())
 	root.AddCommand(newMailboxCmd())
 	root.AddCommand(newPRCmd())

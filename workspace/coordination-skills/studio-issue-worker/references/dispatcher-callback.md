@@ -76,6 +76,24 @@ generated on each attempt.
    A send success is transport acceptance, not proof that dispatch finished.
    Durable persistence alone is not `callback-sent`.
 
+## Installed Squad terminal receiver
+
+When the Dispatcher advertises `squad-terminal-receiver-v1`, write the stable
+`worker-terminal-v1/...` event id and sanitized payload on the canonical item
+thread using Squad as the Worker actor. The referenced outcome message must be
+on that same thread by that actor; reservation generation and native Worker id
+must match. The installed receiver discovers these durable records, including
+legacy callback-intent/pending records, without requiring a Worker restart.
+Persistence is `pending`; only a receiver receipt proves delivery. Never invent
+`callback-sent` from a successful `say`. No additional cmux callback is needed.
+
+The recipient must acknowledge each event with `squad terminal-events ack
+<event-id> --note <reconciliation-reference>` using its own identity and the
+selected coordination ledger, only after the bounded reconciliation. Duplicate
+or resumed delivery rechecks existing state and must not repeat a dispatch.
+Delivery does not mean processed, and acknowledgement never closes reservations
+or releases claims. A stale generation/owner/binding cannot be acknowledged.
+
 ## Payload
 
 Include only sanitized identifiers and evidence pointers, no logs, credentials,

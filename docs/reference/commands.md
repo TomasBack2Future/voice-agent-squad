@@ -862,3 +862,34 @@ squad version
 
 MCP equivalents are `squad_resources_define` with `definitions`, and `squad_claim`
 with optional `scope`. MCP claims remain immediate; blocking wait is a CLI facility.
+
+## `squad terminal-events`
+
+`terminal-events listen --delivery-session <incarnation> --max 23h` waits on a
+loopback notification endpoint with a 15-second durable catch-up check. It emits
+up to 16 event pointers as JSON, never terminal keystrokes or sender instructions.
+The session-owned Python hook in `workspace/agent-loop/terminal_receiver.py`
+turns that receipt into a native Claude asyncRewake reminder. Its generated
+settings use SessionStart/PostToolUse/Stop events, an asyncRewake field, absolute
+exec arguments, one file lock per native session, and PID/incarnation fencing.
+Use an explicit absolute Squad executable and ledger working directory. Plain
+mailbox hooks are not substitutes for idle wakeup or a processing receipt.
+
+`terminal-events ack <event-id> --note <reconciliation-reference>` (MCP:
+`squad_terminal_events_ack`, fields `event_id`, `note`, optional `agent_id`)
+records processing after recipient reconciliation. It is idempotent for the same
+note, owner-scoped and generation/binding-fenced. It never closes a reservation,
+releases claims or creates work. Pending discovery only accepts same-author,
+same-thread outcome references for the recipient's current dispatched
+reservation. Historical completed reservations are not imported on installation.
+
+Migration 018 adds `terminal_event_receipts`; original messages/read cursors are
+unchanged. Delivery records are separate from processing. An unacknowledged
+event is eligible again on a new receiver incarnation or after two minutes.
+Native receiver output loss is therefore recoverable; processing side effects
+must remain idempotent. Expired or changed reservation generations cannot be
+delivered. The receiver expires after its configured lifetime and emits a health
+reminder; the next hook re-arms it. Other receiver failures report once per
+incarnation and need repair plus a new incarnation, rather than a wakeup loop.
+Do not claim the wake channel is healthy just because configuration exists:
+validate actual native wakeup, draft preservation, replay and acknowledgement.

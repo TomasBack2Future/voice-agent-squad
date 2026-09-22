@@ -115,3 +115,16 @@ Never send routine progress questions, acknowledgements or resource-wait
 reminders. Verify the title/IDs immediately before sending and read the screen
 once afterward. Durable decisions and outcomes belong in Squad/checkpoints, not
 only in terminal scrollback.
+
+## Native event receiver
+
+A Claude Dispatcher may use the package's `terminal_receiver.py` with a
+session-specific config and `--settings` file. The launcher pins absolute binary,
+ledger and Python paths, native session id, recipient, owner PID, state directory
+and a fresh incarnation on every start/resume. `--write-settings` generates
+SessionStart/PostToolUse/Stop command hooks with `asyncRewake: true`; it is a
+hook field, not an event name. The helper owns one locked receiver per session,
+terminates an old incarnation, and never accesses terminal input. Validate one
+real idle wake and acknowledgement before declaring this transport available.
+Preserve user-selected permission mode and native id on a cutover; do not restart
+an active Worker to install a Dispatcher receiver.

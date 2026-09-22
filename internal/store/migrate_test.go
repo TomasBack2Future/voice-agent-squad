@@ -283,8 +283,8 @@ func TestMigrate_BootstrapsLegacyDBWithoutIntakeColumns(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 17 {
-		t.Fatalf("want version 17 after bootstrap; got %d", maxV)
+	if maxV != 18 {
+		t.Fatalf("want version 18 after bootstrap; got %d", maxV)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestMigrate_BootstrapPreservesWorktreeAndSeedsAllVersions(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM migration_versions`).Scan(&rows); err != nil {
 		t.Fatalf("count migration_versions: %v", err)
 	}
-	if rows != 17 {
-		t.Errorf("migration_versions row count = %d, want 17 (bootstrap missed markers)", rows)
+	if rows != 18 {
+		t.Errorf("migration_versions row count = %d, want 18 (bootstrap missed markers)", rows)
 	}
 }
 
@@ -633,8 +633,8 @@ func TestMigrate_IntakeInterviewIdempotent_From008(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 17 {
-		t.Fatalf("want max version 17 after 008→017 upgrade; got %d", maxV)
+	if maxV != 18 {
+		t.Fatalf("want max version 18 after 008→018 upgrade; got %d", maxV)
 	}
 }
 
