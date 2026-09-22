@@ -2,8 +2,10 @@
 
 Every dispatched Worker prompt must be self-contained and contain:
 
-- exact callback routing: `dispatcher_thread_id`, `dispatcher_host_id`,
-  `dispatcher_agent_id`, plus the existing reservation key/generation; require
+- runtime-tagged callback routing: actual App thread/host ids or cmux
+  workspace/surface/native session ids, `dispatcher_agent_id`, plus the existing
+  reservation key/generation; verify the selected transport, never pass a native
+  Claude UUID to an App thread API; require
   the Worker to record them and read the maintained
   `studio-issue-worker/references/dispatcher-callback.md`. After durable closure,
   accepted batch transfer or a new terminal blocker, send one deduplicated
@@ -11,6 +13,14 @@ Every dispatched Worker prompt must be self-contained and contain:
   Worker or a guessed task. No callback for routine progress/resource waiting;
   delivery failure falls back to the durable ledger/heartbeat, not a retry loop;
 
+- the compact delivery-capability receipt: explicit target/authority, actual
+  environment access path and live resource identity when available, applicable
+  browser/login path, user-selected effective permission mode and callback
+  route; distinguish verified, external prerequisite and not-yet-checked;
+- ownership of authorized restart, browser replay and evidence collection:
+  no manual shell/DevTools/output-relay chores when available tools support
+  execution. Escalate only the concrete user-only interaction or verified
+  decision/access blocker using the delivery-quality contract;
 - “Invoke `$studio-issue-worker` and process exactly one Issue.”
 - repository, canonical GitHub Issue URL/reference, canonical Squad item id,
   dispatch reservation key, and reservation generation;
