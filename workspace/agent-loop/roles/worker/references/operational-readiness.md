@@ -25,6 +25,24 @@ or publishing; it cannot prove permission to write a Check. If the installed
 binary lacks this capability, report that limitation; do not assume a global
 doctor proves repository access or install a binary implicitly.
 
+## Execution capability and autonomy
+
+The startup receipt above verifies local files/tools only. Before the affected
+phase, separately verify actual environment access, target identity, browser
+execution/login availability, selected runtime permission mode and a supported
+Dispatcher notification route. Do not claim these passed from executable
+presence. Resolve routine local gaps within authority; record external gaps
+with the exact phase they block.
+
+Own authorized commands, browser interactions and result capture. Do not
+assign shell/DevTools execution or agent-to-agent message delivery to the user
+when supported tools can perform it. A user-only login/MFA interaction may be
+necessary; browser-managed authentication is compatible with never exporting
+cookies/tokens. A failure of one workflow is not proof that the operation must
+be manual. Check another documented authorized mechanism, without bypassing
+an approval denial or expanding scope. Escalate a concrete missing decision or
+access prerequisite once, with evidence and the smallest human action needed.
+
 ## One shared blocker, one repair owner
 
 When a shared CI, release or contract failure blocks the item, read its existing
