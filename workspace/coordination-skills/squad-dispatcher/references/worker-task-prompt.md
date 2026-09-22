@@ -53,6 +53,11 @@ Every dispatched Worker prompt must be self-contained and contain:
   valid findings on a substantive new head, and record evidence for invalid
   findings without approval-shopping;
 - a requirement to keep the Issue claim through final staging verification;
+- a requirement to select ENV resources by component and operation from the project
+  profile, preserving ENV-001/002 legacy calls; narrow Studio scope and independent
+  Importer/Feedback resources require the installed resource policy. Acquire a
+  cross-service set in lexicographic ID order; a deadlock is not permission to
+  release another task's claim;
 - a requirement to acquire the assigned staging ENV only after PR readiness;
   ENV-002/production requires an explicitly assigned production task. Release
   ENV only after verified safe acceptance or recovery, never while unsafe;

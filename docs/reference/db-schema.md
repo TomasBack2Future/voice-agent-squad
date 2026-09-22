@@ -260,3 +260,13 @@ This is an audit table — it never blocks the user (cap-exceeded claims are rej
 ## Why no migrations directory yet
 
 The schema is small and forward-compatible: every column added so far has been to a new table or a new column with a default. `CREATE TABLE IF NOT EXISTS ... CREATE INDEX IF NOT EXISTS ...` is replayed at every startup, which is idempotent for additions. Column adds against existing tables run as `ALTER TABLE ... ADD COLUMN` in `internal/store/store.go::additiveAlters` after the schema apply, with `duplicate column name` errors swallowed for idempotence. When a destructive change is needed (column drop, type change), a numbered `internal/store/migrations/` directory will land alongside it.
+
+## Resource scopes (migration 016)
+
+`resource_definitions` stores per-repository item/group/default/service policy.
+`claims` and `claim_history` gain resource_group/resource_scope snapshot columns.
+Insert guards enforce legacy/scoped conflicts even when clients omit new columns;
+after-insert triggers fill legacy ownership/history snapshots. Existing rows are
+unchanged until explicit idle policy adoption. `claim_waits` stores leased
+agent/item/scope requests by repository and wait ID; expired entries are excluded
+from the wait graph, never used to reclaim ownership. Keep triggers on rollback.

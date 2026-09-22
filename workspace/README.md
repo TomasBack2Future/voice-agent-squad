@@ -58,3 +58,10 @@ preserves old assignments. Schema validation checks only shape; the Dispatcher
 and Worker must verify the current Issue and evidence. No database admission
 field or automatic runtime enforcement is claimed. Existing sessions are not
 restarted; only verified actual scope conflicts warrant a targeted correction.
+
+## Environment resource policy
+
+[Resource adoption](resources/README.md) preserves ENV-001/002 legacy calls and
+adds independent Importer/Feedback resource templates. Install the tested runtime
+and register the policy only under a separately authorized, idle-ledger migration.
+Source edits or skill synchronization alone do not change live lock behavior.

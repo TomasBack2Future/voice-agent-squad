@@ -25,7 +25,18 @@ never secret values. Do not keep rediscovering access on every operation.
 
 ## Merge and deployment gate
 
-Before claiming `ENV-001`, require the exact PR head to be based on latest
+Select resources by the deployed component and operation. Preserve `ENV-001`
+and `ENV-002`: after the scoped resource policy and runtime are installed, use
+`--scope studio` for Studio-only work. Omitted scope retains legacy whole-environment
+coverage. Independent Importer/Feedback changes use their dedicated resource IDs
+from the project profile; ordinary Studio API calls do not add a Studio lock.
+A frontend feedback change is still Studio work. Cross-service exact-revision
+acceptance acquires all required resources in lexicographic item-ID order. Never
+upgrade a held scope, wait on your own overlapping claim, or release an unsafe
+operation to resolve a deadlock. On a detected cycle, stop the new wait and report
+the chain. Stopped-holder recovery remains fenced.
+
+Before claiming the selected staging resource, require the exact PR head to be based on latest
 `main`, mergeable, and green. Re-read those facts and current staging after the
 claim succeeds.
 

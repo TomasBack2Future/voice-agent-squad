@@ -33,9 +33,9 @@ func (s *Store) releaseInTx(ctx context.Context, tx *sql.Tx, itemID, agentID, ou
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO claim_history (repo_id, item_id, agent_id, claimed_at, released_at, outcome)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, s.repoID, itemID, agentID, claimedAt, now, outcome); err != nil {
+		INSERT INTO claim_history (repo_id, item_id, agent_id, claimed_at, released_at, outcome, resource_group, resource_scope)
+		SELECT repo_id,item_id,agent_id,claimed_at,?,?,resource_group,resource_scope FROM claims WHERE repo_id=? AND item_id=?
+	`, now, outcome, s.repoID, itemID); err != nil {
 		return fmt.Errorf("history insert: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM claims WHERE repo_id=? AND item_id=?`, s.repoID, itemID); err != nil {

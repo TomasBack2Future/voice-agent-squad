@@ -240,6 +240,11 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 	if hasDispatchCanonicalItem > 0 {
 		legacy = append(legacy, legacyRow{15, "dispatch_canonical_item"})
 	}
+	var hasResourceDefinitions int
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='resource_definitions'`).Scan(&hasResourceDefinitions)
+	if hasResourceDefinitions > 0 {
+		legacy = append(legacy, legacyRow{16, "resource_scopes"})
+	}
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

@@ -7,10 +7,12 @@ package hygiene
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/zsiec/squad/internal/claims"
 	"github.com/zsiec/squad/internal/store"
 )
 
@@ -85,6 +87,13 @@ func (sw *Sweeper) nowUnix() int64 { return sw.now().Unix() }
 
 func (sw *Sweeper) Sweep(ctx context.Context) ([]Finding, error) {
 	var findings []Finding
+	cycle, err := claims.New(sw.db, sw.repoID, sw.now).Deadlock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(cycle) > 0 {
+		findings = append(findings, Finding{Severity: SeverityError, Code: "claim_deadlock", Message: fmt.Sprintf("claim wait cycle: %v", cycle), Fix: "Cancel a waiting request; never auto-release protected ownership. Revalidate external operations before recovery."})
+	}
 	now := sw.nowUnix()
 
 	rows, err := sw.db.QueryContext(ctx, `

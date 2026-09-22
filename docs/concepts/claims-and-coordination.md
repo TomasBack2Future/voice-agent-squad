@@ -154,3 +154,34 @@ The `--worktree` flag is opt-in for this ship. Solo flows are unaffected — the
 ## See also
 
 - [squad-vs-agent-teams.md](squad-vs-agent-teams.md) — claim semantics compared to agent-teams' file-locked tasks.
+
+## Opt-in resource scopes and deadlock checks
+
+A ledger can register protected resource definitions through
+`squad resources define policy.json` or MCP `squad_resources_define`. Definitions
+map item IDs to a group, default coverage and a permitted service scope. The
+[Studio adoption policy](../../workspace/resources/README.md) keeps ENV-001/002
+and their legacy broad coverage while adding independent service resources.
+
+`claim --scope SERVICE` (MCP `scope`) narrows only a registered service. Empty
+scope uses the registered default; `*` covers the group. Same item IDs remain
+exclusive, and claims conflict when group coverage overlaps. The accepted scope
+is stored with ownership and history, retained through fenced recovery, and never
+reinterpreted from changed policy. Policy updates require affected claims/waiters
+to be idle. SQLite triggers enforce insert conflicts for older clients too.
+
+`claim --wait` records its request with a 30-second lease renewed at most every
+10 seconds, even with notification fallback disabled. The atomic registration
+rejects a wait-for cycle and reports its agent/request/blocker chain. Granting a
+claim checks the graph again. Repeated acquisition of an overlapping owned claim
+fails immediately. Release notifications wake related waiters; notification loss
+or non-CLI releases are recovered by bounded rechecks. Cancellation removes the
+wait record; a crashed wait's lease expires without releasing any held claim.
+`squad doctor` reports live wait cycles, including those introduced by older
+clients. It never resolves a cycle by deleting protected ownership. Old binaries
+cannot record waits and therefore cannot provide full deadlock detection; upgrade
+active clients before enabling scoped automation.
+
+Scope policy does not confer deployment authority and is local to one ledger.
+Use a consistent ordering for multi-resource acquisition; no automatic scope
+upgrade, multi-item atomic acquisition or shared read-lock protocol is provided.

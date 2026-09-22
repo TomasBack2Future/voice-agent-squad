@@ -50,7 +50,19 @@
     "staging": "ENV-001",
     "production": "ENV-002",
     "cluster_selection": "explicit kubeconfig and context; never a shell nickname",
-    "production_default": "forbidden unless the assignment explicitly sets production=true"
+    "production_default": "forbidden unless the assignment explicitly sets production=true",
+    "studio_scope": "studio",
+    "policy": "workspace/resources/studio.json",
+    "importer": {
+      "staging": "ENV-003",
+      "production": "ENV-004"
+    },
+    "feedback": {
+      "staging": "ENV-005",
+      "production": "ENV-006"
+    },
+    "scope_activation": "Use narrow scopes only after the selected ledger policy and runtime are installed; old calls retain legacy coverage.",
+    "acquisition_order": "lexicographic item ID; no in-place scope upgrades"
   },
   "risk_probes": [
     "For new deployed components, exercise first publication without a prior image, unchanged-source revision stamping, and rollback tool-cache miss; check image, Secret and storage prerequisites before the environment lock.",

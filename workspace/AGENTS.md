@@ -68,3 +68,14 @@ from one versioned source. Do not use Data Analyze skills for new work.
 
 The old `studio-staging-sls-logs` name is a migration alias only. New references
 use `studio-sls-logs` for both staging and production.
+
+## Scoped environment resources
+
+Preserve ENV-001/002 and existing claims. After explicit adoption of the versioned
+`resources/studio.json` policy, Studio-only claims use `--scope studio` and
+independent Importer/Feedback operations use their own environment items. Omitted
+scope keeps legacy broad coverage. Ordinary Studio API traffic does not require a
+Studio deployment lock. Cross-service acceptance acquires all required resources
+in lexicographic item-ID order. Never bypass a detected cycle or automatically
+release protected ownership. Installing policy or migrating active tasks is a
+separate operation from editing source.

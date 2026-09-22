@@ -1,0 +1,8 @@
+[
+  {"item_id":"ENV-001","group":"studio-staging","default_scope":"*","service_scope":"studio"},
+  {"item_id":"ENV-002","group":"studio-production","default_scope":"*","service_scope":"studio"},
+  {"item_id":"ENV-003","group":"studio-staging","default_scope":"importer","service_scope":"importer"},
+  {"item_id":"ENV-004","group":"studio-production","default_scope":"importer","service_scope":"importer"},
+  {"item_id":"ENV-005","group":"studio-staging","default_scope":"feedback","service_scope":"feedback"},
+  {"item_id":"ENV-006","group":"studio-production","default_scope":"feedback","service_scope":"feedback"}
+]

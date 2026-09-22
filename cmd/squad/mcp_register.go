@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/zsiec/squad/internal/claims"
 	"github.com/zsiec/squad/internal/config"
 	"github.com/zsiec/squad/internal/identity"
 	"github.com/zsiec/squad/internal/items"
 	"github.com/zsiec/squad/internal/mcp"
+	"github.com/zsiec/squad/internal/notify"
 )
 
 // errNoRepo is returned by per-repo handlers when MCP was started outside a
@@ -151,12 +153,33 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 	})
 
 	srv.Register(mcp.Tool{
+		Name:        "squad_resources_define",
+		Description: "Register ledger-owned environment resource scopes atomically. Requires idle affected claims and waiters; does not migrate active ownership.",
+		InputSchema: json.RawMessage(schemaResourcesDefine),
+		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+			var args struct {
+				Definitions []claims.ResourceDefinition `json:"definitions"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return nil, err
+			}
+			if err := requireRepo(repoRoot, repoID); err != nil {
+				return nil, err
+			}
+			if err := claims.New(db, repoID, nil).DefineResources(ctx, args.Definitions); err != nil {
+				return nil, err
+			}
+			return map[string]int{"registered": len(args.Definitions)}, nil
+		},
+	})
+	srv.Register(mcp.Tool{
 		Name:        "squad_claim",
 		Description: "Atomically claim an item by ID for the current agent. Fails if another agent holds it.",
 		InputSchema: json.RawMessage(schemaClaim),
 		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var args struct {
 				ItemID  string   `json:"item_id"`
+				Scope   string   `json:"scope"`
 				Intent  string   `json:"intent"`
 				AgentID string   `json:"agent_id"`
 				Touches []string `json:"touches"`
@@ -178,6 +201,7 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 				AgentID:        agent,
 				ItemID:         args.ItemID,
 				Intent:         args.Intent,
+				Scope:          args.Scope,
 				Touches:        args.Touches,
 				Long:           args.Long,
 				ItemsDir:       itemsDirOf(repoRoot),
@@ -227,6 +251,9 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 			return Release(ctx, ReleaseArgs{
 				DB: db, RepoID: repoID, AgentID: agent,
 				ItemID: args.ItemID, Outcome: args.Outcome,
+				NotifyWaiters: func(ctx context.Context, itemID string) {
+					notifyClaimWaiters(ctx, notify.NewRegistry(db), repoID, itemID)
+				},
 			})
 		},
 	})

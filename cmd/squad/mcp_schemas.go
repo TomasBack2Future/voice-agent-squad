@@ -9,6 +9,7 @@ const schemaClaim = `{
     "intent":   {"type": "string", "description": "One sentence describing what you intend to ship."},
     "agent_id": {"type": "string", "description": "Caller agent identifier. Defaults to the registered agent for this session."},
     "touches":  {"type": "array", "items": {"type": "string"}, "description": "File paths the agent intends to modify."},
+    "scope": {"type": "string", "description": "Registered resource service scope; omitted retains legacy coverage."},
     "long":     {"type": "boolean", "description": "Use the long-running stale-claim threshold (2h)."}
   },
   "additionalProperties": false
@@ -579,4 +580,14 @@ const schemaIntakeCommit = `{
     "ready":      {"type": "boolean", "description": "If true, items land as open instead of captured."}
   },
   "additionalProperties": false
+}`
+
+const schemaResourcesDefine = `{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "type":"object","required":["definitions"],"additionalProperties":false,
+ "properties":{"definitions":{"type":"array","minItems":1,"items":{
+ "type":"object","additionalProperties":false,
+ "required":["item_id","group","default_scope","service_scope"],
+ "properties":{"item_id":{"type":"string"},"group":{"type":"string"},"default_scope":{"type":"string"},"service_scope":{"type":"string"}}
+ }}}
 }`

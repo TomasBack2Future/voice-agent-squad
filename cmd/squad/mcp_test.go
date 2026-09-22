@@ -1069,3 +1069,29 @@ func TestMCP_StandupEmptyWindow(t *testing.T) {
 		t.Errorf("expected empty closed in tiny window; got %+v", resp.Result.StructuredContent.Closed)
 	}
 }
+
+func TestMCP_ResourceScopeRoundTrip(t *testing.T) {
+	env := newTestEnv(t)
+	mustWriteItem(t, env.Root, "ENV-002", "production")
+	mustWriteItem(t, env.Root, "ENV-004", "importer")
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n" +
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"squad_resources_define","arguments":{"definitions":[{"item_id":"ENV-002","group":"production","default_scope":"*","service_scope":"studio"},{"item_id":"ENV-004","group":"production","default_scope":"importer","service_scope":"importer"}]}}}` + "\n" +
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"squad_claim","arguments":{"item_id":"ENV-002","intent":"studio only","scope":"studio","agent_id":"agent-studio"}}}` + "\n" +
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"squad_claim","arguments":{"item_id":"ENV-004","intent":"importer only","agent_id":"agent-importer"}}}` + "\n")
+	var out bytes.Buffer
+	if err := runMCP(context.Background(), env.DB, env.RepoID, env.Root, in, &out); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := env.DB.QueryRow(`SELECT count(*) FROM claims WHERE repo_id=?`, env.RepoID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("independent claims=%d response=%s", n, out.String())
+	}
+	var scope string
+	_ = env.DB.QueryRow(`SELECT resource_scope FROM claims WHERE item_id='ENV-002'`).Scan(&scope)
+	if scope != "studio" {
+		t.Fatalf("scope=%s", scope)
+	}
+}
