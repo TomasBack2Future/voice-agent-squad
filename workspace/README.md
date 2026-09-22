@@ -33,3 +33,28 @@ directories, user WIP/stashes, installed tool and skill paths, external tool con
 directory alone changes none of those references. Coordinate active owners
 before switching/removing their checkout. The local migration audit is separate
 from this portable documentation template.
+
+## Maintained coordination skills
+
+`coordination-skills/squad-dispatcher` and `coordination-skills/studio-issue-worker`
+are the canonical sources of the existing machine-level coordination skills.
+They preserve the established delivery references and scripts. Install them as
+one commit-pinned package so sibling references resolve; user skill entries are
+links or generated installs, never independently maintained copies.
+
+The Dispatcher owns product/design admission in the canonical Issue before a
+new implementation assignment. It checks product consistency, related Issue
+conflicts, scope/compatibility and observable acceptance. Investigator is used
+only for missing facts; no separate Designer stage is introduced. The detailed
+contract is [design admission](coordination-skills/squad-dispatcher/references/design-admission.md).
+Issue editing is allowed only for the scoped decision and necessary corrections;
+implementation, ENV ownership, merge, deployment and closure remain outside the
+Dispatcher role. Workspace transport and authorization policies still apply.
+
+Both the Studio Worker and portable Agent Loop Worker consume the Issue section
+and revision. The v1 envelope accepts an optional `design_admission` object with
+`section`, `revision` and `status: READY`; new dispatches must supply it. Optionality
+preserves old assignments. Schema validation checks only shape; the Dispatcher
+and Worker must verify the current Issue and evidence. No database admission
+field or automatic runtime enforcement is claimed. Existing sessions are not
+restarted; only verified actual scope conflicts warrant a targeted correction.

@@ -1,0 +1,24 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {auditBatch} from './check-batch-state.mjs';
+const head='a'.repeat(40);
+function state(){return {batch:'b1',primary:'BATCH-1',owner:'release',tasks:[{id:'release',batch:'b1',role:'integration-release',terminal:false,claims:['BATCH-1']}],reservations:[{source:'issue:794',generation:1,task:'dev',active:true}],children:[{id:'794',source:'issue:794',generation:1,state:'integrated',hold:true,claimant:null,events:{offer:{seq:1,head},ack:{seq:2,head,owner:'release'},release:{seq:3,head},receipt:{seq:4,head,owner:'release'}}}]};}
+test('accepted developer transfer releases WIP without losing duplicate tombstone',()=>{const s=state();s.tasks.push({id:'dev',role:'developer',batch:'b1',terminal:true,claims:[]});assert.deepEqual(auditBatch(s).errors,[]);s.children[0].proposedDispatch=true;s.proposedAction='dispatch';s.ready=s.ciDemonstrated=s.policyCurrent=true;assert(auditBatch(s).errors.includes('dispatch-hold'));});
+test('partial release, stale SHA and second writer fail closed',()=>{for(const change of [s=>delete s.children[0].events.receipt,s=>s.children[0].events.receipt.head='b'.repeat(40),s=>{s.children[0].claimant='dev';s.children[0].proposedWriter='release';}]){const s=state();change(s);assert(auditBatch(s).errors.length>0);}});
+test('paused tasks count and cannot be replaced by unbound reservations',()=>{const s=state();for(let i=0;i<4;i++)s.tasks.push({id:`paused-${i}`,terminal:false,paused:true,claims:[]});s.reservations.push({source:'new',active:true});assert(auditBatch(s).errors.includes('global-wip'));});
+test('two developers maximum, primary plus ENV only, no developer ENV',()=>{const s=state();for(let i=0;i<3;i++)s.tasks.push({id:`dev-${i}`,batch:'b1',role:'developer',terminal:false,claims:i?[]:['ENV-001']});assert(auditBatch(s).errors.includes('development-limit'));assert(auditBatch(s).errors.includes('developer-env'));s.tasks[0].claims.push('ENV-001','CHILD-1');assert(auditBatch(s).errors.includes('claim-limit'));});
+test('A14 uses implementation and evidence readiness without child closure',()=>{const s=state();s.proposedAction='a14';s.implementationsReady=s.priorEvidenceReady=true;assert.deepEqual(auditBatch(s).errors,[]);s.priorEvidenceReady=false;assert(auditBatch(s).errors.includes('a14-readiness'));});
+test('closure requires functional exact-SHA cleanup; generic green health is insufficient',()=>{const s=state();s.children[0].state='closed';s.acceptedSha=head;s.children[0].acceptance={sha:head,healthyUnmixed:true};assert(auditBatch(s).errors.includes('794:acceptance'));s.children[0].acceptance.functional=s.children[0].acceptance.cleanup=true;assert(auditBatch(s).errors.includes('794:log-evidence'));s.children[0].acceptance.logs={status:'verified',sha:head,evidence:'sanitized-query-window-and-selectors'};assert.deepEqual(auditBatch(s).errors,[]);});
+test('missing, pending, stale and unsupported log results cannot close an Issue',()=>{
+ for(const logs of [undefined,{status:'pending',reason:'empty query or denied access'},{status:'verified',sha:'b'.repeat(40),evidence:'old-window'},{status:'verified',sha:head,evidence:' '},{status:'clean',sha:head,evidence:'unknown-status'}]){
+  const s=state();s.children[0].state='closed';s.acceptedSha=head;s.children[0].acceptance={sha:head,functional:true,cleanup:true,healthyUnmixed:true,logs};
+  assert(auditBatch(s).errors.includes('794:log-evidence'));
+ }
+});
+test('not-applicable logs require both a reason and no affected structured-log path',()=>{
+ const s=state();s.children[0].state='closed';s.acceptedSha=head;
+ s.children[0].acceptance={sha:head,functional:true,cleanup:true,healthyUnmixed:true,logs:{status:'not-applicable',affectedStructuredLogPath:false,reason:'Docs-only contribution, no affected structured-log path'}};
+ assert.deepEqual(auditBatch(s).errors,[]);
+ s.children[0].acceptance.logs.affectedStructuredLogPath=true;assert(auditBatch(s).errors.includes('794:log-evidence'));
+ s.children[0].acceptance.logs.affectedStructuredLogPath=false;s.children[0].acceptance.logs.reason='';assert(auditBatch(s).errors.includes('794:log-evidence'));
+});
+test('integrated contribution remains open without staging logs; no independent deploy gate added',()=>{const s=state();assert.deepEqual(auditBatch(s).errors,[]);s.children[0].state='exact-SHA-accepted';assert(auditBatch(s).errors.includes('794:log-evidence'));});
+test('source-CI race, grouped artifact mismatch and sole runner deadlock block release',()=>{const s=state();s.proposedAction='release';s.tasks[0].claims.push('ENV-001');s.policyCurrent=s.ciGreen=s.reviewAuthorized=s.sourceTerminal=s.prefetchGrouped=true;assert.deepEqual(auditBatch(s).errors,[]);for(const flag of ['sourceTerminal','prefetchGrouped']){const c=structuredClone(s);c[flag]=false;assert(auditBatch(c).errors.includes('release-gate'));}s.runnerDeadlock=true;assert(auditBatch(s).errors.includes('release-gate'));});

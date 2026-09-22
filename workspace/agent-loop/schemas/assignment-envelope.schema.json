@@ -70,6 +70,17 @@
         "issue_close": {"type": "boolean"}
       }
     },
+    "design_admission": {
+      "description": "New dispatches require this reference; optional in v1 for existing assignments. Shape validation does not establish live Issue readiness.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["section", "revision", "status"],
+      "properties": {
+        "section": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "status": {"const": "READY"}
+      }
+    },
     "evidence_required": {
       "type": "array",
       "items": {"enum": ["test", "lint", "typecheck", "build", "review", "manual"]}
