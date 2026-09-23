@@ -11,6 +11,7 @@ import (
 
 	"github.com/zsiec/squad/internal/claims"
 	"github.com/zsiec/squad/internal/config"
+	"github.com/zsiec/squad/internal/dispatch"
 	"github.com/zsiec/squad/internal/identity"
 	"github.com/zsiec/squad/internal/items"
 	"github.com/zsiec/squad/internal/mcp"
@@ -150,6 +151,54 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 				return nil, err
 			}
 			return res, nil
+		},
+	})
+
+	srv.Register(mcp.Tool{
+		Name:        "squad_resources_check",
+		Description: "Read-only installed ENV item/scope admission. Reports contention without taking a claim.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"item":{"type":"string"},"scope":{"type":"string"},"require_policy":{"type":"boolean"}},"required":["item"],"additionalProperties":false}`),
+		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+			var a struct {
+				Item          string `json:"item"`
+				Scope         string `json:"scope"`
+				RequirePolicy bool   `json:"require_policy"`
+			}
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, err
+			}
+			if err := requireRepo(repoRoot, repoID); err != nil {
+				return nil, err
+			}
+			return claims.New(db, repoID, nil).CheckResource(ctx, a.Item, a.Scope, filepath.Join(repoRoot, ".squad/items"), filepath.Join(repoRoot, ".squad/done"), a.RequirePolicy)
+		},
+	})
+
+	srv.Register(mcp.Tool{
+		Name: "squad_dispatch_continue", Description: "Dispatcher-owned fenced continuation for the same Worker; old item released/done, new item held by same actor.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"reservation":{"type":"string"},"from_item":{"type":"string"},"item":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1}},"required":["reservation","from_item","item","worker_session","generation"],"additionalProperties":false}`),
+		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+			var a struct {
+				Reservation string `json:"reservation"`
+				From        string `json:"from_item"`
+				Item        string `json:"item"`
+				Worker      string `json:"worker_session"`
+				Generation  int64  `json:"generation"`
+			}
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, err
+			}
+			if err := requireRepo(repoRoot, repoID); err != nil {
+				return nil, err
+			}
+			actor, err := identity.AgentID()
+			if err != nil {
+				return nil, err
+			}
+			if findItemPath(filepath.Join(repoRoot, ".squad/done"), a.From) == "" || findItemPath(filepath.Join(repoRoot, ".squad/items"), a.Item) == "" {
+				return nil, fmt.Errorf("original must be done and continuation must exist in live items")
+			}
+			return dispatch.New(db, repoID, nil).Continue(ctx, a.Reservation, actor, a.From, a.Item, a.Worker, a.Generation)
 		},
 	})
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zsiec/squad/internal/dispatch"
 	"github.com/zsiec/squad/internal/store"
 )
 
@@ -324,5 +325,78 @@ func TestLegacyNullMessageMetadataDoesNotStopReceiver(t *testing.T) {
 	events, e := s.Pending(context.Background(), "fresh", 0)
 	if e != nil || len(events) != 2 {
 		t.Fatalf("legacy NULL disables receiver %v %v", events, e)
+	}
+}
+
+func TestContinuationRestoresDecisionRouteWithoutRelaxingCustody(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	_, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long,state,generation) VALUES('repo','NEXT','worker',3,3,'continuation',1,'held',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := dispatch.New(s.DB, "repo", nil)
+	for _, actor := range []string{"other"} {
+		if _, err = d.Continue(ctx, "DISPATCH-1", actor, "TASK", "NEXT", "worker-session", 1); err == nil {
+			t.Fatal("wrong dispatcher accepted")
+		}
+	}
+	if _, err = d.Continue(ctx, "DISPATCH-1", "dispatcher", "TASK", "NEXT", "wrong-session", 1); err == nil {
+		t.Fatal("wrong Worker accepted")
+	}
+	if _, err = d.Continue(ctx, "DISPATCH-1", "dispatcher", "TASK", "NEXT", "worker-session", 2); err == nil {
+		t.Fatal("stale generation accepted")
+	}
+	if _, err = d.Continue(ctx, "DISPATCH-1", "dispatcher", "TASK", "NEXT", "worker-session", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.Continue(ctx, "DISPATCH-1", "dispatcher", "TASK", "NEXT", "worker-session", 1); err == nil {
+		t.Fatal("stale from item accepted")
+	}
+	if _, err = s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "issue-closed", 1}); err == nil {
+		t.Fatal("old item event accepted")
+	}
+	_, err = s.DB.Exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(2,'repo',4,'worker','NEXT','ask','need decision','["dispatcher"]','normal'),(3,'repo',5,'dispatcher','NEXT','fyi','resolved','[]','normal')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-request", 2}); err != nil {
+		t.Fatal(err)
+	}
+	s.Recipient = "worker"
+	if _, err = s.Publish(ctx, "dispatcher", PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-resolved", 3}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestContinuationRejectsUnprovenCustody(t *testing.T) {
+	for _, mode := range []string{"different-actor", "original-held", "no-continuation"} {
+		t.Run(mode, func(t *testing.T) {
+			s := fixture(t)
+			ctx := context.Background()
+			if mode != "no-continuation" {
+				actor := "worker"
+				if mode == "different-actor" {
+					actor = "other"
+				}
+				_, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long,state,generation) VALUES('repo','NEXT',?,3,3,'continuation',1,'held',1)`, actor)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "original-held" {
+				_, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long,state,generation) VALUES('repo','TASK','worker',3,3,'old',1,'held',1)`)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := dispatch.New(s.DB, "repo", nil).Continue(ctx, "DISPATCH-1", "dispatcher", "TASK", "NEXT", "worker-session", 1); err == nil {
+				t.Fatal("unproven continuation accepted")
+			}
+			row, err := dispatch.New(s.DB, "repo", nil).Get(ctx, "DISPATCH-1")
+			if err != nil || row.CanonicalItemID != "TASK" {
+				t.Fatal("failed transition mutated reservation")
+			}
+		})
 	}
 }

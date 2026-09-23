@@ -68,6 +68,34 @@ human fallback. Keep runtime approval policy, product authority, ENV ownership
 and WIP limits distinct. Honor a smaller user-selected WIP cap across waiting
 and unresolved work; do not kill existing Workers to make room.
 
+## Live admission and continuation identity
+
+Before authorizing staging/production work, require the canonical launcher's
+`resources` receipts from the actual child executable and ledger. Package resource
+names are not installed capabilities. `resources check ENV-ID --require-policy`
+is read-only: missing item/policy or unsupported CLI blocks admission; reported
+holders are normal contention. Do not claim to test availability. If deliberately
+using a verified legacy broad resource, record its admission reference and exact
+`resource_overrides` in the separate launch config and Worker prompt; never
+silently substitute a lock or assert independent deployment scopes.
+
+A revised admission is not received merely because it was posted while a Worker
+was finishing. Reconcile its actual item/disposition before assigning more work.
+For a completed original item needing same-Worker continuation, create one explicit
+continuation and have that Worker claim it without environment writes first.
+Then use `dispatch continue KEY --from-item OLD --item NEW --worker-session UUID
+--generation N` as the reservation owner. The operation verifies released original,
+same-actor custody and exact reservation identity atomically; it also changes the
+canonical notification route. Verify the returned item before allowing writes.
+Do not replace this transition with a note, relax event custody, or create another
+Worker. An unsupported runtime is a capability gap, not permission to improvise.
+
+Each existing bounded reconciliation cycle also examines addressed blocking asks
+and recorded publish errors on explicitly mapped continuation threads. Reconcile
+an identity mismatch before relying on terminal wakeups, and do not acknowledge a
+request merely because publication failed. This is a fallback in the existing
+cycle, not a new polling process. Preserve reservations/WIP until verified outcome.
+
 ## Non-interrupting control plane
 
 Heartbeat inspection is read-only and never itself justifies a Worker message.

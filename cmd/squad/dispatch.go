@@ -12,7 +12,7 @@ import (
 
 func newDispatchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "dispatch", Short: "Manage durable Dispatcher-to-Worker reservations"}
-	cmd.AddCommand(newDispatchReserveCmd(), newDispatchAttachCmd(), newDispatchBindCmd(), newDispatchCloseCmd(), newDispatchListCmd())
+	cmd.AddCommand(newDispatchReserveCmd(), newDispatchAttachCmd(), newDispatchBindCmd(), newDispatchCloseCmd(), newDispatchListCmd(), newDispatchContinueCmd())
 	return cmd
 }
 
@@ -166,5 +166,33 @@ func newDispatchListCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&active, "active", false, "show only reserved or dispatched rows")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	return cmd
+}
+
+func newDispatchContinueCmd() *cobra.Command {
+	var from, to, worker string
+	var generation int64
+	cmd := &cobra.Command{Use: "continue <RESERVATION-KEY>", Short: "Fence same-Worker continuation item and event routing", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		if findItemPath(bc.doneDir, from) == "" || findItemPath(bc.itemsDir, to) == "" {
+			return fmt.Errorf("original must be done and continuation must exist in live items")
+		}
+		row, err := dispatch.New(bc.db, bc.repoID, nil).Continue(cmd.Context(), args[0], bc.agentID, from, to, worker, generation)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(row)
+	}}
+	cmd.Flags().StringVar(&from, "from-item", "", "expected completed item")
+	cmd.Flags().StringVar(&to, "item", "", "claimed continuation item")
+	cmd.Flags().StringVar(&worker, "worker-session", "", "expected native Worker session")
+	cmd.Flags().Int64Var(&generation, "generation", 0, "expected reservation generation")
+	for _, flag := range []string{"from-item", "item", "worker-session", "generation"} {
+		_ = cmd.MarkFlagRequired(flag)
+	}
 	return cmd
 }

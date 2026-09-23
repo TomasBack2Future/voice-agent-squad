@@ -3,18 +3,111 @@
   "title": "Claude Worker launch configuration (separate from assignment)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "native_session_id", "agent_id", "dispatcher_agent_id", "coordination_executable", "coordination_mode", "ledger_directory", "client_executable", "permission_mode", "prompt_file"],
+  "required": [
+    "schema_version",
+    "native_session_id",
+    "agent_id",
+    "dispatcher_agent_id",
+    "coordination_executable",
+    "coordination_mode",
+    "ledger_directory",
+    "client_executable",
+    "permission_mode",
+    "prompt_file"
+  ],
   "properties": {
-    "schema_version": {"const": "agent-loop.claude-launch.v1"},
-    "native_session_id": {"type": "string", "minLength": 1},
-    "agent_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"},
-    "dispatcher_agent_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"},
-    "coordination_executable": {"type": "string", "pattern": "^/"},
-    "coordination_mode": {"enum": ["native", "codex-wrapper-compat"]},
-    "ledger_directory": {"type": "string", "pattern": "^/"},
-    "client_executable": {"type": "string", "pattern": "^/"},
-    "permission_mode": {"enum": ["auto", "acceptEdits", "bypassPermissions", "manual", "dontAsk", "plan"]},
-    "event_executable": {"type": "string", "pattern": "^/"},
-    "prompt_file": {"type": "string", "pattern": "^/"}
+    "schema_version": {
+      "const": "agent-loop.claude-launch.v1"
+    },
+    "native_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "dispatcher_agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "coordination_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "coordination_mode": {
+      "enum": [
+        "native",
+        "codex-wrapper-compat"
+      ]
+    },
+    "ledger_directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "client_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "permission_mode": {
+      "enum": [
+        "auto",
+        "acceptEdits",
+        "bypassPermissions",
+        "manual",
+        "dontAsk",
+        "plan"
+      ]
+    },
+    "event_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "prompt_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "resource_overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "staging": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "item",
+            "admission_reference"
+          ],
+          "properties": {
+            "item": {
+              "type": "string",
+              "pattern": "^ENV-[0-9]+$"
+            },
+            "admission_reference": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "production": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "item",
+            "admission_reference"
+          ],
+          "properties": {
+            "item": {
+              "type": "string",
+              "pattern": "^ENV-[0-9]+$"
+            },
+            "admission_reference": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
   }
 }

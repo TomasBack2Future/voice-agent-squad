@@ -308,3 +308,27 @@ func (s *Store) explainOwnershipFailure(ctx context.Context, itemID, actor strin
 	}
 	return fmt.Errorf("dispatch: reservation update rejected")
 }
+
+// Continue transfers only a dispatched reservation's primary item to the same
+// Worker's claimed continuation. Expected identity and custody are checked in
+// one UPDATE; a stale caller cannot overwrite a later transition.
+func (s *Store) Continue(ctx context.Context, key, actor, from, to, worker string, generation int64) (*Reservation, error) {
+	if key == "" || actor == "" || from == "" || to == "" || from == to || worker == "" || generation <= 0 {
+		return nil, fmt.Errorf("dispatch continuation requires distinct items and exact identity")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE dispatch_reservations SET canonical_item_id=?,updated_at=?,note=note || ?
+ WHERE repo_id=? AND item_id=? AND reserved_by=? AND generation=? AND worker_thread_id=? AND state='dispatched' AND canonical_item_id=?
+ AND NOT EXISTS(SELECT 1 FROM claims WHERE repo_id=dispatch_reservations.repo_id AND item_id=?)
+ AND EXISTS(SELECT 1 FROM claims c JOIN claim_history h ON h.repo_id=c.repo_id AND h.agent_id=c.agent_id
+ WHERE c.repo_id=dispatch_reservations.repo_id AND c.item_id=? AND c.state='held' AND c.claimed_at>=dispatch_reservations.reserved_at
+ AND h.item_id=? AND h.claimed_at>=dispatch_reservations.reserved_at AND h.outcome='done')`,
+		to, s.now().Unix(), fmt.Sprintf("\ncontinuation %s -> %s by %s", from, to, actor), s.repoID, key, actor, generation, worker, from, from, to, from)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return nil, fmt.Errorf("continuation rejected: verify owner, generation, Worker, released original and same-actor continuation claim")
+	}
+	return s.Get(ctx, key)
+}
