@@ -53,7 +53,9 @@ func (s *Store) Wait(ctx context.Context, id, agent, item, scope string, ttl tim
 		if len(cycle) > 0 {
 			return &DeadlockError{Cycle: cycle}
 		}
-		return nil
+		// Waiting is liveness too; renew existing ownership in the same transaction.
+		_, err = tx.ExecContext(ctx, `UPDATE claims SET last_touch=? WHERE repo_id=? AND agent_id=? AND state='held'`, s.nowUnix(), s.repoID, agent)
+		return err
 	})
 	return blockers, err
 }

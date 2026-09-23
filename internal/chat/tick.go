@@ -1,12 +1,21 @@
 package chat
 
-import "context"
+import (
+	"context"
+	"database/sql"
+
+	"github.com/zsiec/squad/internal/store"
+)
 
 func (c *Chat) Tick(ctx context.Context, agentID string) (Digest, error) {
 	now := c.nowUnix()
-	if _, err := c.db.ExecContext(ctx,
-		`UPDATE agents SET last_tick_at = ?, status = 'active' WHERE id = ?`,
-		now, agentID); err != nil {
+	if err := store.WithTxRetry(ctx, c.db, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE agents SET last_tick_at=?, status='active' WHERE id=? AND repo_id=?`, now, agentID, c.repoID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE claims SET last_touch=? WHERE repo_id=? AND agent_id=? AND state='held'`, now, c.repoID, agentID)
+		return err
+	}); err != nil {
 		return Digest{}, err
 	}
 

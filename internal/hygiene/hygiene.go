@@ -355,7 +355,8 @@ func (sw *Sweeper) MarkStaleAgents(ctx context.Context) error {
 // ReclaimStale removes claims that have exceeded the stale threshold,
 // records each in claim_history with outcome="reclaimed", and releases
 // any active touches the displaced agent held on the item. Returns the
-// list of item IDs reclaimed.
+// list of item IDs reclaimed. Active dispatch ownership and live waiters are
+// reconciled by their owner; a stale timestamp alone cannot revoke them.
 func (sw *Sweeper) ReclaimStale(ctx context.Context) ([]string, error) {
 	now := sw.nowUnix()
 	var ids []string
@@ -365,8 +366,13 @@ func (sw *Sweeper) ReclaimStale(ctx context.Context) ([]string, error) {
 			SELECT item_id, agent_id, claimed_at, last_touch FROM claims
 			WHERE repo_id = ?
 			  AND item_id NOT LIKE 'ENV-%'
+              AND NOT EXISTS (SELECT 1 FROM dispatch_reservations r
+                  WHERE r.repo_id=claims.repo_id AND r.canonical_item_id=claims.item_id
+                  AND r.state IN ('reserved','dispatched'))
+              AND NOT EXISTS (SELECT 1 FROM claim_waits w
+                  WHERE w.repo_id=claims.repo_id AND w.agent_id=claims.agent_id AND w.expires_at>?)
 			  AND ((long = 0 AND last_touch < ?) OR (long = 1 AND last_touch < ?))
-		`, sw.repoID, now-sw.staleSec, now-StaleClaimLongSec)
+		`, sw.repoID, now, now-sw.staleSec, now-StaleClaimLongSec)
 		if err != nil {
 			return err
 		}

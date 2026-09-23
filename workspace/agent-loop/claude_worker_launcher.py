@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -132,13 +133,21 @@ def check_resources(assignment: dict, c: dict, env: dict) -> list[dict]:
     return receipts
 
 
+def check_heartbeat_runtime(c: dict, env: dict) -> None:
+    result = subprocess.run([c['coordination_executable'], 'heartbeat', '--help'],
+                            cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+    if result.returncode or any(flag not in result.stdout for flag in ('--reservation', '--generation', '--worker-session', '--check')):
+        raise ValidationError('coordination runtime lacks fenced heartbeat; update runtime before launch')
+
+
 def check_launch(assignment: dict, config_path: Path) -> dict:
     check_worktree(assignment)
     c = config_file(config_path)
     env = child_environment(c)
     state = binding(assignment, c, env)
     resources = check_resources(assignment, c, env)
-    return {'status': 'ready', 'binding': state, 'coordination_access': 'verified',
+    check_heartbeat_runtime(c, env)
+    return {'status': 'ready', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed'}
@@ -169,6 +178,45 @@ def receiver_arguments(c: dict, config_path: Path) -> list[str]:
     return ['--settings', str(setting)]
 
 
+def heartbeat(assignment: dict, c: dict, env: dict, check: bool = False) -> None:
+    argv = [c['coordination_executable'], 'heartbeat', '--reservation', assignment['reservation']['key'],
+            '--generation', str(assignment['reservation']['generation']), '--worker-session', c['native_session_id']]
+    if check:
+        argv.append('--check')
+    result = subprocess.run(argv, cwd=c['ledger_directory'], env=env,
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise ValidationError('Worker heartbeat rejected (exit ' + str(result.returncode)
+                              + '): ' + diagnostic(result.stderr or result.stdout) + '; no claim reacquired')
+
+
+def supervise(argv: list[str], assignment: dict, c: dict, env: dict) -> int:
+    # The launcher remains the receiver owner. The native client inherits the
+    # terminal/process group; no detached timer can outlive its parent Worker.
+    heartbeat(assignment, c, env, check=True)
+    with subprocess.Popen(argv, cwd=assignment['worktree'], env=env) as child:
+        # Ctrl-C cancels the client's current turn, not the lease supervisor.
+        # Install after spawning so the native child retains its normal SIGINT.
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            renewing = True
+            while True:
+                try:
+                    return child.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    if renewing:
+                        try:
+                            heartbeat(assignment, c, env)
+                        except (OSError, ValueError, subprocess.SubprocessError) as error:
+                            # Never terminate a client that could hold ENV or have an
+                            # external operation in flight. Durable state needs reconciliation.
+                            print('Squad heartbeat stopped: runtime/fence failure. Claims were not released; '
+                                  'reconcile this assignment before reuse. ' + diagnostic(str(error)), file=sys.stderr)
+                            renewing = False
+        finally:
+            signal.signal(signal.SIGINT, previous)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--assignment', type=Path, required=True)
@@ -193,9 +241,9 @@ def main() -> int:
         prompt = Path(c['prompt_file']).read_text()
         receiver_args = receiver_arguments(c, args.config)
         os.chdir(a['worktree'])
-        os.execve(c['client_executable'], [c['client_executable'], '--session-id',
+        return supervise([c['client_executable'], '--session-id',
                   c['native_session_id'], '--permission-mode', c['permission_mode'],
-                  *receiver_args, prompt], env)
+                  *receiver_args, prompt], a, c, env)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         reason = str(error) if isinstance(error, ValidationError) else 'launcher input or executable unavailable'
         print(json.dumps({'status': 'blocked', 'reason': reason}), file=sys.stderr)

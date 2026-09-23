@@ -335,9 +335,24 @@ The handoff itself proceeds even when zero candidates are found — `no surprise
 
 ## Chat
 
+### `squad heartbeat`
+
+Renew the acting Worker's held claims in the selected ledger, without reading or acknowledging messages:
+
+```bash
+squad heartbeat --reservation DISPATCH-123 --generation 1 --worker-session NATIVE_UUID
+```
+
+The exact reservation generation and native session must still be dispatched.
+`--check` validates that fence without renewing claims. No ownership is created,
+transferred, or reacquired; recovering claims and claims predating the assignment
+are excluded. The launcher checks command availability before reporting ready,
+and verifies the bound fence before starting the client. A stale fence fails;
+it is not retried as contention. MCP exposes the same operation as `squad_heartbeat`.
+
 ### `squad tick`
 
-Show new messages since last tick and advance the read cursor. Diagnostic-only in normal operation — chat is delivered continuously via the `Stop` listen + post-tool-flush + user-prompt-tick hooks. Reach for `squad tick` when you suspect a hook miss or want to advance the cursor explicitly.
+Renew held claims for the acting agent, show new messages since last tick and advance the read cursor. Diagnostic-only in normal operation — chat is delivered continuously via the `Stop` listen + post-tool-flush + user-prompt-tick hooks. Reach for `squad tick` when you suspect a hook miss or want to advance the cursor explicitly.
 
 ```bash
 squad tick
