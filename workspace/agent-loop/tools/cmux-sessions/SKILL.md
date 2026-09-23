@@ -97,6 +97,38 @@ Use explicit targets and bounded output. A quiet or idle screen is not terminal
 while a reservation, claim, CI/deployment operation or environment lock is live.
 Do not focus, flash, move, close, kill or replace a healthy Worker for monitoring.
 
+## Worker workspace lifecycle color
+
+For Dispatcher-owned Worker workspaces, use Blue while assigned work remains
+nonterminal, and the native clear-color action after terminal reconciliation.
+This is presentation only, never assignment, claim or completion authority.
+Use the persisted explicit workspace UUID; never the current/focused workspace.
+Verify automation access and the reservation/native-session/workspace mapping
+before changing a color. Do not color the Dispatcher or unrelated workspaces.
+
+```sh
+"$CMUX_BIN" workspace-action --workspace WORKSPACE_UUID --action set-color --color Blue
+"$CMUX_BIN" workspace-action --workspace WORKSPACE_UUID --action clear-color
+```
+
+Set Blue after successful launch and binding. Keep it through CI, deployment,
+claim waiting, idle turns and decision requests. Do not attach clearing to a
+Claude Stop hook or process exit: neither proves the assigned work has ended.
+The Worker clears its own workspace after recording its terminal outcome and
+required claim release or acknowledged handoff, with no live external operation.
+The Dispatcher repeats this idempotent projection during its existing bounded
+reconciliation cycle, including completed/failed/cancelled reservations with a
+recorded workspace. A stopped client with unresolved claims or rollout stays
+colored until recovery/handoff is reconciled. An Issue may remain open after a
+valid terminal handoff; color indicates this Worker's assignment, not Issue closure.
+
+Color failure must not block delivery, alter claims, resend assignments or inject
+terminal input. Record a bounded diagnostic and retry on the next existing cycle;
+a closed/missing workspace needs no recreation. Persist the desired/applied color
+and workspace UUID in coordination metadata, not strict assignment envelopes.
+Do not add a daemon, heartbeat or role solely for colors. When loading this rule,
+reconcile existing mapped workspaces as well as future launches.
+
 ## Send a bounded intervention
 
 Input is allowed only for the initial assignment, an explicit user override, an

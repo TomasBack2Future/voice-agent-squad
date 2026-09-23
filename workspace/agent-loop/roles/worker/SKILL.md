@@ -112,3 +112,12 @@ exact PR and revision, deterministic checks, review result, environment and
 acceptance disposition, released resources, remaining limitations and safe
 follow-ups. The Dispatcher reconciles the reservation; the Worker does not
 rewrite scheduler state owned by another role.
+
+## cmux workspace visibility
+
+For an explicit cmux workspace assignment, follow the lifecycle-color contract
+in `../../tools/cmux-sessions/SKILL.md`: Blue while nonterminal, clear-color after
+durable terminal outcome and required release/acknowledged handoff with no live
+external operation. A quiet turn, decision wait or client exit is not completion.
+A color failure is nonblocking and belongs in the terminal handoff for Dispatcher
+reconciliation; never target an implicit current workspace.
