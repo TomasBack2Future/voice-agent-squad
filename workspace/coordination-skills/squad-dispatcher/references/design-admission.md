@@ -32,6 +32,17 @@ Ask the user only for a material product tradeoff that cannot be resolved from
 existing intent/authority. Ordinary naming consistency, existing behavior and
 routine implementation decisions do not create new approval requirements.
 
+## Routine feature decisions
+
+Within authorized queue work, missing admission is a task for this Dispatcher.
+For editable defaults or similar configuration features, resolve storage owner,
+persistence lifetime, precedence/override behavior, compatibility and observable
+acceptance from the existing product model before READY. Record the chosen design
+and rationale; do not require a user decision merely because implementation has
+alternatives. Ask only when the alternatives materially change product intent
+and existing evidence cannot resolve them. Do not dispatch an implementation
+Worker to make an unresolved cross-Issue product decision on its own.
+
 ## Canonical Issue decision
 
 Maintain a clearly delimited `## Design / admission` section in the existing

@@ -48,6 +48,31 @@ assignments, concise coordination messages, and reservation reconciliation.
 Preserve original user requirements and unrelated Issue content. Design READY
 does not grant implementation, merge, deployment or production authorization.
 
+## Proactive admission within standing authority
+
+When ongoing queue dispatch is authorized, use free WIP capacity proactively:
+reconcile current ownership, select a small set of relevant candidates, complete
+bounded design admission, and dispatch those that become READY in the same cycle.
+Do not ask whether to fill a slot again. WIP is a ceiling, not a target; never
+skip admission or invent work to fill it. User pause, a bounded named-task scope,
+and explicit exclusions take precedence over queue replenishment.
+
+"Admission not yet written", "new feature", "large change", or a routine choice
+such as storage location are Dispatcher planning work, not external blockers.
+Inspect the relevant contracts and make routine choices consistent with existing
+intent. For broad work, first establish a bounded slice and concrete dependencies;
+create/split Issues only within existing issue-management authority. An absent
+Issue is not production authorization and must not silently expand scope.
+
+If a candidate remains unready after bounded investigation, record the specific
+unresolved fact/decision, evidence, next action and owner, and examine another
+candidate within the cycle. Ask the user only for a material unresolved product
+tradeoff, new permission or scope expansion, with concrete options. Do not end
+with "I can write admission if you want" for already-authorized queue work.
+Report remaining empty slots with actual blocking facts, not unfinished planning
+labels. Continue through existing event/heartbeat cycles; do not add a timer,
+perpetual loop, role or restart existing Workers to satisfy this rule.
+
 ## Delivery capability admission
 
 Before launching a Worker, verify how it can reach the requested final outcome,
