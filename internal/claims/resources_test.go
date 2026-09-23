@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -256,5 +258,35 @@ func TestLegacyBinaryReleaseRecordsScope(t *testing.T) {
 	_ = db.QueryRow(`SELECT resource_scope FROM claim_history WHERE item_id='ENV-002'`).Scan(&scope)
 	if scope != "*" {
 		t.Fatalf("old release lost scope %q", scope)
+	}
+}
+
+func TestResourceAdmissionDistinguishesMissingPolicyFromContention(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	done := t.TempDir()
+	if _, err := s.CheckResource(ctx, "ENV-003", "", dir, done, true); err == nil {
+		t.Fatal("missing item admitted")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ENV-003.md"), []byte("---\nid: ENV-003\ntitle: importer\ntype: env\nstatus: open\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CheckResource(ctx, "ENV-003", "", dir, done, true); err == nil {
+		t.Fatal("missing policy admitted")
+	}
+	if err := s.DefineResources(ctx, policy()); err != nil {
+		t.Fatal(err)
+	}
+	mustClaim(t, s, "ENV-003", "holder", "")
+	result, err := s.CheckResource(ctx, "ENV-003", "", dir, done, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result["blockers"].([]Blocker)) != 1 {
+		t.Fatal("holder not reported")
+	}
+	if _, err := s.CheckResource(ctx, "ENV-003", "studio", dir, done, true); err == nil {
+		t.Fatal("wrong scope admitted")
 	}
 }

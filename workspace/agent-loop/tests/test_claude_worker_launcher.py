@@ -19,6 +19,8 @@ class LauncherTests(unittest.TestCase):
     git = fixtures.WorkerPreflightTests.git
 
     def prepare(self, mode='native', behavior='ok'):
+        self.assignment['authorization']['staging'] = False
+        self.assignment['authorization']['production'] = False
         self.session = '00000000-0000-4000-8000-000000000123'
         self.ledger = self.root / 'ledger'
         (self.ledger / '.squad').mkdir(parents=True)
@@ -181,3 +183,28 @@ assert 'CODEX_SESSION_ID' not in os.environ
 
 
 if __name__ == '__main__': unittest.main()
+
+class ResourceAdmissionTests(unittest.TestCase):
+    def test_missing_live_item_and_old_runtime_reject(self):
+        a = {'authorization':{'staging':True}, 'project_profile':{'path':str(ROOT/'projects/importer/profile.json')}}
+        c = {'coordination_executable':'/squad','ledger_directory':'/ledger'}
+        for reason in ('no item file found', 'unknown command resources'):
+            with patch.object(launcher.subprocess, 'run', return_value=subprocess.CompletedProcess([],2,'',reason)):
+                with self.assertRaisesRegex(ValueError, 'ENV-003 is unavailable'):
+                    launcher.check_resources(a,c,{})
+
+    def test_installed_but_held_is_ready_without_claim(self):
+        a = {'authorization':{'staging':True}, 'project_profile':{'path':str(ROOT/'projects/importer/profile.json')}}
+        c = {'coordination_executable':'/squad','ledger_directory':'/ledger'}
+        data={'item':'ENV-003','status':'ready','blockers':[{'agent_id':'other'}]}
+        with patch.object(launcher.subprocess,'run',return_value=subprocess.CompletedProcess([],0,json.dumps(data),'')) as run:
+            self.assertEqual(launcher.check_resources(a,c,{})[0]['blockers'],data['blockers'])
+            self.assertEqual(run.call_args.args[0],['/squad','resources','check','ENV-003','--require-policy'])
+
+    def test_explicit_admitted_legacy_resource(self):
+        a = {'authorization':{'staging':True}, 'project_profile':{'path':str(ROOT/'projects/importer/profile.json')}}
+        c = {'coordination_executable':'/squad','ledger_directory':'/ledger',
+             'resource_overrides':{'staging':{'item':'ENV-001','admission_reference':'issue#1 lock correction'}}}
+        with patch.object(launcher.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'{"item":"ENV-001","status":"ready"}','')) as run:
+            self.assertEqual(launcher.check_resources(a,c,{})[0]['declared_item'],'ENV-003')
+            self.assertNotIn('--require-policy',run.call_args.args[0])

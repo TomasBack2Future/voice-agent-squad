@@ -107,3 +107,26 @@ func resourceBlockers(ctx context.Context, q queryer, repo, item, group, scope s
 }
 
 func ClaimWithScope(scope string) ClaimOption { return func(o *claimOpts) { o.resourceScope = scope } }
+
+// CheckResource verifies installed capability without acquiring or releasing it.
+// Contention is reported separately from a missing item/policy.
+func (s *Store) CheckResource(ctx context.Context, item, scope, itemsDir, doneDir string, requirePolicy bool) (map[string]any, error) {
+	if !strings.HasPrefix(item, "ENV-") {
+		return nil, errors.New("expected ENV resource")
+	}
+	if err := preflightBlockers(itemsDir, doneDir, item); err != nil {
+		return nil, err
+	}
+	group, effective, err := resolveResource(ctx, s.db, s.repoID, item, scope)
+	if err != nil {
+		return nil, err
+	}
+	if requirePolicy && group == "" {
+		return nil, errors.New("resource policy is not installed")
+	}
+	blockers, err := resourceBlockers(ctx, s.db, s.repoID, item, group, effective)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"item": item, "status": "ready", "resource_group": group, "effective_scope": effective, "blockers": blockers}, nil
+}

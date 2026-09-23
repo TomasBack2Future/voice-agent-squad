@@ -310,3 +310,21 @@ test matrix runs these tests; no separate model-calling Actions workflow is adde
 
 Use [workspace migration](workspace-migration.md) before relocating anything,
 and the [baseline receipt template](baseline-receipt.md) for environment evidence.
+
+### Installed resource admission and continuation
+
+Deployment-authorized Claude launches now probe `squad resources check ENV-ID`
+in the configured live ledger with the child identity, both at preflight and
+launch. Policy-based profiles require installed policy. Contention is included
+in the receipt and does not fail startup. A missing item, policy or CLI capability
+fails before model launch. Explicit `resource_overrides` in the launch config
+map staging/production to a verified legacy item with an `admission_reference`;
+they do not change the strict assignment schema or authorize extra environments.
+
+`dispatch continue KEY --from-item OLD --item NEW --worker-session UUID
+--generation N` updates a dispatched reservation for a same-actor continuation
+only after OLD is done/released and NEW is claimed. CLI and
+`squad_dispatch_continue` preserve source/session/generation and record the
+transition in the reservation note; old-item events are no longer accepted.
+Use this operation instead of a prose-only continuation mapping. Resource checks
+are also exposed as `squad_resources_check` and never claim or release resources.

@@ -99,12 +99,47 @@ def binding(assignment: dict, c: dict, env: dict) -> str:
     raise ValidationError('reservation is inconsistent or bound to another session')
 
 
+def check_resources(assignment: dict, c: dict, env: dict) -> list[dict]:
+    phases = [p for p in ('staging', 'production') if assignment['authorization'].get(p)]
+    if not phases:
+        return []
+    path = Path(assignment['project_profile']['path'])
+    if not path.is_absolute():
+        path = Path(assignment['worktree']) / path
+    profile = validate_file(path, ROOT / 'schemas/project-profile.schema.json')
+    receipts = []
+    for phase in phases:
+        declared = profile['resources'].get(phase)
+        override = c.get('resource_overrides', {}).get(phase)
+        item = override['item'] if override else declared
+        if not isinstance(item, str) or not re.fullmatch(r'ENV-[0-9]+', item):
+            raise ValidationError('profile lacks an explicit environment resource')
+        argv = [c['coordination_executable'], 'resources', 'check', item]
+        if not override and profile['resources'].get('policy'):
+            argv.append('--require-policy')
+        result = subprocess.run(argv, cwd=c['ledger_directory'], env=env,
+                                capture_output=True, text=True, timeout=10, check=False)
+        if result.returncode:
+            raise ValidationError(f'{phase} resource {item} is unavailable: ' + diagnostic(result.stderr))
+        try:
+            receipt = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise ValidationError('resource admission returned invalid JSON') from error
+        if not isinstance(receipt, dict) or receipt.get('item') != item or receipt.get('status') != 'ready':
+            raise ValidationError('resource admission identity/status mismatch')
+        receipts.append(dict(phase=phase, declared_item=declared, **receipt,
+                             admission_reference=override['admission_reference'] if override else 'profile'))
+    return receipts
+
+
 def check_launch(assignment: dict, config_path: Path) -> dict:
     check_worktree(assignment)
     c = config_file(config_path)
-    state = binding(assignment, c, child_environment(c))
+    env = child_environment(c)
+    state = binding(assignment, c, env)
+    resources = check_resources(assignment, c, env)
     return {'status': 'ready', 'binding': state, 'coordination_access': 'verified',
-            'environment': 'identity-sanitized', 'coordination_mode': c['coordination_mode'],
+            'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed'}
 
@@ -151,6 +186,7 @@ def main() -> int:
         check_worktree(a)
         c = config_file(args.config)
         env = child_environment(c)
+        check_resources(a, c, env)
         wait_for_binding(a, c, env, args.wait_seconds)
         check_worktree(a)
         # Read the prompt only after binding. Never echo it or the child environment.
