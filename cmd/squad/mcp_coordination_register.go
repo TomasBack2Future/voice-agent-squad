@@ -21,6 +21,24 @@ import (
 // the CLI.
 func registerCoordinationTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
 	srv.Register(mcp.Tool{
+		Name:        "squad_claim_inspect",
+		Description: "Read the current repository's exact claim. Missing claim returns env_claim:null; query errors fail. This snapshot does not grant ownership.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"item_id":{"type":"string","minLength":1}},"required":["item_id"],"additionalProperties":false}`),
+		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+			var args struct {
+				ItemID string `json:"item_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return nil, err
+			}
+			if err := requireRepo(repoRoot, repoID); err != nil {
+				return nil, err
+			}
+			return inspectClaim(ctx, db, repoID, args.ItemID)
+		},
+	})
+
+	srv.Register(mcp.Tool{
 		Name:        "squad_handoff",
 		Description: "Post a handoff brief and release every claim this agent currently holds.",
 		InputSchema: json.RawMessage(schemaHandoff),

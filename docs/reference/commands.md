@@ -932,3 +932,28 @@ Authorize a frozen production binding, serve narrow online admission, inspect a
 run pin, and reconcile a verified terminal operation. See
 [execution admission](execution-admission.md) for JSON, transport, CLI/MCP parity
 and recovery constraints. No source command installs the service automatically.
+
+### `squad claim-inspect <item>`
+
+Read the selected repository's current claim from the installed ledger. Always
+prints JSON, for example:
+
+```json
+{"env_claim":{"item":"ENV-001","holder":"agent-worker","generation":7,"claimed_at":"2026-09-23T16:00:00Z","state":"held"}}
+```
+
+The CLI opens the configured database read-only, performs no migration, item
+mirror, heartbeat or hygiene sweep, and needs no caller agent identity. Claims
+are scoped by both repository ID and item ID. A missing claim prints
+`{"env_claim":null}`; missing databases, incompatible schemas and query failures
+exit nonzero without a success payload. Recovering claims retain their actual
+`state`; consumers must require `held` and compare holder, generation and UTC
+RFC3339 `claimed_at` against the admitted claim.
+
+This is a point-in-time observation, not a claim acquisition, renewal or an atomic
+fence on a subsequent external deployment. Call it immediately before dispatch
+and retain the normal ownership/fencing protocol. Run in the same selected ledger
+repository as the claim, not an unrelated source checkout, or pass
+`--repo /path/to/ledger` explicitly when called by another repository’s deploy
+script. MCP parity:
+`squad_claim_inspect` with `{"item_id":"ENV-001"}` returns the same JSON contract.
