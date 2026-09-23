@@ -677,6 +677,28 @@ func registerInspectionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot strin
 }
 
 func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_publish", Description: "Publish a fenced outcome or design decision; recipient comes from the ledger. Persistence is pending, not delivered.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","generation","worker_session","kind","outcome_id"],"properties":{"reservation":{"type":"string"},"generation":{"type":"integer","minimum":1},"worker_session":{"type":"string"},"kind":{"enum":["issue-closed","handoff-complete","blocked","decision-request","decision-resolved","reconcile-needed"]},"outcome_id":{"type":"integer","minimum":1},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			terminalevents.PublishRequest
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := resolveAgentID(a.AgentID)
+		if err != nil {
+			return nil, err
+		}
+		id, err := (terminalevents.Store{DB: db, Repo: repoID}).Publish(ctx, actor, a.PublishRequest)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"event_id": id, "state": "pending"}, nil
+	}})
+
 	srv.Register(mcp.Tool{Name: "squad_terminal_events_ack", Description: "Acknowledge one delivered terminal event after recipient reconciliation.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","note"],"properties":{"event_id":{"type":"string"},"note":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			EventID string `json:"event_id"`

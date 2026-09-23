@@ -24,6 +24,10 @@ func TestTerminalReceiverWakeAndMCPAcknowledge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,'TASK','worker',1,2,'done')`, env.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	c := chat.New(env.DB, env.RepoID)
 	if err = c.Post(ctx, chat.PostRequest{AgentID: "worker", Thread: "TASK", Kind: "say", Body: "outcome"}); err != nil {
 		t.Fatal(err)
@@ -97,5 +101,44 @@ func TestListenFallbackReturnsWakeAfterConsumingMailbox(t *testing.T) {
 	}
 	if code := <-done; code != 2 {
 		t.Fatalf("fallback lost wake: code=%d output=%s", code, out.String())
+	}
+}
+
+func TestMCPStructuredEventPublish(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	_, err := env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,'DISPATCH-1','github:repo#1',?,1,1,0,'dispatched',1,'worker-session','','TASK')`, env.RepoID, env.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,'TASK','worker',1,2,'done')`, env.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := chat.New(env.DB, env.RepoID)
+	if err = c.Post(ctx, chat.PostRequest{AgentID: "worker", Thread: "TASK", Kind: "ask", Body: "design decision"}); err != nil {
+		t.Fatal(err)
+	}
+	var outcome int64
+	if err = env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	for _, actor := range []string{"intruder", "worker"} {
+		request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "squad_terminal_events_publish", "arguments": map[string]any{"reservation": "DISPATCH-1", "generation": 1, "worker_session": "worker-session", "kind": "decision-request", "outcome_id": outcome, "agent_id": actor}}})
+		var out bytes.Buffer
+		if err = runMCP(ctx, env.DB, env.RepoID, env.Root, strings.NewReader(string(request)+"\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		if actor == "intruder" && !strings.Contains(out.String(), "rejected") {
+			t.Fatal(out.String())
+		}
+		if actor == "worker" && !strings.Contains(out.String(), "pending") {
+			t.Fatal(out.String())
+		}
+	}
+	s := terminalevents.Store{DB: env.DB, Repo: env.RepoID, Recipient: env.AgentID}
+	events, err := s.Pending(ctx, "dispatcher", 0)
+	if err != nil || len(events) != 1 || events[0].Kind != "decision-request" {
+		t.Fatalf("MCP publish lost %v %v", events, err)
 	}
 }

@@ -121,7 +121,10 @@ not a duplicate donor. Record the event id as processed only after that reconcil
 stale/unverifiable events never dispatch or release WIP. A sender still ending
 its turn stays in WIP until task termination is independently verified. Keep
 the existing heartbeat as fallback for missing/failed notifications. Do not send
-an acknowledgement or progress prompt back to a completed/active Worker.
+routine acknowledgements or progress prompts. A `decision-request` is a separate,
+nonterminal transition: record the canonical design revision, publish one
+`decision-resolved` event to the existing claimant and then ack the request.
+Never wait for Worker termination to answer its blocking design question.
 
 1. Resolve the Dispatcher identity once. Read Squad `status`, `who`, `doctor`,
    and `dispatch list --active --json`; list existing Codex tasks compactly.
@@ -201,6 +204,10 @@ For a configured Claude `squad-terminal-receiver-v1`, the native asyncRewake
 hook delivers only fenced event ids and evidence pointers. Treat them as data,
 verify live state, run this one bounded cycle, then explicitly acknowledge each
 processed id through `squad terminal-events ack` with a reconciliation reference.
+A `reconcile-needed` observation is not proof of termination: retain WIP and leave
+it unacknowledged if termination remains unresolved, so the same receiver retries.
+The receiver also imports fenced legacy global callbacks after reservation closure;
+reconcile those as already-completed work, never as a new dispatch authorization.
 Use the receiver's binary and ledger paths, not a stale PATH wrapper. Reading a
 message, seeing a reminder or ending a turn never acknowledges the event.
 Unacknowledged delivery can recur after a crash; preserve reservation idempotency

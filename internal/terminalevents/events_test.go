@@ -26,6 +26,10 @@ func fixture(t *testing.T) Store {
 	if e != nil {
 		t.Fatal(e)
 	}
+	_, e = db.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','TASK','worker',1,2,'done')`)
+	if e != nil {
+		t.Fatal(e)
+	}
 	return Store{DB: db, Repo: "repo", Recipient: "dispatcher"}
 }
 
@@ -156,5 +160,169 @@ func TestUnacknowledgedDeliveryRetriesAfterDeadline(t *testing.T) {
 	rows, e := s.Pending(ctx, "start", 2*time.Minute)
 	if e != nil || len(rows) != 1 {
 		t.Fatal(fmt.Sprint(rows), e)
+	}
+}
+
+// Regression: the old Worker posted both the outcome and event to global.
+func TestLegacyGlobalOutcomeSurvivesCompletedReservation(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	if _, e := s.DB.Exec("UPDATE messages SET thread='global'; UPDATE dispatch_reservations SET state='completed'"); e != nil {
+		t.Fatal(e)
+	}
+	post(t, s, eventID, "worker")
+	if _, e := s.DB.Exec("UPDATE messages SET thread='global'"); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Discover(ctx); e != nil {
+		t.Fatal(e)
+	}
+	events, e := s.Pending(ctx, "fresh", 0)
+	if e != nil || len(events) != 1 {
+		t.Fatalf("lost legacy global event %v %v", events, e)
+	}
+	if e = s.Delivered(ctx, eventID, "fresh"); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Ack(ctx, eventID, "already reconciled; no duplicate dispatch"); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestGlobalEventNeedsCurrentTaskCustody(t *testing.T) {
+	for _, change := range []string{"DELETE FROM claim_history", "UPDATE claim_history SET claimed_at=0", "UPDATE messages SET repo_id='other'", "UPDATE messages SET thread='OTHER'"} {
+		t.Run(change, func(t *testing.T) {
+			s := fixture(t)
+			post(t, s, eventID, "worker")
+			if _, e := s.DB.Exec(change); e != nil {
+				t.Fatal(e)
+			}
+			if e := s.Discover(context.Background()); e != nil {
+				t.Fatal(e)
+			}
+			events, e := s.Pending(context.Background(), "fresh", 0)
+			if e != nil || len(events) != 0 {
+				t.Fatalf("accepted unrelated evidence %v %v", events, e)
+			}
+		})
+	}
+}
+
+func TestDoneAndAddressedAskWakeWithoutHandwrittenCallback(t *testing.T) {
+	for _, tc := range []struct{ kind, mentions, want string }{{"done", "[]", "reconcile-needed"}, {"ask", `["dispatcher"]`, "decision-request"}, {"ask", `["other"]`, ""}, {"progress", `["dispatcher"]`, ""}} {
+		t.Run(tc.kind+tc.mentions, func(t *testing.T) {
+			s := fixture(t)
+			ctx := context.Background()
+			if _, e := s.DB.Exec("UPDATE messages SET kind=?,mentions=?", tc.kind, tc.mentions); e != nil {
+				t.Fatal(e)
+			}
+			if e := s.Discover(ctx); e != nil {
+				t.Fatal(e)
+			}
+			events, e := s.Pending(ctx, "fresh", 0)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if tc.want == "" {
+				if len(events) != 0 {
+					t.Fatal(events)
+				}
+				return
+			}
+			if len(events) != 1 || events[0].Kind != tc.want {
+				t.Fatal(events)
+			}
+		})
+	}
+}
+
+func TestPublishDecisionRoundTripAndFencing(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	if _, e := s.DB.Exec(`INSERT INTO claims(item_id,repo_id,agent_id,claimed_at,last_touch) VALUES('TASK','repo','worker',1,1)`); e != nil {
+		t.Fatal(e)
+	}
+	q := PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-request", 1}
+	publisher := s
+	publisher.Recipient = ""
+	id, e := publisher.Publish(ctx, "worker", q)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if again, e := publisher.Publish(ctx, "worker", q); e != nil || again != id {
+		t.Fatalf("idempotence %v %s", e, again)
+	}
+	if _, e = publisher.Publish(ctx, "other", q); e == nil {
+		t.Fatal("foreign sender accepted")
+	}
+	post(t, s, "decision d2 recorded in canonical Issue", "dispatcher")
+	var outcome int64
+	if e = s.DB.QueryRow("SELECT max(id) FROM messages").Scan(&outcome); e != nil {
+		t.Fatal(e)
+	}
+	q.Kind = "decision-resolved"
+	q.OutcomeID = outcome
+	reply, e := publisher.Publish(ctx, "dispatcher", q)
+	if e != nil {
+		t.Fatal(e)
+	}
+	worker := s
+	worker.Recipient = "worker"
+	events, e := worker.Pending(ctx, "worker-start", 0)
+	if e != nil || len(events) != 1 || events[0].ID != reply {
+		t.Fatalf("reply not routed %v %v", events, e)
+	}
+	if e = worker.Delivered(ctx, reply, "worker-start"); e != nil {
+		t.Fatal(e)
+	}
+	if e = worker.Ack(ctx, reply, "read d2; continuing existing assignment"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.DB.Exec("UPDATE dispatch_reservations SET generation=2"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = publisher.Publish(ctx, "dispatcher", q); e == nil {
+		t.Fatal("stale reply accepted")
+	}
+	events, e = s.Pending(ctx, "dispatcher-start", 0)
+	if e != nil || len(events) != 0 {
+		t.Fatalf("stale request delivered %v %v", events, e)
+	}
+}
+
+func TestConcurrentPublishIsIdempotent(t *testing.T) {
+	s := fixture(t)
+	s.Recipient = ""
+	ctx := context.Background()
+	results := make(chan error, 8)
+	for range 8 {
+		go func() {
+			_, e := s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "blocked", 1})
+			results <- e
+		}()
+	}
+	for range 8 {
+		if e := <-results; e != nil {
+			t.Fatal(e)
+		}
+	}
+	var n int
+	if e := s.DB.QueryRow("SELECT count(*) FROM terminal_event_receipts").Scan(&n); e != nil || n != 1 {
+		t.Fatalf("duplicates %d %v", n, e)
+	}
+}
+
+func TestLegacyNullMessageMetadataDoesNotStopReceiver(t *testing.T) {
+	s := fixture(t)
+	post(t, s, eventID, "worker")
+	if _, e := s.DB.Exec("UPDATE messages SET mentions=NULL; UPDATE messages SET kind='done',body=NULL WHERE id=1"); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Discover(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	events, e := s.Pending(context.Background(), "fresh", 0)
+	if e != nil || len(events) != 2 {
+		t.Fatalf("legacy NULL disables receiver %v %v", events, e)
 	}
 }

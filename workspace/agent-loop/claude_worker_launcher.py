@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import uuid
+import terminal_receiver
 
 from validate_context_package import ROOT, ValidationError, validate_file
 from worker_preflight import check_worktree
@@ -44,6 +45,11 @@ def config_file(path: Path) -> dict:
         raise ValidationError('ledger_directory is not initialized')
     if not Path(c['prompt_file']).is_file():
         raise ValidationError('prompt_file is unavailable')
+    if c.get('event_executable'):
+        check = subprocess.run([c['event_executable'], 'terminal-events', 'publish', '--help'],
+                               capture_output=True, text=True, timeout=10, check=False)
+        if check.returncode or '--outcome' not in check.stdout:
+            raise ValidationError('event_executable lacks structured terminal-events publish')
     return c
 
 
@@ -113,6 +119,21 @@ def wait_for_binding(assignment: dict, c: dict, env: dict, budget: float) -> Non
         time.sleep(min(1, max(0, deadline - time.monotonic())))
 
 
+def receiver_arguments(c: dict, config_path: Path) -> list[str]:
+    if not c.get('event_executable'):
+        return []
+    state = config_path.resolve().parent / ('receiver-' + c['native_session_id'])
+    state.mkdir(mode=0o700, exist_ok=True)
+    config = state / 'config.json'
+    config.write_text(json.dumps(dict(native_session_id=c['native_session_id'], agent_id=c['agent_id'],
+                     role='worker', state_directory=str(state), ledger_directory=c['ledger_directory'],
+                     squad_executable=c['event_executable'], incarnation=str(uuid.uuid4()),
+                     owner_pid=os.getpid()), indent=2) + '\n')
+    setting = state / 'settings.json'
+    setting.write_text(json.dumps(terminal_receiver.settings(config), indent=2) + '\n')
+    return ['--settings', str(setting)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--assignment', type=Path, required=True)
@@ -134,9 +155,11 @@ def main() -> int:
         check_worktree(a)
         # Read the prompt only after binding. Never echo it or the child environment.
         prompt = Path(c['prompt_file']).read_text()
+        receiver_args = receiver_arguments(c, args.config)
         os.chdir(a['worktree'])
         os.execve(c['client_executable'], [c['client_executable'], '--session-id',
-                  c['native_session_id'], '--permission-mode', c['permission_mode'], prompt], env)
+                  c['native_session_id'], '--permission-mode', c['permission_mode'],
+                  *receiver_args, prompt], env)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         reason = str(error) if isinstance(error, ValidationError) else 'launcher input or executable unavailable'
         print(json.dumps({'status': 'blocked', 'reason': reason}), file=sys.stderr)

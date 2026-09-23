@@ -42,6 +42,15 @@ class ReceiverTests(unittest.TestCase):
         self.assertIn('test-event',err)
         self.assertIn('terminal-events ack',err)
 
+    def test_worker_decision_reminder_does_not_dispatch(self):
+        self.data['role'] = 'worker'
+        self.config.write_text(json.dumps(self.data))
+        p = self.start();out,err = p.communicate(timeout=5)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn('Read the referenced canonical Issue decision', err)
+        self.assertNotIn('Invoke $squad-dispatcher', err)
+        self.assertIn('terminal-events ack', err)
+
     def test_singleton_and_resume_cancels_old_receiver(self):
         (self.root/'hold').touch()
         first = self.start()

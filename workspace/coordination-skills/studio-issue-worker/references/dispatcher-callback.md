@@ -78,21 +78,46 @@ generated on each attempt.
 
 ## Installed Squad terminal receiver
 
-When the Dispatcher advertises `squad-terminal-receiver-v1`, write the stable
-`worker-terminal-v1/...` event id and sanitized payload on the canonical item
-thread using Squad as the Worker actor. The referenced outcome message must be
-on that same thread by that actor; reservation generation and native Worker id
-must match. The installed receiver discovers these durable records, including
-legacy callback-intent/pending records, without requiring a Worker restart.
-Persistence is `pending`; only a receiver receipt proves delivery. Never invent
-`callback-sent` from a successful `say`. No additional cmux callback is needed.
+Use the installed receiver executable from coordination metadata, not a stale
+PATH wrapper. After writing the sanitized outcome on the canonical item thread,
+submit it with the structured command (MCP equivalent: `squad_terminal_events_publish`):
 
-The recipient must acknowledge each event with `squad terminal-events ack
-<event-id> --note <reconciliation-reference>` using its own identity and the
-selected coordination ledger, only after the bounded reconciliation. Duplicate
-or resumed delivery rechecks existing state and must not repeat a dispatch.
-Delivery does not mean processed, and acknowledgement never closes reservations
-or releases claims. A stale generation/owner/binding cannot be acknowledged.
+```sh
+squad terminal-events publish --reservation KEY --generation N \
+  --worker-session NATIVE_ID --kind issue-closed --outcome MESSAGE_ID
+```
+
+Use `handoff-complete` or `blocked` for those outcomes. The command derives the
+recipient/item from the reservation, validates generation, binding, message
+ownership and task custody, and returns a stable event id with state `pending`.
+A rejected publish is an actionable contract error; do not relabel it transient.
+Old Workers may still write canonical/global event prose: the receiver checks
+both, including already-completed reservations, against the same identity facts.
+A canonical `done` record also emits `reconcile-needed` even if the handwritten
+callback is missing. This is a reconciliation hint, never proof of acceptance.
+
+For a design conflict, record one `ask` on the canonical thread mentioning the
+Dispatcher, or publish `decision-request` referencing that message. A canonical
+addressed `ask` is discovered automatically for older Workers. These requests
+are nonterminal: retain the assignment, continue independent work, and do not
+claim that WIP was released. The Dispatcher records its revised Issue decision
+and publishes `decision-resolved` referencing its own canonical-thread message;
+the ledger routes that reply to the current task claimant. New Claude launch
+configs set `event_executable` to the verified receiver binary so the canonical
+launcher installs a session-owned native receiver for the Worker too. Do not
+claim automatic reply delivery for an old Worker without such a receiver; retain
+the durable decision and use only an explicitly authorized, safe issue-local
+correction path. Never clear or submit a user draft, and never create a replacement.
+
+Recipients run `squad terminal-events ack <event-id> --note <reference>` only
+after handling the transition. Decision requests need a recorded decision/reply,
+not Worker termination; replies need the assigned Worker to read the revision.
+For terminal observations, if the Worker is still ending or termination is
+ambiguous, leave the event unacknowledged: the existing receiver retries after
+two minutes. Do not consume the only wakeup and then wait for a nonexistent timer.
+A duplicate reminder may contain an old processing snapshot; read current ledger
+state before diagnosing failure. Capture the command's actual exit status, never
+`$?` after piping to `head`. Delivery/ack do not close reservations or release claims.
 
 ## Payload
 
@@ -118,8 +143,8 @@ The receiver validates rather than trusting event prose. Dispatcher sees the
 send before the Worker's final response can complete: it must confirm the source
 turn ended using a compact App task snapshot or bounded cmux session/screen
 inspection matching the recorded transport (optionally one bounded wait <=30s).
-If still active or ambiguous, preserve WIP and defer that accounting to the
-existing heartbeat; do not poll, stop the Worker or dispatch into a guessed slot.
+If still active or ambiguous, preserve WIP and leave the terminal observation
+unacknowledged for the existing receiver retry; do not poll, stop the Worker or dispatch into a guessed slot.
 Deduplicate processing against the exact event id and generation in the ledger.
 An already-processed event is a no-op, not a new dispatch or acknowledgement loop.
 A verified notification triggers the existing bounded scheduler; it grants no

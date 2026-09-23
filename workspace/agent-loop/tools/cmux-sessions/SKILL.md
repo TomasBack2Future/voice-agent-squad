@@ -128,3 +128,9 @@ terminates an old incarnation, and never accesses terminal input. Validate one
 real idle wake and acknowledgement before declaring this transport available.
 Preserve user-selected permission mode and native id on a cutover; do not restart
 an active Worker to install a Dispatcher receiver.
+
+For new Claude Workers needing asynchronous design decisions, include
+`event_executable` in the separate launch config. Preflight checks the structured
+publish capability; the canonical launcher creates a Worker-role native receiver
+with the child's own identity/PID/incarnation. Decision replies use the durable
+ledger, never terminal input. Existing Workers are not silently restarted.
