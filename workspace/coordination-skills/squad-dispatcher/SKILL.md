@@ -244,6 +244,13 @@ from the installed local reviewer and actual protected-branch policy. A future
 prompt carries the invariant contract; it must not hard-code a temporary rollout
 phase or ask for additional human merge approval.
 
+## Shared staging deployment
+
+For compatible ready Issues sharing staging, read
+[staging coordination](references/staging-coordination.md). Coordinate one
+candidate and shared evidence before assigning independent deployments. This
+does not activate the separate implementation batch mode below.
+
 ## Explicit batch mode
 
 Only explicitly authorized batches with verified minimum-baseline-and-batch-contract
