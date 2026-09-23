@@ -29,12 +29,47 @@ the ENV owner performs them; do not invent claim sharing. Serialize concrete
 conflicts. Keep the version protected only for required version-sensitive checks,
 then release ENV; final Issue bookkeeping does not require the lock.
 
-Prepare review, artifacts, parameters, access and acceptance scripts before ENV
-where supported. The current guarded-merge path still holds ENV across merge and
-post-merge CI; do not claim that a skill update removes that wait. Moving acquisition
-to deployment time requires the repository's merge/deploy admission to support it.
-Likewise config-only image reuse and selective CI/acceptance require implemented
-workflow classification; never bypass existing gates by prose instruction.
+Select the release path explicitly using the Worker
+[candidate contract](../../studio-issue-worker/references/staging-candidates.md).
+Record verified repository capability and assign `staging-candidate-v1` only after
+CI/prefetch no longer auto-rolls out and the explicit immutable, deduplicated
+deployment entry is implemented. Then prepare merge/CI/images/prefetch outside
+ENV; one owner claims only at deployment. Until then retain guarded-merge locking.
+Missing capability is concrete implementation work: within standing authority,
+admit/dispatch that bounded repair with its owner and gate instead of silently
+keeping every task serialized or asking the user to repeat the same decision.
+Config-only image reuse and selective checks likewise require implemented
+classification; never bypass existing gates by prose instruction.
+
+## Make the next batch concrete
+
+For multiple ready compatible tasks, record the actual member set, owner and
+next action during this cycle. Freeze one integration candidate and a final main
+PR using the existing batch transfer contract; no new release role/session is
+required when a current owner can accept that responsibility. Reserve independent
+read-only acceptance for peers so all Issues do not repeat the common deployment.
+Keep each requirement and failure disposition visible. If no batch can be formed,
+record the concrete incompatibility or readiness gap and advance one ready task.
+
+Choose the next admitted release by recorded priority and dependent work, then
+waiting age. Do not claim the current atomic `claim --wait` is FIFO or priority
+aware. Apply scheduling before new waits are started; coordinate existing waits
+only through an explicit authorized migration, without stealing claims. Routine
+ordering within existing authority is Dispatcher work, not a new user decision.
+Never indefinitely delay a ready dependency-unblocking task to fill a batch.
+
+A skill reload is not a migration receipt. For current Workers persist the exact
+new mode, capability, batch/owner and next action, obtain acknowledgment and keep
+identity/custody intact. Leave in-flight rollouts under their existing contract.
+Honor a dispatch pause; a narrowly authorized optimization does not reopen the
+ordinary queue. Use the existing event cycle and bounded interventions, not a
+new daemon or routine progress pings.
+
+Measure before claiming improvement: candidate readiness, lock queue time, lock
+occupation, actual rollout, common checks, per-Issue checks, unique deployment
+count and retry reason. Use wall time (not a sum of concurrent jobs) for latency.
+Unknown or estimated values are not observed savings. Release ENV once required
+version-sensitive checks and safe cleanup finish, before Issue bookkeeping.
 
 Ordinary staging delivery performs no rollback rehearsal. Apply the Worker staging
 recovery policy: brief unavailability is acceptable within a recorded repair window,

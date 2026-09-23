@@ -36,9 +36,12 @@ upgrade a held scope, wait on your own overlapping claim, or release an unsafe
 operation to resolve a deadlock. On a detected cycle, stop the new wait and report
 the chain. Stopped-holder recovery remains fenced.
 
-Before claiming the selected staging resource, require the exact PR head to be based on latest
-`main`, mergeable, and green. Re-read those facts and current staging after the
-claim succeeds.
+Apply [candidate delivery](staging-candidates.md) when the explicit assignment and
+verified repository capability activate it: prepare main CI/images/prefetch before
+claiming, then revalidate the immutable candidate and current staging. In legacy
+mode, require the exact PR head to be based on latest `main`, mergeable and green
+before claiming, and re-read those facts after acquisition. Never mix the late
+claim timing with a release chain that can still deploy automatically.
 
 Record:
 

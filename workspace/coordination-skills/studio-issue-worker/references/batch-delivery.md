@@ -150,7 +150,12 @@ to current permissions; never pass unsupported escalation fields. No same-tuple
 approval shopping, raw Grok, manual Check, reviewer task, or hosted review waiter.
 
 Only the integration owner can acquire ENV after all current-tuple gates pass;
-revalidate afterward. The ordinary immutable-SHA/digest, rollout, health,
+select the acquisition phase using [candidate delivery](staging-candidates.md).
+An activated candidate path prepares main CI/images/prefetch outside ENV; the
+legacy path still claims before final main merge. Revalidate afterward. Named
+read-only acceptance peers can verify their child against the owner's protected
+tuple concurrently without acquiring ENV or taking over release ownership.
+The ordinary immutable-SHA/digest, rollout, health,
 acceptance-repair (one repair/60 minutes), rollback and release rules all apply.
 A prefetch consumer must accept the actual grouped workflow artifacts bound to
 source revision, component and digest; never regenerate an old per-component

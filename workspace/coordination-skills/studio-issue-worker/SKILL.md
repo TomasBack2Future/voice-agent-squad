@@ -1,6 +1,6 @@
 ---
 name: studio-issue-worker
-description: "Resolve exactly one explicitly assigned Voice Agent Studio GitHub Issue end to end as a Worker: claim its canonical Squad item, reproduce and fix it in an isolated branch/worktree, test, open and shepherd one PR, acquire the environment only at the guarded merge gate, verify the exact staging revision, roll back on failure, release locks, and close the Issue only after acceptance. Use when a prompt names one Studio Issue and item; never scan or dispatch the queue."
+description: "Resolve exactly one explicitly assigned Voice Agent Studio GitHub Issue end to end as a Worker: claim its canonical Squad item, reproduce and fix it in an isolated branch/worktree, test, open and shepherd one PR, acquire the environment at the verified release gate, verify the exact staging revision, roll back on failure, release locks, and close the Issue only after acceptance. Use when a prompt names one Studio Issue and item; never scan or dispatch the queue."
 ---
 
 # Studio Single-Issue Worker
@@ -195,11 +195,13 @@ and do not claim the environment.
   rebase if the target advances and do not reuse stale review evidence.
 - Merge without requesting separate human confirmation once the exact head is
   current, mergeable, policy-compliant, and green.
-- Acquire the target `ENV-*` claim with `--long --wait` only after merge
-  readiness, including an App-pinned Grok success when enforced. Revalidate the
-  exact head/base, App identity, Check Run, and all other gates after acquisition.
-  Record the authorizing Check Run audit pointer, then hold the claim across
-  merge, exact-revision deployment, acceptance, and required rollback.
+- Select the assigned delivery contract in [staging candidates](references/staging-candidates.md).
+  With verified `staging-candidate-v1` capability and explicit assignment, finish
+  main CI/images/prefetch outside ENV and claim immediately before deployment.
+  Otherwise preserve legacy acquire-before-merge delivery. Both modes require
+  current review/CI policy, including App-pinned Grok success when enforced,
+  and tuple revalidation after acquisition. Keep the claim through required
+  version-sensitive acceptance/cleanup and recovery, not final bookkeeping.
 - Require immutable digest/revision identity and independently test deployed
   behavior; green CI, Action success, and container health are separate gates.
 - An acceptance command failure is not automatically a deployment failure.

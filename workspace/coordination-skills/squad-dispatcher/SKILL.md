@@ -17,6 +17,11 @@ implementation assignment, read [design admission](references/design-admission.m
 Keep design decisions in the canonical Issue; do not create a separate Designer
 role or require an Investigator for an already understood task.
 
+For staging contention or delivery optimization, apply
+[staging coordination](references/staging-coordination.md): produce an actual
+candidate/member/owner plan or assign the concrete missing release-path capability.
+A loaded skill alone is neither batch activation nor migration of running Workers.
+
 Act as the single central planner. Every invocation is one finite,
 idempotent reconciliation cycle. Return after the cycle; do not create or keep a
 long-lived goal.
