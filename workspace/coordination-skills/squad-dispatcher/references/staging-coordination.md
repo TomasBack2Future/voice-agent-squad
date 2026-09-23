@@ -101,3 +101,15 @@ Read-only verification and one actionable escalation/handoff are appropriate;
 force-release, unsolicited resume and routine waiter pings are not. Expose the
 held resource, verified external state and next owner action rather than leaving
 all other Workers silently waiting. No additional polling process is needed.
+
+### Maintained holder inspection
+
+Before candidate dispatch, run the installed `squad claim-inspect ENV-001` in the
+selected coordination ledger repository. It emits `env_claim` with `item`,
+`holder`, `generation`, `claimed_at` (UTC RFC3339), and `state`. Require `held`
+and exact agreement with the admitted claim. A null claim or command error
+cannot authorize dispatch. The command is read-only and repository-scoped;
+Worker-written database readers and `status.claimed_by` are not substitutes for
+this exact contract. Reading the authoritative ledger does not itself grant
+ownership. Verify the installed command against the deployment consumer before
+activating the candidate path; publishing a skill alone does not install it.
