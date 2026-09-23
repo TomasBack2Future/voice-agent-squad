@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -194,20 +195,26 @@ def supervise(argv: list[str], assignment: dict, c: dict, env: dict) -> int:
     # terminal/process group; no detached timer can outlive its parent Worker.
     heartbeat(assignment, c, env, check=True)
     with subprocess.Popen(argv, cwd=assignment['worktree'], env=env) as child:
-        renewing = True
-        while True:
-            try:
-                return child.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                if renewing:
-                    try:
-                        heartbeat(assignment, c, env)
-                    except (OSError, ValueError, subprocess.SubprocessError) as error:
-                        # Never terminate a client that could hold ENV or have an
-                        # external operation in flight. Durable state needs reconciliation.
-                        print('Squad heartbeat stopped: runtime/fence failure. Claims were not released; '
-                              'reconcile this assignment before reuse. ' + diagnostic(str(error)), file=sys.stderr)
-                        renewing = False
+        # Ctrl-C cancels the client's current turn, not the lease supervisor.
+        # Install after spawning so the native child retains its normal SIGINT.
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            renewing = True
+            while True:
+                try:
+                    return child.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    if renewing:
+                        try:
+                            heartbeat(assignment, c, env)
+                        except (OSError, ValueError, subprocess.SubprocessError) as error:
+                            # Never terminate a client that could hold ENV or have an
+                            # external operation in flight. Durable state needs reconciliation.
+                            print('Squad heartbeat stopped: runtime/fence failure. Claims were not released; '
+                                  'reconcile this assignment before reuse. ' + diagnostic(str(error)), file=sys.stderr)
+                            renewing = False
+        finally:
+            signal.signal(signal.SIGINT, previous)
 
 
 def main() -> int:

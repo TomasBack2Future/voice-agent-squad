@@ -138,6 +138,13 @@ assert 'CODEX_SESSION_ID' not in os.environ
         data=json.loads(self.started.read_text())
         self.assertEqual(data['args'], ['--session-id', self.session, '--permission-mode', 'auto', 'Assigned work only'])
 
+    def test_client_turn_interrupt_does_not_exit_supervisor(self):
+        self.prepare()
+        self.row.update(state='dispatched', worker_thread_id=self.session);self.save_rows()
+        self.client.write_text('#!' + sys.executable + '\nimport os,signal,time\ntime.sleep(0.1)\nos.kill(os.getppid(),signal.SIGINT)\ntime.sleep(0.1)\n')
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_worker_receiver_is_child_owned_and_preflight_is_read_only(self):
         self.prepare()
         binary = self.root / 'events'
