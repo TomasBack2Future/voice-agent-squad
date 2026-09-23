@@ -53,7 +53,8 @@ Every dispatched Worker prompt must be self-contained and contain:
   limited to identifiers and resolved/unresolved state;
 - a requirement to finish issue-local implementation, rebase, tests,
   deterministic CI, and Grok review while another Worker holds the target ENV;
-  only merge/deploy/acceptance waits on the shared claim;
+  the assigned delivery mode determines which phases wait on ENV; candidate mode
+  prepares merge/CI/images/prefetch outside ENV only after capability activation;
 - the phase-aware local Grok contract: after quick local checks/self-review the Worker runs
   `squad-grok-review doctor`, then invokes `squad-grok-review` once for the
   substantive frozen head alongside full CI, using repository, PR, mode and
@@ -72,7 +73,9 @@ Every dispatched Worker prompt must be self-contained and contain:
   Importer/Feedback resources require the installed resource policy. Acquire a
   cross-service set in lexicographic ID order; a deadlock is not permission to
   release another task's claim;
-- a requirement to acquire the assigned staging ENV only after PR readiness;
+- the explicit staging delivery mode and verified repository capability reference;
+  legacy mode claims after PR readiness and before merge, while activated
+  staging-candidate-v1 claims after terminal CI/images/prefetch, before deployment;
   ENV-002/production requires an explicitly assigned production task. Release
   ENV only after verified safe acceptance or recovery, never while unsafe;
 - a requirement to read maintained `references/staging.md` before deployment:
@@ -106,9 +109,12 @@ closure. When all required gates pass, merge, validate the exact deployed
 revision, roll back safely on failure, release all locks, and close the Issue
 only after acceptance. Production is outside this default authorization unless
 assigned by a separate explicit production task. Use blocking claim --wait for
-contention. Another Worker's ENV claim blocks only merge, deployment, shared
-test-data mutation, acceptance, and rollback: complete this Issue's useful
-implementation, rebase, tests, deterministic CI, and Grok review before waiting.
+contention. The assigned staging mode is <legacy|staging-candidate-v1>, with
+capability evidence <reference or not-activated>. Legacy mode acquires ENV before
+merge. Activated candidate mode prepares main CI/images/prefetch outside ENV.
+Another Worker's ENV claim blocks independent deployment/shared writes; explicitly
+assigned read-only batch acceptance can run against its protected tuple. Complete
+useful implementation, tests and policy-required review before waiting.
 Do not perform, confirm, or ask the user about another Issue's acceptance or
 data mutation; mention dependencies only by identifier and resolved/unresolved
 state. Do not discover, reserve, dispatch, or start another Issue. Record
@@ -205,3 +211,8 @@ Design admission also applies to batch dispatch: one shared product decision
 may be referenced by several children; each child must have clear scope and
 acceptance ownership. Batch READY or an existing implementation handoff never
 substitutes for a current design decision.
+
+For delivery optimization, include the candidate contract reference and exact
+activation evidence in the prompt/coordination metadata, not new strict envelope
+keys. A live migration must state the old/new mode, owner, next allowed action
+and acknowledgment location; reloading the skill alone is insufficient.
