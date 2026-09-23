@@ -62,17 +62,26 @@ revision, mixed-revision check, readiness, data-integrity and availability
 signals. Record the evidence; timeout or verifier exit code alone is not proof
 of a product defect or harmless infrastructure failure.
 
-Only when the candidate is proven healthy, exact, unmixed and data-safe and the
-cause is proven harness/configuration or transient infrastructure, retain ENV
-and the candidate for one bounded repair/retry window. Record its start,
-deadline and attempt. Default to at most one substantive repair/retry or
-60 minutes, whichever comes first (a stricter release limit wins); rerunning a
-workflow or changing the harness does not reset the window. Pass required CI
-for a correction and revalidate the exact deployed tuple before acceptance.
+Ordinary staging delivery must not perform rollback rehearsals or redeploy only
+to reproduce valid evidence. Preserve a usable recovery path and last accepted
+revision. Reuse batch evidence only when its component identity, selectors and
+acceptance window cover this Issue; unrelated components need not share one SHA.
+Read-only peers may validate the protected candidate concurrently; shared writes
+still require the installed ownership contract and must not borrow another
+Worker's ENV claim.
 
-Roll back immediately for product/deployment failure, unknown/degraded health,
-mixed revisions, possible data/availability impact or unclassified failure;
-also roll back if the bounded repair/retry fails or expires. Use the last
+Brief staging unavailability is acceptable within a bounded forward-repair
+window. For a diagnosed, repairable failure with data integrity and revision
+identity established, record the repair, start, deadline and attempt; default to
+one substantive repair/retry or 15 minutes, whichever comes first. A stricter
+assignment limit wins. Do not reset the window by restarting a workflow. Run
+required checks for corrections and revalidate the deployed tuple. This policy
+does not disable an existing workflow's automatic failure recovery.
+
+Recover immediately for possible data corruption, uncontrolled mixed revisions
+or unknown operation identity; also recover when the bounded repair fails or
+expires. An uncertain verifier alone calls for bounded diagnosis, not an automatic
+rehearsal or a request for the user to run commands. Use the last
 accepted exact revision, not merely the previous Helm revision. Verify each
 release's current revision/status, deployment attempt, rollout token and
 captured recovery provenance against the live operation before invoking recovery.

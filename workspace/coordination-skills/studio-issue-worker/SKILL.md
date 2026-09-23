@@ -203,10 +203,10 @@ and do not claim the environment.
 - Require immutable digest/revision identity and independently test deployed
   behavior; green CI, Action success, and container health are separate gates.
 - An acceptance command failure is not automatically a deployment failure.
-  Apply the classification, one repair/retry or 60-minute limit, recovery
+  Apply the classification, bounded forward-repair window, recovery
   provenance and safe-release decision in
-  [references/staging.md](references/staging.md). Unknown/unsafe state requires
-  rollback, not acceptance. A recovery guard refusal requires tuple
+  [references/staging.md](references/staging.md). Possible data corruption or uncontrolled revision state requires
+  recovery, not acceptance. A recovery guard refusal requires tuple
   reconciliation, not bypass; failed recovery keeps ENV protected. After safe
   rollback continue this same Issue's follow-up PR under standing authorization.
 - Release `ENV` on every safe terminal path and notify waiters after release.
