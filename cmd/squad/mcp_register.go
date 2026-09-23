@@ -71,6 +71,32 @@ func attDirOf(repoRoot string) string   { return filepath.Join(repoRoot, ".squad
 
 func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
 	srv.Register(mcp.Tool{
+		Name: "squad_heartbeat", Description: "Renew owned active claims under the exact dispatched Worker generation; does not consume messages.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_id":{"type":"string"},"reservation":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1},"check":{"type":"boolean"}},"required":["reservation","worker_session","generation"],"additionalProperties":false}`),
+		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+			var a struct {
+				Agent       string `json:"agent_id"`
+				Reservation string `json:"reservation"`
+				Session     string `json:"worker_session"`
+				Generation  int64  `json:"generation"`
+				Check       bool   `json:"check"`
+			}
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, err
+			}
+			if err := requireRepo(repoRoot, repoID); err != nil {
+				return nil, err
+			}
+			agent, err := resolveAgentID(a.Agent)
+			if err != nil {
+				return nil, err
+			}
+			err = claims.New(db, repoID, nil).WorkerHeartbeat(ctx, agent, a.Reservation, a.Session, a.Generation, a.Check)
+			return map[string]bool{"ok": err == nil}, err
+		},
+	})
+
+	srv.Register(mcp.Tool{
 		Name:        "squad_register",
 		Description: "Register this agent in the squad global database.",
 		InputSchema: json.RawMessage(schemaRegister),

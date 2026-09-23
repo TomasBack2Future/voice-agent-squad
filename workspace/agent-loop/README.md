@@ -68,6 +68,20 @@ SLS reads.
 
 ## Verified Claude Worker launch
 
+The launcher remains a supervisor of the native client. Every 30 seconds while
+that client runs (including tool/CI waits), it renews claims with the exact dispatch
+key, generation, native session and child agent identity. Client exit stops renewal;
+there is no detached timer or model heartbeat prompt. The event receiver belongs
+to the supervisor lifetime. Heartbeat does not consume the mailbox. A heartbeat
+runtime/fence failure stops renewal and prints a diagnostic without killing a
+client that may have an external operation in flight. Reconcile that assignment;
+never blindly reacquire claims. Preflight rejects binaries lacking this command.
+
+Updating this source or installing skills alone does not update an existing
+launcher or CLI. Roll out the new runtime to all cleanup callers and launch new
+Workers through this supervisor; existing sessions require an explicitly
+coordinated migration. An older CLI can still apply its old stale-claim policy.
+
 Use `claude_worker_launcher.py` instead of copying per-task Python launchers.
 Keep the schema-valid assignment separate from
 `examples/claude-launch.json`: session ids, executable paths and runtime mode

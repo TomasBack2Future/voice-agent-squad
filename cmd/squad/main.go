@@ -68,6 +68,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newReviewRequestCmd())
 	root.AddCommand(newProgressCmd())
 	root.AddCommand(newTickCmd())
+	root.AddCommand(newHeartbeatCmd())
 	root.AddCommand(newStandupCmd())
 	root.AddCommand(newRetroCmd())
 	root.AddCommand(newPostmortemCmd())

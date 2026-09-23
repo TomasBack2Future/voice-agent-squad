@@ -502,3 +502,46 @@ func TestSweep_ReportsWaitCycleWithoutReleasingClaims(t *testing.T) {
 		t.Fatal("doctor removed ownership")
 	}
 }
+
+func TestReclaimStalePreservesDispatchAndLiveWait(t *testing.T) {
+	db := newDB(t)
+	start := int64(1000000)
+	now := start + 65*60
+	registerAgent(t, db, "repo-test", "agent-a", start)
+	for _, id := range []string{"BUG-1", "BUG-2", "BUG-3"} {
+		insertClaim(t, db, "repo-test", id, "agent-a", start, 0)
+	}
+	_, err := db.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,canonical_item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,worker_thread_id) VALUES('repo-test','D-1','BUG-1','test#1','dispatcher',?,?,?,'dispatched','session')`, start, start, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw := NewWithClock(db, "repo-test", emptyItems{}, func() time.Time { return time.Unix(now, 0) })
+	got, err := sw.ReclaimStale(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want two unmanaged reclaimed, got %v", got)
+	}
+	insertClaim(t, db, "repo-test", "BUG-2", "agent-a", start, 0)
+	_, err = db.Exec(`INSERT INTO claim_waits(repo_id,wait_id,agent_id,item_id,resource_group,resource_scope,expires_at) VALUES('repo-test','W-1','agent-a','ENV-001','','',?)`, now+30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = sw.ReclaimStale(context.Background())
+	if err != nil || len(got) != 0 {
+		t.Fatalf("live wait lost claim: %v %v", got, err)
+	}
+	now += 31
+	got, err = sw.ReclaimStale(context.Background())
+	if err != nil || len(got) != 1 || got[0] != "BUG-2" {
+		t.Fatalf("expired wait not reclaimed: %v %v", got, err)
+	}
+	if _, err = db.Exec(`UPDATE dispatch_reservations SET state='completed'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err = sw.ReclaimStale(context.Background())
+	if err != nil || len(got) != 1 || got[0] != "BUG-1" {
+		t.Fatalf("terminal dispatch: %v %v", got, err)
+	}
+}

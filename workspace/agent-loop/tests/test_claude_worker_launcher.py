@@ -35,6 +35,8 @@ class LauncherTests(unittest.TestCase):
         script.write_text('#!' + sys.executable + '\n' + '''import json, os, pathlib, sys
 p=pathlib.Path.cwd()
 with (p/'calls').open('a') as f:f.write('read\\n')
+if sys.argv[1]=='heartbeat':
+ print('--reservation --generation --worker-session --check');sys.exit(0)
 assert sys.argv[1:] == ['dispatch','list','--json']
 assert os.environ['SQUAD_AGENT']=='worker-test'
 assert os.environ['SQUAD_SESSION_ID'].startswith('claude:00000000-0000-4000-8000-000000000123:')
@@ -83,7 +85,7 @@ assert 'CODEX_SESSION_ID' not in os.environ
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['binding'], 'pending')
         self.assertFalse(self.started.exists())
-        self.assertEqual((self.ledger/'calls').read_text(), 'read\n')
+        self.assertEqual((self.ledger/'calls').read_text(), 'read\nread\n')
 
     def test_compat_environment_is_derived_from_child(self):
         self.prepare('codex-wrapper-compat')
@@ -208,3 +210,35 @@ class ResourceAdmissionTests(unittest.TestCase):
         with patch.object(launcher.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'{"item":"ENV-001","status":"ready"}','')) as run:
             self.assertEqual(launcher.check_resources(a,c,{})[0]['declared_item'],'ENV-003')
             self.assertNotIn('--require-policy',run.call_args.args[0])
+
+
+class HeartbeatSupervisorTests(unittest.TestCase):
+    def test_long_running_client_renews_and_exit_stops_timer(self):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.wait.side_effect = [subprocess.TimeoutExpired('client', 30), subprocess.TimeoutExpired('client', 30), 0]
+        with patch.object(launcher.subprocess, 'Popen') as spawn, patch.object(launcher, 'heartbeat') as beat:
+            spawn.return_value.__enter__.return_value = client
+            self.assertEqual(launcher.supervise(['client'], {'worktree':'/tmp'}, {}, {}), 0)
+            self.assertEqual(beat.call_count, 3)
+            self.assertTrue(beat.call_args_list[0].kwargs['check'])
+
+    def test_old_runtime_fails_before_client_launch(self):
+        with patch.object(launcher, 'heartbeat', side_effect=ValueError('unsupported')), patch.object(launcher.subprocess, 'Popen') as spawn:
+            with self.assertRaises(ValueError): launcher.supervise(['client'], {'worktree':'/tmp'}, {}, {})
+            spawn.assert_not_called()
+
+    def test_rejected_fence_stops_renewing_without_killing_active_client(self):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.wait.side_effect = [subprocess.TimeoutExpired('client',30), subprocess.TimeoutExpired('client',30), 0]
+        with patch.object(launcher.subprocess, 'Popen') as spawn, patch.object(launcher, 'heartbeat', side_effect=[None, ValueError('stale')]) as beat:
+            spawn.return_value.__enter__.return_value = client
+            self.assertEqual(launcher.supervise(['client'], {'worktree':'/tmp'}, {}, {}), 0)
+            self.assertEqual(beat.call_count, 2)
+            client.terminate.assert_not_called()
+
+    def test_preflight_rejects_missing_heartbeat_capability(self):
+        with patch.object(launcher.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'old CLI help','')):
+            with self.assertRaisesRegex(ValueError, 'lacks fenced heartbeat'):
+                launcher.check_heartbeat_runtime({'coordination_executable':'/squad','ledger_directory':'/tmp'}, {})
