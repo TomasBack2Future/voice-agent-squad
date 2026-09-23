@@ -1,0 +1,75 @@
+{
+  "schema_version": "agent-loop.project-profile.v1",
+  "id": "importer",
+  "version": 1,
+  "repository": "TomasBack2Future/convoai-studio-importer",
+  "context_by_phase": {
+    "implementation": [
+      "AGENTS.md",
+      "docs/index.md",
+      "docs/development.md",
+      "the owning component document selected by touched paths"
+    ],
+    "review": [
+      "the frozen Issue contract and AC-to-evidence mapping",
+      "the current repository review policy",
+      ".github/workflows/ci.yml"
+    ],
+    "staging": [
+      "docs/environments-and-ci.md",
+      "docs/continuous-delivery.md",
+      "docs/staging-validation.md",
+      "docs/source-environments.md",
+      "docs/operations.md",
+      "skills/convoai-call-studio-import/SKILL.md only for operational import acceptance"
+    ],
+    "production": [
+      "docs/environments-and-ci.md",
+      "docs/continuous-delivery.md",
+      "docs/operations.md",
+      "docs/source-environments.md",
+      "the separately authorized production scope and delivery receipt"
+    ]
+  },
+  "gates": {
+    "fast": [
+      "uv sync --frozen --extra dev",
+      "uv run ruff check .",
+      "uv run mypy src",
+      "uv run pytest -q",
+      "git diff --check",
+      "For packaging changes, run the Docker build and container CLI smoke from .github/workflows/ci.yml, including the affected runtime invocation."
+    ],
+    "review": [
+      "one PR-wide independent review admitted only for the final complete frozen diff under the actual repository review policy",
+      "one in-flight review per PR with a freeze write barrier and deterministic join",
+      "full deterministic CI joined with the review result"
+    ],
+    "staging": [
+      "Read-only prerequisite receipt identifying the ConvoAI source, Importer deployment target and Studio destination separately before environment ownership.",
+      "Revalidate the current PR tuple and required checks before and after ownership.",
+      "Use the Importer repository's Compose delivery adapter; record tooling SHA, release tag/SHA and immutable image digest separately. Merge does not deploy.",
+      "Verify the exact container revision/digest, health, single state owner and issue-specific functional acceptance; record checkpoint and rollback disposition without replaying SQLite state.",
+      "Before service startup or import acceptance, verify authorized subscriptions, Studio destination, auto_apply and cohort; startup may immediately import real data."
+    ]
+  },
+  "resources": {
+    "staging": "ENV-003",
+    "production": "ENV-004",
+    "service_scope": "importer",
+    "policy": "workspace/resources/studio.json",
+    "scope_activation": "Require the selected ledger policy and runtime to be installed. Studio ENV-001/002 claims with omitted scope retain legacy broad coverage and may conflict with Importer; never bypass that conflict.",
+    "parallelism": "Independent Importer and Studio work may run concurrently when effective resource scopes do not conflict. Serialize writes to the same shared Studio test Project even when deployment locks differ; ordinary Studio API traffic alone does not require a Studio deployment lock.",
+    "cross_service_acceptance": "Resolve every actual deployment and shared-Project resource before writes; separate Importer locks do not authorize Studio deployment changes or concurrent shared-Project mutation.",
+    "acquisition_order": "lexicographic item ID; no in-place scope upgrades",
+    "production_default": "forbidden unless the assignment explicitly sets production=true; customer backfills and credential changes also require explicit scope"
+  },
+  "risk_probes": [
+    "For runtime packaging, verify the installed console script as the runtime UID and preserve the module entrypoint and normal serve startup.",
+    "For configuration reload, exercise inode-changing atomic replacement, invalid replacement retaining the last valid generation, and exclusion of secrets from readable mounts and diagnostics.",
+    "For state and retries, exercise cursor-after-commit ordering, restart around side effects, deterministic recovery of uncertain Job creation/apply and one owner per SQLite state volume.",
+    "For mapping, preserve final agent_memory dialogue, interruption semantics and pinned Session contracts; never replace dialogue with the Call API transcript.",
+    "For preview/apply admission, prove rejected previews never apply and uncertain remote results never trigger blind resubmission.",
+    "For privacy, scan synthetic SQLite, logs, metrics and traces for Session bodies, signed URLs and secret values."
+  ]
+}

@@ -56,6 +56,41 @@ class WorkerPreflightTests(unittest.TestCase):
         with self.assertRaises(preflight.ValidationError):
             self.check()
 
+    def select_importer(self):
+        repository = "TomasBack2Future/convoai-studio-importer"
+        self.git("remote", "set-url", "origin", f"git@github.com:{repository}.git")
+        self.profile = ROOT / "projects/importer/profile.json"
+        self.assignment.update(
+            assignment_id="importer/1/1", issue=f"{repository}#1",
+            repository=repository, item="IMPORTER-001",
+            reservation={"key": "DISPATCH-IMPORTER-1", "generation": 1},
+            project_profile={"id": "importer", "version": 1, "path": str(self.profile)},
+        )
+
+    def test_importer_cold_start_uses_its_repository_and_profile(self):
+        self.select_importer()
+        before = self.git("status", "--porcelain")
+        receipt = self.check()
+        self.assertEqual(receipt["status"], "ready")
+        self.assertEqual(receipt["ownership"], "not_checked")
+        self.assertEqual(before, self.git("status", "--porcelain"))
+        self.assertLessEqual(len(json.dumps(self.assignment, separators=(",", ":")).encode()), 2048)
+
+    def test_importer_cannot_borrow_studio_profile(self):
+        self.select_importer()
+        self.profile = ROOT / "projects/studio/profile.json"
+        self.assignment["project_profile"] = {
+            "id": "studio", "version": 1, "path": str(self.profile),
+        }
+        with self.assertRaisesRegex(preflight.ValidationError, "assignment/profile identity mismatch"):
+            self.check()
+
+    def test_importer_profile_rejects_studio_checkout(self):
+        self.select_importer()
+        self.git("remote", "set-url", "origin", "git@github.com:TomasBack2Future/voice-agent-studio.git")
+        with self.assertRaisesRegex(preflight.ValidationError, "assignment repository mismatch"):
+            self.check()
+
     def test_wrong_runtime_discovery_path_fails(self):
         self.path.write_text(json.dumps(self.assignment))
         with self.assertRaises(preflight.ValidationError):

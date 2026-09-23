@@ -18,6 +18,7 @@ large prompt:
 | Generic Worker lifecycle | `roles/worker/SKILL.md` |
 | Review admission, single-flight and freeze | `roles/worker/references/review-readiness.md` |
 | Studio repository and delivery capabilities | `projects/studio/profile.json` |
+| Importer repository and Compose delivery capabilities | `projects/importer/profile.json` |
 | Bounded dispatch input | `schemas/assignment-envelope.schema.json` |
 | Compact/resume continuity | `schemas/checkpoint.schema.json` |
 | Live cmux session transport | `tools/cmux-sessions/SKILL.md` |
@@ -41,6 +42,22 @@ explicit kubeconfig/context selection. It contains no cluster nickname,
 credential, customer data, local home path, or live deployment state. The
 assignment must say whether staging and production are authorized; production
 defaults are never inferred from merge or staging success.
+
+For `TomasBack2Future/convoai-studio-importer`, select `importer@1` and the
+absolute installed `projects/importer/profile.json` path in the assignment.
+Use the generic `agent-loop-worker` role with the Importer repository's own
+instructions and Python/Docker gates. The Studio profile is not a fallback:
+preflight continues to reject any assignment/profile/checkout repository mismatch.
+The package synchronization includes this profile with the Worker scripts and
+skills; never add it by editing an installed snapshot.
+
+Importer owns ENV-003/004 and uses its repository's Compose delivery adapter.
+Independent Studio and Importer work may proceed concurrently after resource
+policy adoption, subject to actual claim scopes: an omitted Studio scope still
+has legacy broad coverage. Serialize writes to the same shared Studio test
+Project even when deployment locks differ. Keep ConvoAI source environment,
+Importer deployment target and Studio destination explicit and separate.
+This profile grants no production, backfill or credential-change authority.
 
 The workspace `AGENTS.md` owns skill routing. Product workflow skills remain in
 their owning repositories; cross-repository or machine capabilities have one
