@@ -227,3 +227,14 @@ before mutation. Its scoped developer-to-integration handoff replaces ordinary
 per-Issue release/closure ownership for those assigned contributions. Ordinary
 single-Issue mode remains unchanged. Preparation can publish READY with explicitly
 pending runtime acceptance; READY never closes an Issue or releases child holds.
+
+## cmux terminal visibility
+
+If this assignment includes an explicit cmux workspace mapping, follow the
+lifecycle-color section of `../../agent-loop/tools/cmux-sessions/SKILL.md`.
+Keep the assigned workspace Blue while work, claims or external operations remain.
+After the durable terminal outcome and required release/acknowledged handoff,
+clear its color before the final response. This includes a verified terminal
+handoff even when the Issue remains open. Color failure is nonblocking; include
+it in the terminal outcome for Dispatcher reconciliation. Never clear another
+workspace or treat a turn ending as assignment completion.

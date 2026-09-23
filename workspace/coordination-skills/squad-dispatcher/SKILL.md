@@ -216,6 +216,17 @@ blocker, not permission to inject input, start another Dispatcher, or ask the
 user to relay Worker messages. Receiver setup belongs to the session launcher;
 see the package's `terminal_receiver.py` and terminal-event command reference.
 
+## Worker workspace visibility
+
+For cmux Workers, apply the lifecycle-color contract in
+`../../agent-loop/tools/cmux-sessions/SKILL.md`. After binding, mark the explicit
+Worker workspace Blue. During existing reconciliation, retain Blue for all
+nonterminal assignments and clear the color for verified terminal assignments
+with resolved claims/external operations, even if the terminal session remains
+open. Project this for existing mapped Workers when the skill is reloaded.
+This authorized presentation update needs no Worker message or extra role;
+never infer completion from a quiet screen or failed process alone.
+
 ## Heartbeat reporting
 
 The scheduler heartbeat is quiet unless the user needs to know about a material
