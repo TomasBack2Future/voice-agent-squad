@@ -105,7 +105,8 @@ all other Workers silently waiting. No additional polling process is needed.
 ### Maintained holder inspection
 
 Before candidate dispatch, run the installed `squad claim-inspect ENV-001` in the
-selected coordination ledger repository. It emits `env_claim` with `item`,
+selected coordination ledger repository (or use `--repo /path/to/ledger`
+when the deployment command runs in a product worktree). It emits `env_claim` with `item`,
 `holder`, `generation`, `claimed_at` (UTC RFC3339), and `state`. Require `held`
 and exact agreement with the admitted claim. A null claim or command error
 cannot authorize dispatch. The command is read-only and repository-scoped;

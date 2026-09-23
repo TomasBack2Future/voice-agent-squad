@@ -48,14 +48,23 @@ func inspectClaim(ctx context.Context, db *sql.DB, repoID, itemID string) (*Clai
 }
 
 func newClaimInspectCmd() *cobra.Command {
-	return &cobra.Command{
+	var ledgerRoot string
+	cmd := &cobra.Command{
 		Use:   "claim-inspect <item>",
 		Short: "Read the current repository's exact claim as JSON without changing it",
 		Args:  cobra.ExactArgs(1),
 		// Override the root post-run sweep: inspection must not mutate ownership.
 		PersistentPostRunE: func(_ *cobra.Command, _ []string) error { return nil },
 		RunE: func(cmd *cobra.Command, args []string) error {
-			wd, err := os.Getwd()
+			wd := ledgerRoot
+			if wd == "" {
+				var err error
+				wd, err = os.Getwd()
+				if err != nil {
+					return err
+				}
+			}
+			wd, err := filepath.Abs(wd)
 			if err != nil {
 				return err
 			}
@@ -88,4 +97,6 @@ func newClaimInspectCmd() *cobra.Command {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 		},
 	}
+	cmd.Flags().StringVar(&ledgerRoot, "repo", "", "selected ledger repository (defaults to current directory)")
+	return cmd
 }

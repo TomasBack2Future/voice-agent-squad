@@ -44,7 +44,8 @@ func TestClaimInspectScopedReadOnly(t *testing.T) {
 	var out bytes.Buffer
 	cmd := newRootCmd()
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"claim-inspect", "ENV-001"})
+	t.Chdir(t.TempDir())
+	cmd.SetArgs([]string{"claim-inspect", "ENV-001", "--repo", root})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,8 @@ func TestClaimInspectMissingDatabaseDoesNotCreateState(t *testing.T) {
 	cmd := newRootCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"claim-inspect", "ENV-001"})
+	t.Chdir(t.TempDir())
+	cmd.SetArgs([]string{"claim-inspect", "ENV-001", "--repo", root})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("missing database accepted")
 	}

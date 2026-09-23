@@ -953,5 +953,7 @@ RFC3339 `claimed_at` against the admitted claim.
 This is a point-in-time observation, not a claim acquisition, renewal or an atomic
 fence on a subsequent external deployment. Call it immediately before dispatch
 and retain the normal ownership/fencing protocol. Run in the same selected ledger
-repository as the claim, not an unrelated source checkout. MCP parity:
+repository as the claim, not an unrelated source checkout, or pass
+`--repo /path/to/ledger` explicitly when called by another repository’s deploy
+script. MCP parity:
 `squad_claim_inspect` with `{"item_id":"ENV-001"}` returns the same JSON contract.
