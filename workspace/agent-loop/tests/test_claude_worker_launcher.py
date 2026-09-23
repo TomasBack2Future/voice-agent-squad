@@ -134,6 +134,28 @@ assert 'CODEX_SESSION_ID' not in os.environ
         data=json.loads(self.started.read_text())
         self.assertEqual(data['args'], ['--session-id', self.session, '--permission-mode', 'auto', 'Assigned work only'])
 
+    def test_worker_receiver_is_child_owned_and_preflight_is_read_only(self):
+        self.prepare()
+        binary = self.root / 'events'
+        binary.write_text('#!' + sys.executable + '\nprint("--outcome")\n')
+        binary.chmod(0o700)
+        self.config['event_executable'] = str(binary)
+        self.config_path.write_text(json.dumps(self.config))
+        self.assertEqual(self.run_launcher(check=True).returncode, 0)
+        state = self.root / ('receiver-' + self.session)
+        self.assertFalse(state.exists())
+        self.row.update(state='dispatched', worker_thread_id=self.session);self.save_rows()
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = json.loads(self.started.read_text())['args']
+        settings_path = Path(argv[argv.index('--settings') + 1])
+        hook = json.loads(settings_path.read_text())['hooks']['Stop'][0]['hooks'][0]
+        config = json.loads(Path(hook['args'][-1]).read_text())
+        self.assertEqual(config['role'], 'worker')
+        self.assertEqual(config['native_session_id'], self.session)
+        self.assertEqual(config['agent_id'], 'worker-test')
+        self.assertTrue(hook['asyncRewake'])
+
     def test_only_successful_pending_binding_can_wait(self):
         self.prepare()
         with patch.object(launcher, 'binding', side_effect=['pending','bound']) as read:

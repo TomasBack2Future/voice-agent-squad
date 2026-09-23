@@ -879,9 +879,26 @@ mailbox hooks are not substitutes for idle wakeup or a processing receipt.
 `squad_terminal_events_ack`, fields `event_id`, `note`, optional `agent_id`)
 records processing after recipient reconciliation. It is idempotent for the same
 note, owner-scoped and generation/binding-fenced. It never closes a reservation,
-releases claims or creates work. Pending discovery only accepts same-author,
-same-thread outcome references for the recipient's current dispatched
-reservation. Historical completed reservations are not imported on installation.
+releases claims or creates work. Discovery accepts canonical-thread and legacy global references only when the
+outcome/source have the same author and the author has current-generation task
+custody (claim or claim history). It imports terminal callbacks after reservation
+completion; closing a reservation before delivery cannot erase an outcome.
+Canonical `done` also emits `reconcile-needed`; canonical `ask` mentioning the
+owner emits `decision-request`. Neither releases WIP. Leave terminal observations
+unacknowledged while termination is unresolved so the existing receiver retries.
+
+`terminal-events publish --reservation KEY --generation N --worker-session ID
+--kind KIND --outcome MESSAGE_ID` (MCP: `squad_terminal_events_publish`, fields
+`reservation`, `generation`, `worker_session`, `kind`, `outcome_id`, optional
+`agent_id`) inserts a fenced event atomically. Kinds: `issue-closed`,
+`handoff-complete`, `blocked`, `decision-request`, `decision-resolved`,
+`reconcile-needed`. Outcome and sender must match the repository, task and current
+reservation generation. Recipient/item are ledger-derived; invalid requests fail.
+Retries are idempotent. Success means pending, not delivered. Decision replies
+can only be published by the reservation owner and route to the current claimant.
+New Claude launch configs set `event_executable` to enable native Worker reply
+wakeups. Without that setting, no idle reply delivery is promised. Published
+events use the existing 15-second durable catch-up, not a second scheduler.
 
 Migration 018 adds `terminal_event_receipts`; original messages/read cursors are
 unchanged. Delivery records are separate from processing. An unacknowledged

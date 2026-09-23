@@ -14,6 +14,7 @@
     "ledger_directory": {"type": "string", "pattern": "^/"},
     "client_executable": {"type": "string", "pattern": "^/"},
     "permission_mode": {"enum": ["auto", "acceptEdits", "bypassPermissions", "manual", "dontAsk", "plan"]},
+    "event_executable": {"type": "string", "pattern": "^/"},
     "prompt_file": {"type": "string", "pattern": "^/"}
   }
 }

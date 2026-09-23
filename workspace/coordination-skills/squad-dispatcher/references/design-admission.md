@@ -78,6 +78,12 @@ from the product context; do not hard-code a universal replacement route.
 
 Before reserving a new implementation Worker, verify the READY revision against
 the latest relevant Issue requirements, active dependencies and product evidence.
+Check superseding merged changes and recorded user decisions, not only the
+original linked PR. Resolve conflicts in favor of the current authorized contract
+and cite the supersession before READY. In an acceptance-only assignment, distinguish
+an obsolete assertion from a new product requirement: the Dispatcher may correct
+an assertion to match already-authorized semantics without another human approval;
+it may not weaken an invariant or choose new product behavior this way.
 Refresh affected decisions when those inputs change; do not reread the whole
 product on every heartbeat. For several children sharing a design, reference the
 same decision and give each child bounded scope and acceptance ownership.
@@ -103,3 +109,24 @@ valid implementation and existing claim/ENV safety rules.
 On completion, verify acceptance against the admitted revision as well as the
 technical evidence. Track post-dispatch product-decision changes and acceptance
 rework when available; the goal is less rework, not more documents or roles.
+
+## Acceptance capability and resource admission
+
+Before READY, identify the concrete test Project/environment, the API entrypoint
+being accepted, a verified fixture and its termination criteria, and the scoped
+credential capability for both execution and cleanup. Reuse a known-good fixture
+by immutable reference; do not share secret material in assignment prose. A
+successful low-level work-template request does not prove the page/public API
+contract. Missing fixtures are explicit preparation work with a bounded owner,
+not a reason for each Worker to rediscover all configurations.
+
+Classify operations by their effects. Creating credentials, imports, fixtures,
+Simulation/Evaluation runs or Sessions is a write even when called "acceptance".
+Model the same test Project as a shared resource; serialize conflicting writes
+and require the applicable ENV claim before the first write. Independent source
+or read-only work may overlap within the user's WIP. For retained artifacts,
+decide custody/retention before dispatch; do not promise deletion absent an API.
+
+A missing cleanup scope is an admission gap to resolve using already-authorized
+credential tooling. It is not automatically a user-only chore. Escalate only a
+verified authority/access gap or a material new decision, with the exact evidence.

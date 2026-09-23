@@ -40,7 +40,25 @@ func newTerminalEventsCmd() *cobra.Command {
 		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID}).Ack(cmd.Context(), args[0], note)
 	}}
 	ack.Flags().StringVar(&note, "note", "", "Durable reconciliation result/reference")
-	cmd.AddCommand(listen, ack)
+	var request terminalevents.PublishRequest
+	publish := &cobra.Command{Use: "publish", Short: "Persist one validated event for its ledger-derived recipient", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		id, err := (terminalevents.Store{DB: bc.db, Repo: bc.repoID}).Publish(cmd.Context(), bc.agentID, request)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"event_id": id, "state": "pending"})
+	}}
+	publish.Flags().StringVar(&request.Reservation, "reservation", "", "Exact dispatch reservation key")
+	publish.Flags().Int64Var(&request.Generation, "generation", 0, "Reservation generation")
+	publish.Flags().StringVar(&request.WorkerSession, "worker-session", "", "Bound native Worker session")
+	publish.Flags().StringVar(&request.Kind, "kind", "", "issue-closed, handoff-complete, blocked, decision-request or decision-resolved")
+	publish.Flags().Int64Var(&request.OutcomeID, "outcome", 0, "Durable Squad outcome/decision message id")
+	cmd.AddCommand(listen, ack, publish)
 	return cmd
 }
 
