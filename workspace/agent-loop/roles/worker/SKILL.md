@@ -35,6 +35,10 @@ Use [operational readiness](references/operational-readiness.md) at startup,
 when a shared blocker appears, and before environment admission. Keep its
 startup receipt separate from ownership and release evidence.
 
+Before environment admission, use [acceptance readiness](references/acceptance-readiness.md)
+to prepare executable assertions and fixtures. Use the same reference for timeout
+attribution and interrupted ENV ownership.
+
 ## Execution contract
 
 - Own one Issue and one implementation attempt. Never discover or start the next
