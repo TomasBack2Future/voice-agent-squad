@@ -141,3 +141,9 @@ decide custody/retention before dispatch; do not promise deletion absent an API.
 A missing cleanup scope is an admission gap to resolve using already-authorized
 credential tooling. It is not automatically a user-only chore. Escalate only a
 verified authority/access gap or a material new decision, with the exact evidence.
+
+Require a compact executable acceptance plan before environment admission, using
+[acceptance readiness](../../../agent-loop/roles/worker/references/acceptance-readiness.md).
+An AC list alone does not establish runnable fixtures, supported retry states,
+access or a usable evidence path. Delegate bounded preparation outside ENV;
+reuse valid checks and avoid another approval round for routine implementation.

@@ -48,3 +48,21 @@ On skill refresh, read the new installed files rather than relying on conversati
 memory; record resolved source commit and the changed rules. New assignments pin
 the new package. Existing Workers retain identity, claims and scope; notify them
 only for a necessary authorized correction, never restart them just to refresh.
+
+## Trigger chain and interrupted holders
+
+Before promising one deployment for a batch, inspect the complete trigger chain:
+merge/push, CI completion, prefetch/downstream workflows, and actual dispatch.
+A deploy workflow declaring only workflow_dispatch can still be invoked
+automatically by another workflow. Record how intermediate candidates are
+suppressed or coalesced through an existing supported mechanism. If none exists,
+state the required workflow change; a skill edit cannot implement batching.
+Do not disable gates or rely on timing races to suppress intermediate releases.
+
+During the existing reconciliation cycle, distinguish ordinary active waiters
+from a holder paused by a denied/cancelled tool call. Apply the shared
+[interrupted ownership contract](../../../agent-loop/roles/worker/references/acceptance-readiness.md).
+Read-only verification and one actionable escalation/handoff are appropriate;
+force-release, unsolicited resume and routine waiter pings are not. Expose the
+held resource, verified external state and next owner action rather than leaving
+all other Workers silently waiting. No additional polling process is needed.

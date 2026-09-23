@@ -79,6 +79,11 @@ After two no-progress observations, or ten minutes of preparation without a
 credible completion estimate, diagnose the current stage once before retrying.
 Preserve useful work and do not relax required criteria to manufacture progress.
 
+Before taking ENV and when acceptance stalls, apply the shared
+[acceptance readiness contract](../../../agent-loop/roles/worker/references/acceptance-readiness.md).
+Prepare the executable checks and eligible retry fixtures outside the lock;
+distinguish transport failure, functional failure and interrupted ownership.
+
 ## Automated acceptance and human fallback
 
 The Worker owns authorized operation, verification and evidence collection,

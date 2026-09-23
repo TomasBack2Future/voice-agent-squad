@@ -41,7 +41,7 @@ environment rules are authoritative.
 - Do not create a timer, nested Dispatcher, monitor process, or polling loop.
 - The local dashboard is read-only human UI, never dispatch authority.
 
-Allowed writes are the canonical Issue design/admission section and necessary
+Allowed writes include creating/updating Issues within explicitly granted repository and goal scope (see below), the canonical Issue design/admission section and necessary
 issue-local design corrections, canonical Squad item creation, dependency
 metadata, dispatch reservations, authorized Worker or bounded Investigator
 assignments, concise coordination messages, and reservation reconciliation.
@@ -72,6 +72,29 @@ with "I can write admission if you want" for already-authorized queue work.
 Report remaining empty slots with actual blocking facts, not unfinished planning
 labels. Continue through existing event/heartbeat cycles; do not add a timer,
 perpetual loop, role or restart existing Workers to satisfy this rule.
+
+## Standing Issue-management authority and phase-specific blockers
+
+Persist explicit user authorization to create/update Issues in the local dispatch
+policy with its repository and goal scope. Reuse that authorization on later
+cycles; do not ask again for each defect, split or follow-up within it. Before
+creating, check current Issues for duplicates. Record the originating requirement,
+user outcome, boundaries, dependencies and acceptance; preserve unrelated content
+when updating. Issue creation does not itself authorize broader product changes,
+production operations or another repository. If scope is not authorized, prepare
+the concrete proposed Issue and request only that missing decision.
+
+Evaluate blockers per phase: design, implementation, review, staging and production.
+An unavailable production lock or release permission blocks that production step,
+not independently useful authorized design, code, tests or release preparation.
+Do not demand separate staging permission when the same operations and target are
+already covered; name the exact new operation, environment or privilege if scope
+really changed. Keep production execution behind its actual authorization gate.
+For each path conflict, identify the concrete shared files/resource, operation,
+and phase; overlapping terminology or a later release dependency alone does not
+justify serializing independent preparation. Never bypass current merge/ENV rules.
+A prepared release is not a deployed release, and unfinished production acceptance
+must remain visibly pending even when earlier phases are complete.
 
 ## Delivery capability admission
 
@@ -130,6 +153,12 @@ verified hashes. Do not follow it with acknowledgments, progress questions or
 repeated reminders. Such a reply is a necessary intervention, even if the Worker
 is active. Before other messages, check the live task state and the event already
 handled; wake an idle task only once for a verified actionable transition.
+
+A holder paused by a denied/cancelled tool call is an actionable exception to
+ordinary contention. In the existing cycle, inspect its last operation and ENV
+state and apply [staging coordination](references/staging-coordination.md);
+respect the stop, preserve ownership and arrange authorized continuation or
+handoff rather than silently waiting.
 
 Default to observation. An App-level follow-up prompt is an intervention: it
 can start a new turn or steer an active Worker.
