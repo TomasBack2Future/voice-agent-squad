@@ -47,6 +47,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newClaimCmd())
 	root.AddCommand(newResourcesCmd())
+	root.AddCommand(newExecutionCmd())
 	root.AddCommand(newReleaseCmd())
 	root.AddCommand(newDoneCmd())
 	root.AddCommand(newAcceptCmd())

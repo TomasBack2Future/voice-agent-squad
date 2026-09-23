@@ -925,3 +925,10 @@ reminder; the next hook re-arms it. Other receiver failures report once per
 incarnation and need repair plus a new incarnation, rather than a wakeup loop.
 Do not claim the wake channel is healthy just because configuration exists:
 validate actual native wakeup, draft preservation, replay and acknowledgement.
+
+## `squad execution`
+
+Authorize a frozen production binding, serve narrow online admission, inspect a
+run pin, and reconcile a verified terminal operation. See
+[execution admission](execution-admission.md) for JSON, transport, CLI/MCP parity
+and recovery constraints. No source command installs the service automatically.

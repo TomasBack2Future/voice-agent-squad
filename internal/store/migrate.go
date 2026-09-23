@@ -261,6 +261,20 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		legacy = append(legacy, legacyRow{18, "terminal_event_receipts"})
 	}
 
+	var hasExecutions, executionGuards int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='execution_authorizations'`).Scan(&hasExecutions); err != nil {
+		return err
+	}
+	if hasExecutions > 0 {
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE (type='trigger' AND name IN ('execution_claim_delete','execution_claim_update','execution_claim_replace','execution_claim_reauthorize')) OR (type='index' AND name='execution_one_active')`).Scan(&executionGuards); err != nil {
+			return err
+		}
+		if executionGuards != 5 {
+			return fmt.Errorf("incomplete execution admission guards; refusing legacy bootstrap")
+		}
+		legacy = append(legacy, legacyRow{19, "execution_admission"})
+	}
+
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

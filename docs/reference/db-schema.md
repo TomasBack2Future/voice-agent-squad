@@ -283,3 +283,12 @@ whether a replacement exists or remains valid. CLI `attest list` and MCP
 `squad_attestations` expose corrections; `doctor` reports them without requiring
 an item's `evidence_required` to be nonempty. Historical execution statistics
 continue to count original process results.
+
+## Execution admission (migration 019)
+
+`execution_authorizations` records immutable binding JSON plus state
+(`authorized`, `active`, `reconciled`, `revoked`), holder/generation, GitHub
+run/attempt, latest step and terminal reconciliation evidence. A unique active
+index and claim triggers make begin atomic with ownership pinning, including for
+legacy release/recovery paths. Unstarted permits are revoked on ownership change;
+active records do not expire out of the lock. See [execution admission](execution-admission.md).
