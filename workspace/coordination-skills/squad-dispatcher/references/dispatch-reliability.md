@@ -62,11 +62,6 @@ findings in one behavior family, reconcile the owner checkpoint once. Request a
 bounded recovery/design sweep only when evidence shows a correctness or scope
 risk. Do not routinely interrupt active Workers or invent another monitor.
 
-Before a cross-provider/model takeover, verify the destination can represent the
-same canonical task/reservation, route callbacks and retain external-operation
-ownership. Persist both provider and actual task ID. A foreign UUID, textual
-handoff or successful model call is not proof of binding. Failed rebind or callback
-routing requires control-plane repair before any new writer; never borrow another
-agent identity, force-register it, or treat a note as replacing the reservation.
-Record handoff interruption separately from model performance; do not infer token
-savings or comparative model quality from an uncontrolled switch.
+Use [session continuity](session-continuity.md) for behavioral health checks and
+cross-provider/model takeover. It owns the writer, callback and reservation
+closure protocol; quiet time alone never triggers replacement.

@@ -8,6 +8,12 @@ description: Launch, observe and narrowly control cmux terminal or agent session
 Use cmux as live-session transport. Squad remains authoritative for work
 ownership, reservations, dependencies and environment locks.
 
+For an authorized replacement, use the coordinator's
+[session continuity contract](../../../coordination-skills/squad-dispatcher/references/session-continuity.md).
+cmux process control does not transfer task, reservation, environment or execution
+ownership. Do not reuse the Worker-only launcher/envelope for a Deployer unless
+the installed package explicitly supports that role.
+
 ## Preflight
 
 Use the bundled binary when `cmux` is not on `PATH`:
