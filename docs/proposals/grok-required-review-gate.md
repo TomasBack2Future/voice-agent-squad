@@ -89,7 +89,9 @@ squad-grok-review \
 GitHub branch protection. `--model` defaults to `grok-4.6`.
 Reasoning effort precedence is explicit flag, per-user configuration, then
 built-in `medium`; supported values are `low`, `medium`, `high` and `xhigh`.
-The CLI's default timeout is ten minutes; the example explicitly selects twenty.
+The CLI's default timeout is twenty minutes. Pass `--timeout 20m` explicitly
+when invoking an older installed binary that may still default to ten minutes.
+This does not authorize resampling a timed-out base/head tuple.
 Use `--help` and [the CLI source](../../cmd/squad-grok-review/main.go) for all
 options and output limits.
 

@@ -55,9 +55,10 @@ only the existing materially repaired pre-sampling exception allows retry.
 2. Choose `--reasoning-effort medium` for ordinary changes, or `high` for
    security/authentication, schema/data migration, concurrency/locking, or
    deployment/rollback changes. Choose before sampling. Pass the same effort to
-   `squad-grok-review doctor` and the review invocation; retain the default
-   user-selected 20-minute timeout for new invocations. Do not restart an
-   existing review or resample a timed-out head merely to use the longer cap.
+   `squad-grok-review doctor` and the review invocation; pass `--timeout 20m`
+   explicitly to the review command, including with an older installed binary.
+   Do not restart an existing review or resample a timed-out head merely to use
+   the longer cap.
    Do not change the user's global Grok configuration or
    the owning Codex Worker's model/effort.
 3. After doctor succeeds, launch one local wrapper invocation for that frozen

@@ -41,6 +41,9 @@ func TestParseConfigDiscoversLocalReviewerConfig(t *testing.T) {
 	if config.reasoningEffort != "medium" {
 		t.Fatalf("default reasoning effort = %q, want medium", config.reasoningEffort)
 	}
+	if config.timeout != 20*time.Minute {
+		t.Fatalf("default timeout = %s, want 20m", config.timeout)
+	}
 }
 
 func TestParseConfigReasoningEffortPrecedenceAndValidation(t *testing.T) {

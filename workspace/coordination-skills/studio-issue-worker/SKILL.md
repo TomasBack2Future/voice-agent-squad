@@ -160,8 +160,9 @@ or unrelated filesystem authority. Do not first run either command sandboxed.
 `doctor` must report GitHub authentication, Grok authentication, CLI contract,
 configured model, and session storage healthy before sampling. When configured,
 invoke `squad-grok-review` once for the final substantive head using repository,
-PR, mode, and explicit reasoning-effort flags. Use shadow mode unless branch policy requires the App-pinned
-Check, in which case use required mode. The wrapper discovers publisher identity
+PR, mode, `--timeout 20m`, and explicit reasoning-effort flags. Use shadow mode
+unless branch policy requires the App-pinned Check, in which case use required
+mode. The wrapper discovers publisher identity
 from its per-user configuration; do not assemble App ID, installation ID, or
 private-key flags. A failure before a model sample may be retried on the same
 SHA only after its reported operational cause is materially repaired; record
