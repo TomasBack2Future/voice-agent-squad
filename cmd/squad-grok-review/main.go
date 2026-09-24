@@ -267,7 +267,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.StringVar(&configuration.statusDir, "status-dir", "", "directory for safe local review status JSON")
 	flags.StringVar(&configuration.model, "model", "grok-4.6", "Grok CLI model selector")
 	flags.StringVar(&configuration.reasoningEffort, "reasoning-effort", grokreview.DefaultReasoningEffort, "Grok reasoning effort: low, medium, high, or xhigh (never inherits global effort)")
-	flags.DurationVar(&configuration.timeout, "timeout", 10*time.Minute, "Grok review timeout")
+	flags.DurationVar(&configuration.timeout, "timeout", 20*time.Minute, "Grok review timeout")
 	flags.IntVar(&configuration.maxGitHubOutput, "max-github-output", 8<<20, "maximum GitHub CLI response bytes")
 	flags.IntVar(&configuration.maxReviewerOutput, "max-reviewer-output", 1<<20, "maximum Grok CLI response bytes")
 	if err := flags.Parse(args); err != nil {
