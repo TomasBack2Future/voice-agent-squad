@@ -12,6 +12,11 @@ For batch monitoring and asynchronous task creation, read
 [dispatch reliability](references/dispatch-reliability.md). The Dispatcher is
 the sole batch progress monitor; integration Workers retain delivery ownership.
 
+For session health, a material assignment amendment or an authorized takeover,
+read [session continuity](references/session-continuity.md). Coordinate the
+current owner and closure route; a production Deployer uses its release skill,
+not the Issue Worker envelope. This does not authorize launching a Deployer.
+
 Own product/design admission and act as the single central planner. Before a new
 implementation assignment, read [design admission](references/design-admission.md).
 Keep design decisions in the canonical Issue; do not create a separate Designer
@@ -224,11 +229,13 @@ Never wait for Worker termination to answer its blocking design question.
 4. Build a dependency DAG using explicit `blocked-by`, verified Issue/PR links,
    and concrete shared-resource conflicts. Do not infer an edge from issue
    number, age, or priority alone. Report cycles and dispatch nothing in them.
-5. Reconcile every active reservation with its `worker_thread_id`, Codex task
-   status, current claim, PR, and Issue state. Close it `completed` only after
-   the Issue is evidence-backed closed; use `failed` or `cancelled` with a note
-   only for a terminal task that no longer owns work. Do not treat a quiet or
-   waiting task as terminal.
+5. Reconcile every active reservation with its bound runtime/native task identity,
+   task status, current claim, PR, and assigned outcome. An Issue Worker's
+   `completed` disposition requires evidence-backed Issue closure. An explicitly
+   assigned non-Issue role uses its own completion contract; do not invent an
+   Issue-close gate. Only the reservation owner closes it. Use `failed` or
+   `cancelled` with a note only for a terminal task that no longer owns work.
+   Do not treat a quiet or waiting task as terminal.
 6. Apply design admission before selecting implementation work. A dependency-ready
    Issue is not design-ready by itself. Verify a current READY design section
    and its revision against the actual product and related active Issues. Reuse
