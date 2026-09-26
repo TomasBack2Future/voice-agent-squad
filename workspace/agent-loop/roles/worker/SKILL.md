@@ -125,3 +125,6 @@ durable terminal outcome and required release/acknowledged handoff with no live
 external operation. A quiet turn, decision wait or client exit is not completion.
 A color failure is nonblocking and belongs in the terminal handoff for Dispatcher
 reconciliation; never target an implicit current workspace.
+
+For an assignment migrated to versioned decisions, read
+[current decisions and recovery](references/decision-recovery.md).

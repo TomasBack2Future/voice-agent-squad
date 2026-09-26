@@ -114,3 +114,22 @@ Worker-written database readers and `status.claimed_by` are not substitutes for
 this exact contract. Reading the authoritative ledger does not itself grant
 ownership. Verify the installed command against the deployment consumer before
 activating the candidate path; publishing a skill alone does not install it.
+
+## Candidate preparation and long acceptance
+
+When the installed Studio candidate tool provides `prepare`, require its
+read-only readiness result before the owner joins the ENV queue. It checks CI,
+product provenance, the complete companion-prefetch set and the current mutable
+Interceptor pin. Changing a pin invalidates readiness. Dispatch rechecks it;
+prepare is neither an ENV claim nor a deployment permit. Never invent the
+command for an older checkout or accept a Worker-authored substitute receipt.
+
+In the existing batch note, distinguish ordinary acceptance from an explicitly
+requested long/large run. Record the required scale, protected component tuple,
+known affecting defects, estimated duration (label estimates), milestone and
+cleanup owner. Resolve a confirmed shared dependency defect before starting a
+large affected run; a deadline increase or another identical deployment does not
+repair it. Preserve the user's full-scale requirement. A healthy small smoke is
+preparation, not a substitute for that acceptance. While a long run needs the
+exact revision, protect it; parallel deployments require actual version isolation.
+Do not add granular locks merely to make WIP look busy.

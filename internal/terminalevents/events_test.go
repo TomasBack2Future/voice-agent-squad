@@ -243,7 +243,7 @@ func TestPublishDecisionRoundTripAndFencing(t *testing.T) {
 	if _, e := s.DB.Exec(`INSERT INTO claims(item_id,repo_id,agent_id,claimed_at,last_touch) VALUES('TASK','repo','worker',1,1)`); e != nil {
 		t.Fatal(e)
 	}
-	q := PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-request", 1}
+	q := PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-request", 1, 0}
 	publisher := s
 	publisher.Recipient = ""
 	id, e := publisher.Publish(ctx, "worker", q)
@@ -298,7 +298,7 @@ func TestConcurrentPublishIsIdempotent(t *testing.T) {
 	results := make(chan error, 8)
 	for range 8 {
 		go func() {
-			_, e := s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "blocked", 1})
+			_, e := s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "blocked", 1, 0})
 			results <- e
 		}()
 	}
@@ -353,18 +353,18 @@ func TestContinuationRestoresDecisionRouteWithoutRelaxingCustody(t *testing.T) {
 	if _, err = d.Continue(ctx, "DISPATCH-1", "dispatcher", "TASK", "NEXT", "worker-session", 1); err == nil {
 		t.Fatal("stale from item accepted")
 	}
-	if _, err = s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "issue-closed", 1}); err == nil {
+	if _, err = s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "issue-closed", 1, 0}); err == nil {
 		t.Fatal("old item event accepted")
 	}
 	_, err = s.DB.Exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(2,'repo',4,'worker','NEXT','ask','need decision','["dispatcher"]','normal'),(3,'repo',5,'dispatcher','NEXT','fyi','resolved','[]','normal')`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-request", 2}); err != nil {
+	if _, err = s.Publish(ctx, "worker", PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-request", 2, 0}); err != nil {
 		t.Fatal(err)
 	}
 	s.Recipient = "worker"
-	if _, err = s.Publish(ctx, "dispatcher", PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-resolved", 3}); err != nil {
+	if _, err = s.Publish(ctx, "dispatcher", PublishRequest{"DISPATCH-1", 1, "worker-session", "decision-resolved", 3, 0}); err != nil {
 		t.Fatal(err)
 	}
 }

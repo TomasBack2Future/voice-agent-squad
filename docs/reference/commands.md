@@ -957,3 +957,41 @@ repository as the claim, not an unrelated source checkout, or pass
 `--repo /path/to/ledger` explicitly when called by another repository’s deploy
 script. MCP parity:
 `squad_claim_inspect` with `{"item_id":"ENV-001"}` returns the same JSON contract.
+
+### Versioned assignment decisions
+
+`terminal-events decision-get --reservation KEY --generation N --worker-session ID`
+returns the current `revision`, `outcome_id`, `action`, `condition` and
+`worker_agent`. Revision zero is an assignment not yet using this contract.
+An optional `--expected-revision N` returns nonzero if the decision changed.
+MCP: `squad_terminal_decision_get` with the same identity fields (underscores).
+
+The reservation owner posts a canonical-item message describing the decision,
+then calls `terminal-events decision-set` with that identity plus
+`--expected-revision N --outcome MESSAGE_ID --action proceed|hold --condition TEXT`.
+A hold requires a specific unresolved condition. The command atomically
+compares the revision, stores the replacement decision and enqueues a durable
+`decision-resolved` wake. Retrying the same message and contents is idempotent.
+MCP: `squad_terminal_decision_set`, fields `reservation`, `generation`,
+`worker_session`, `expected_revision`, `outcome_id`, `action`, `condition`, and
+optional `agent_id`. Both interfaces use the same transaction.
+
+Only the current decision is delivered; an older delivered decision cannot be
+acknowledged as current. A released primary claim does not disable the wake:
+an unambiguous current-generation custody history can identify the same Worker.
+Ambiguous custody, changed generation/session or completed reservations fail
+closed. A wake never reacquires claims or authorizes writes. Existing scope,
+explicit user stops and environment ownership still apply.
+
+After an assignment adopts decisions, Worker `blocked`, `decision-request`,
+`issue-closed` and `handoff-complete` publications require
+`--expected-decision N` (MCP `expected_decision`) matching the latest revision,
+and a message created after that decision. A stale publication is rejected;
+read the latest decision before deciding to pause or finish. This fences event
+publication, not arbitrary terminal input, claim release or external operations.
+Legacy assignments remain unchanged until deliberately adopted. Plain prose
+cannot supersede an adopted decision; owner updates must use `decision-set`.
+Delivered events remain pending until explicit recipient acknowledgment and
+retry through the existing receiver. No new polling daemon or auto-permission
+mechanism is introduced. External dependency or authentication recovery still
+needs verified evidence from its owner before the Dispatcher sets `proceed`.

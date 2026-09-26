@@ -142,3 +142,41 @@ func TestMCPStructuredEventPublish(t *testing.T) {
 		t.Fatalf("MCP publish lost %v %v", events, err)
 	}
 }
+
+func TestMCPDecisionCASAndGet(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	_, err := env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,'D','github:repo#1',?,1,1,0,'dispatched',1,'native','','TASK')`, env.RepoID, env.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,'TASK','worker',1,2,'blocked')`, env.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := chat.New(env.DB, env.RepoID)
+	if err = c.Post(ctx, chat.PostRequest{AgentID: env.AgentID, Thread: "TASK", Kind: "fyi", Body: "access restored; continue same scope"}); err != nil {
+		t.Fatal(err)
+	}
+	var message int64
+	if err = env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&message); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"squad_terminal_decision_set", "squad_terminal_decision_get"} {
+		args := map[string]any{"reservation": "D", "generation": 1, "worker_session": "native"}
+		if name == "squad_terminal_decision_set" {
+			args["expected_revision"] = 0
+			args["outcome_id"] = message
+			args["action"] = "proceed"
+			args["agent_id"] = env.AgentID
+		}
+		request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+		var out bytes.Buffer
+		if err = runMCP(ctx, env.DB, env.RepoID, env.Root, strings.NewReader(string(request)+"\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "proceed") || strings.Contains(out.String(), `"isError":true`) {
+			t.Fatal(out.String())
+		}
+	}
+}
