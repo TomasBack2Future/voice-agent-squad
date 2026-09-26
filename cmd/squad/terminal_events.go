@@ -58,6 +58,8 @@ func newTerminalEventsCmd() *cobra.Command {
 	publish.Flags().StringVar(&request.WorkerSession, "worker-session", "", "Bound native Worker session")
 	publish.Flags().StringVar(&request.Kind, "kind", "", "issue-closed, handoff-complete, blocked, decision-request or decision-resolved")
 	publish.Flags().Int64Var(&request.OutcomeID, "outcome", 0, "Durable Squad outcome/decision message id")
+	publish.Flags().Int64Var(&request.ExpectedDecision, "expected-decision", 0, "Current adopted decision revision for Worker outcomes")
+	cmd.AddCommand(terminalDecisionCommands()...)
 	cmd.AddCommand(listen, ack, publish)
 	return cmd
 }

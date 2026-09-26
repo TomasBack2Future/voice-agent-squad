@@ -34,11 +34,12 @@ type Store struct {
 
 // PublishRequest carries pointers, never a command or authority from the sender.
 type PublishRequest struct {
-	Reservation   string `json:"reservation"`
-	Generation    int64  `json:"generation"`
-	WorkerSession string `json:"worker_session"`
-	Kind          string `json:"kind"`
-	OutcomeID     int64  `json:"outcome_id"`
+	Reservation      string `json:"reservation"`
+	Generation       int64  `json:"generation"`
+	WorkerSession    string `json:"worker_session"`
+	Kind             string `json:"kind"`
+	OutcomeID        int64  `json:"outcome_id"`
+	ExpectedDecision int64  `json:"expected_decision"`
 }
 
 var ErrInvalidEvent = errors.New("event rejected: verify reservation, generation, worker, actor and outcome")
@@ -63,6 +64,9 @@ func (s Store) recordTx(ctx context.Context, tx *sql.Tx, actor string, q Publish
 	if eventPattern.FindString(id) != id || s.Repo == "" || actor == "" || q.OutcomeID > source {
 		return "", ErrInvalidEvent
 	}
+	if err := decisionFence(ctx, tx, s.Repo, q); err != nil {
+		return "", err
+	}
 	// A global legacy message is valid only with task custody. Same-thread prose
 	// alone is also insufficient: another actor must not forge this Worker's event.
 	var item, owner, recipient string
@@ -85,10 +89,7 @@ func (s Store) recordTx(ctx context.Context, tx *sql.Tx, actor string, q Publish
 	}
 	recipient = owner
 	if q.Kind == "decision-resolved" {
-		err = tx.QueryRowContext(ctx, `SELECT agent_id FROM claims WHERE repo_id=? AND item_id=?`, s.Repo, item).Scan(&recipient)
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrInvalidEvent
-		}
+		recipient, err = workerRecipient(ctx, tx, s.Repo, q.Reservation, q.Generation)
 		if err != nil {
 			return "", err
 		}
@@ -145,8 +146,8 @@ func (s Store) Discover(ctx context.Context) error {
 			if parts[1] != c.key || gen != c.gen || parts[3] != c.worker {
 				continue
 			}
-			_, err = s.record(ctx, c.actor, PublishRequest{c.key, gen, c.worker, parts[4], outcome}, c.id)
-			if err != nil && !errors.Is(err, ErrInvalidEvent) {
+			_, err = s.record(ctx, c.actor, PublishRequest{c.key, gen, c.worker, parts[4], outcome, 0}, c.id)
+			if err != nil && !errors.Is(err, ErrInvalidEvent) && !errors.Is(err, ErrStaleDecision) {
 				return err
 			}
 		}
@@ -165,8 +166,8 @@ func (s Store) Discover(ctx context.Context) error {
 			}
 		}
 		if kind != "" {
-			_, err = s.record(ctx, c.actor, PublishRequest{c.key, c.gen, c.worker, kind, c.id}, c.id)
-			if err != nil && !errors.Is(err, ErrInvalidEvent) {
+			_, err = s.record(ctx, c.actor, PublishRequest{c.key, c.gen, c.worker, kind, c.id, 0}, c.id)
+			if err != nil && !errors.Is(err, ErrInvalidEvent) && !errors.Is(err, ErrStaleDecision) {
 				return err
 			}
 		}
@@ -185,8 +186,10 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
  ON r.repo_id=e.repo_id AND r.item_id=e.reservation_key AND r.generation=e.generation
  AND r.worker_thread_id=e.worker_session
  AND (r.reserved_by=e.recipient OR (e.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
- (SELECT 1 FROM claims c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id=e.recipient AND c.claimed_at>=r.reserved_at)))
+ (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id=e.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id!=e.recipient AND c.claimed_at>=r.reserved_at)))
  WHERE e.repo_id=? AND e.recipient=? AND e.processed_at=0
+ AND (e.kind!='decision-resolved' OR e.item_id=r.canonical_item_id)
+ AND (e.kind!='decision-resolved' OR NOT EXISTS (SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=e.repo_id AND d.reservation_key=e.reservation_key AND d.generation=e.generation AND d.item_id=e.item_id AND d.outcome_id!=e.outcome_id))
  AND (e.delivered_session!=? OR e.delivered_at<=?) ORDER BY e.source_message_id LIMIT 16`, s.Repo, s.Recipient, session, time.Now().Add(-retry).Unix())
 	if err != nil {
 		return nil, err
@@ -220,11 +223,13 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 	}
 	result, err := s.DB.ExecContext(ctx, `UPDATE terminal_event_receipts SET processed_at=?,processed_note=?
  WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0 AND delivered_at>0
+ AND (kind!='decision-resolved' OR NOT EXISTS (SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=terminal_event_receipts.repo_id AND d.reservation_key=terminal_event_receipts.reservation_key AND d.generation=terminal_event_receipts.generation AND d.item_id=terminal_event_receipts.item_id AND d.outcome_id!=terminal_event_receipts.outcome_id))
  AND EXISTS(SELECT 1 FROM dispatch_reservations r WHERE r.repo_id=terminal_event_receipts.repo_id
  AND r.item_id=terminal_event_receipts.reservation_key AND r.generation=terminal_event_receipts.generation
  AND r.worker_thread_id=terminal_event_receipts.worker_session
+ AND (terminal_event_receipts.kind!='decision-resolved' OR terminal_event_receipts.item_id=r.canonical_item_id)
  AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
- (SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, time.Now().Unix(), note, s.Repo, s.Recipient, id)
+ (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id!=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, time.Now().Unix(), note, s.Repo, s.Recipient, id)
 	if err != nil {
 		return err
 	}

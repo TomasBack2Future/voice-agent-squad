@@ -47,7 +47,7 @@ class ReceiverTests(unittest.TestCase):
         self.config.write_text(json.dumps(self.data))
         p = self.start();out,err = p.communicate(timeout=5)
         self.assertEqual(p.returncode, 2)
-        self.assertIn('Read the referenced canonical Issue decision', err)
+        self.assertIn('terminal-events decision-get', err)
         self.assertNotIn('Invoke $squad-dispatcher', err)
         self.assertIn('terminal-events ack', err)
 

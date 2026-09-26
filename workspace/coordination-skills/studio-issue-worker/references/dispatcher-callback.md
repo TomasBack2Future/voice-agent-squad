@@ -87,6 +87,10 @@ squad terminal-events publish --reservation KEY --generation N \
   --worker-session NATIVE_ID --kind issue-closed --outcome MESSAGE_ID
 ```
 
+For a reservation explicitly migrated to versioned decisions, first read
+`terminal-events decision-get` with that identity and add `--expected-decision REV`
+to terminal/blocker publications. Follow [current decisions and recovery](../../../agent-loop/roles/worker/references/decision-recovery.md).
+
 Use `handoff-complete` or `blocked` for those outcomes. The command derives the
 recipient/item from the reservation, validates generation, binding, message
 ownership and task custody, and returns a stable event id with state `pending`.
@@ -102,7 +106,10 @@ addressed `ask` is discovered automatically for older Workers. These requests
 are nonterminal: retain the assignment, continue independent work, and do not
 claim that WIP was released. The Dispatcher records its revised Issue decision
 and publishes `decision-resolved` referencing its own canonical-thread message;
-the ledger routes that reply to the current task claimant. New Claude launch
+For an adopted assignment, use `decision-set` instead of a standalone
+`decision-resolved` publish so updating the revision and its wake is atomic.
+The ledger routes the reply to unambiguous assignment custody, including the
+same Worker after claim release; receiving it does not grant a new claim. New Claude launch
 configs set `event_executable` to the verified receiver binary so the canonical
 launcher installs a session-owned native receiver for the Worker too. Do not
 claim automatic reply delivery for an old Worker without such a receiver; retain

@@ -77,12 +77,12 @@ def run(config_path: Path, event: dict) -> int:
                 raise ValueError('invalid delivery receipt')
             role = config.get('role', 'dispatcher')
             if role == 'worker':
-                action = ('Read the referenced canonical Issue decision and verify the existing assignment '
+                action = ('Read terminal-events decision-get for the latest adopted revision (or the canonical Issue for an unmigrated assignment), then verify the existing assignment '
                           'generation before resuming that same task. A decision changes neither authority '
                           'nor ownership. Do not dispatch another Worker.')
             else:
                 action = ('Invoke $squad-dispatcher for one bounded reconciliation cycle within the configured WIP. '
-                          'decision-request needs a recorded design decision and a decision-resolved event, '
+                          'decision-request needs the current recorded design decision (decision-set for an adopted assignment) and its durable wake, '
                           'not proof of Worker termination. reconcile-needed is an observation of done, '
                           'not proof of acceptance or termination. Leave it unacknowledged while termination '
                           'is unresolved so the existing receiver retries. Check current receipts before '

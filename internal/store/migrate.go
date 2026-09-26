@@ -275,6 +275,21 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		legacy = append(legacy, legacyRow{19, "execution_admission"})
 	}
 
+	var hasDecisions int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dispatch_decisions'`).Scan(&hasDecisions); err != nil {
+		return err
+	}
+	if hasDecisions > 0 {
+		var columns int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name IN ('repo_id','reservation_key','generation','item_id','revision','outcome_id','action','condition','worker_agent')`).Scan(&columns); err != nil {
+			return err
+		}
+		if columns != 9 {
+			return fmt.Errorf("incomplete dispatch decision schema; refusing legacy bootstrap")
+		}
+		legacy = append(legacy, legacyRow{20, "dispatch_decisions"})
+	}
+
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

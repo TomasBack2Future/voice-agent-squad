@@ -5,6 +5,10 @@ description: "Run one bounded central-dispatch reconciliation cycle for Squad: o
 
 # Squad Dispatcher
 
+For installed versioned decisions and verified recovery, use
+[current decisions](../../agent-loop/roles/worker/references/decision-recovery.md).
+Adopt per reservation; a file refresh does not migrate active work.
+
 For complete work packages, typed dependencies and convergence supervision, read
 [delivery quality](../studio-issue-worker/references/delivery-quality.md).
 
@@ -214,8 +218,10 @@ stale/unverifiable events never dispatch or release WIP. A sender still ending
 its turn stays in WIP until task termination is independently verified. Keep
 the existing heartbeat as fallback for missing/failed notifications. Do not send
 routine acknowledgements or progress prompts. A `decision-request` is a separate,
-nonterminal transition: record the canonical design revision, publish one
-`decision-resolved` event to the existing claimant and then ack the request.
+nonterminal transition: record the canonical design revision. For an adopted
+assignment, use `terminal-events decision-set` to CAS it and enqueue the wake;
+otherwise publish `decision-resolved` under the legacy contract. Then ack the
+request. A released claim is not proof that the Worker cannot resume.
 Never wait for Worker termination to answer its blocking design question.
 
 1. Resolve the Dispatcher identity once. Read Squad `status`, `who`, `doctor`,

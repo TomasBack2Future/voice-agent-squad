@@ -292,3 +292,14 @@ run/attempt, latest step and terminal reconciliation evidence. A unique active
 index and claim triggers make begin atomic with ownership pinning, including for
 legacy release/recovery paths. Unstarted permits are revoked on ownership change;
 active records do not expire out of the lock. See [execution admission](execution-admission.md).
+
+## dispatch_decisions
+
+Migration 020 adds an opt-in current decision keyed by repository, reservation,
+generation and canonical item. `revision` is a positive CAS sequence;
+`outcome_id` points to the owner-authored canonical message containing the
+history. `action` is `proceed` or `hold`; `condition` records the unresolved
+condition or verified recovery reference; `worker_agent` records unambiguous
+custody. The decision and terminal receipt are committed atomically. Reads join
+the live dispatched reservation so transfers and continuations cannot revive an
+old decision. No live claims or existing assignments are rewritten by migration.
