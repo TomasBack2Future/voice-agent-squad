@@ -14,6 +14,7 @@ func TestInstallPlugin_CreatesDestDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	var stdout, stderr bytes.Buffer
 	cmd := newInstallPluginCmd()
@@ -34,6 +35,7 @@ func TestInstallPlugin_Idempotent(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	for i := 0; i < 2; i++ {
 		cmd := newInstallPluginCmd()
@@ -50,6 +52,7 @@ func TestInstallPlugin_Uninstall(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	cmd := newInstallPluginCmd()
 	cmd.SetOut(&bytes.Buffer{})
@@ -80,6 +83,7 @@ func TestInstallPlugin_DoesNotShipGoSources(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	cmd := newInstallPluginCmd()
 	cmd.SetOut(&bytes.Buffer{})
@@ -111,6 +115,7 @@ func TestInstallPlugin_UninstallIdempotent(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	cmd := newInstallPluginCmd()
 	cmd.SetOut(&bytes.Buffer{})
@@ -125,6 +130,7 @@ func TestInstallPlugin_RegistersAlwaysOnHooks(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	cmd := newInstallPluginCmd()
 	cmd.SetOut(&bytes.Buffer{})
@@ -150,6 +156,7 @@ func TestInstallPlugin_WarnsOnLegacyManifestPath(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	legacyDir := filepath.Join(tmp, "plugins", "squad")
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
@@ -185,6 +192,7 @@ func TestInstallPlugin_UninstallRemovesHooks(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	cmd := newInstallPluginCmd()
 	cmd.SetOut(&bytes.Buffer{})
@@ -243,6 +251,7 @@ func TestInstallPlugin_RegistersMCPServer(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SQUAD_PLUGIN_DEST", filepath.Join(tmp, "plugins"))
 	t.Setenv("HOME", tmp)
+	t.Setenv("SQUAD_HOME", filepath.Join(tmp, ".squad"))
 
 	cmd := newInstallPluginCmd()
 	cmd.SetOut(&bytes.Buffer{})
