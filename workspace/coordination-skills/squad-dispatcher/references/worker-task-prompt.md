@@ -1,6 +1,15 @@
 # Worker task prompt contract
 
-Every dispatched Worker prompt must be self-contained and contain:
+Every dispatched Worker prompt must be self-contained. Select the role from the
+implementation repository, not the tracking Issue URL: use `studio-issue-worker`
+for Studio and `agent-loop-worker` with the matching profile for Squad, Importer
+or Interceptor. For generic Workers, carry the assignment, admission revision,
+verified coordination route and delivery-capability receipt below; use the
+selected profile and generic Worker references for implementation, review and
+completion. The Studio-specific requirements below apply only to Studio work.
+Interceptor keeps its local review and human PR handoff boundary.
+
+For a Studio Worker, include:
 
 - runtime-tagged callback routing: actual App thread/host ids or cmux
   workspace/surface/native session ids, `dispatcher_agent_id`, plus the existing

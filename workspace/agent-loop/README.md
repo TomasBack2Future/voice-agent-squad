@@ -19,6 +19,8 @@ large prompt:
 | Review admission, single-flight and freeze | `roles/worker/references/review-readiness.md` |
 | Studio repository and delivery capabilities | `projects/studio/profile.json` |
 | Importer repository and Compose delivery capabilities | `projects/importer/profile.json` |
+| Squad source and review capabilities | `projects/squad/profile.json` |
+| Interceptor source and human PR handoff | `projects/interceptor/profile.json` |
 | Bounded dispatch input | `schemas/assignment-envelope.schema.json` |
 | Compact/resume continuity | `schemas/checkpoint.schema.json` |
 | Live cmux session transport | `tools/cmux-sessions/SKILL.md` |
@@ -50,6 +52,15 @@ instructions and Python/Docker gates. The Studio profile is not a fallback:
 preflight continues to reject any assignment/profile/checkout repository mismatch.
 The package synchronization includes this profile with the Worker scripts and
 skills; never add it by editing an installed snapshot.
+
+Select the Worker role from the implementation repository, independently of
+the GitHub tracking Issue: Studio uses `studio-issue-worker`; Squad, Importer
+and Interceptor use `agent-loop-worker` with their matching project profile.
+Keep the source `repository`, explicit `repository_host` and `clone_layout`
+consistent with the checkout. A tracking Issue grants no source-host permissions.
+The Squad profile supplies source/review gates only; it does not authorize binary
+installation, live database changes or session restarts. Interceptor retains its
+local review and human PR handoff contract.
 
 Importer owns ENV-003/004 and uses its repository's Compose delivery adapter.
 Independent Studio and Importer work may proceed concurrently after resource
