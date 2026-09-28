@@ -3,7 +3,10 @@
 export function auditBatch(s) {
  const errors=[];const tasks=s.tasks.filter(t=>!t.terminal||t.externalOperation||t.claims.length);
  const unbound=s.reservations.filter(r=>r.active&&!r.task);
- if(new Set(tasks.map(t=>t.id)).size+unbound.length>5)errors.push('global-wip');
+ const limit=s.policy?.wipLimit??5;
+ const validLimit=Number.isInteger(limit)&&limit>0&&(limit===5||Boolean(s.policy?.userDecisionRef));
+ if(!validLimit)errors.push('wip-policy');
+ if(new Set(tasks.map(t=>t.id)).size+unbound.length>(validLimit?limit:5))errors.push('global-wip');
  const batchTasks=tasks.filter(t=>t.batch===s.batch);
  if(batchTasks.filter(t=>t.role==='developer').length>2)errors.push('development-limit');
  if(batchTasks.filter(t=>t.role==='integration-release').length>1)errors.push('integration-limit');

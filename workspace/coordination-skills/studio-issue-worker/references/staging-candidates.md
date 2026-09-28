@@ -22,8 +22,12 @@ exact candidate tuple, admission and deployed baseline after acquisition. If
 superseded, prepare the newly selected candidate outside ENV; never deploy an
 unverified newer main or occupy ENV while waiting for a build.
 
-Repository policy determines which prepared SHA is admissible (including any
-latest-main requirement). This contract does not waive it. Freeze all component
+Repository policy determines which prepared SHA is admissible. Where the tested
+Studio `prepare --freeze` / `dispatch --prepared` capability is installed, retain
+the receipt's exact CI, component digests, companion pins and environment baseline.
+A newer main alone does not invalidate it; changed baseline/workflow/companions,
+expiry, duplicate dispatch or missing ancestry still refuse it. Otherwise keep
+the legacy latest-main requirement; this contract does not waive it. Freeze all component
 SHAs/digests; a later main push must neither auto-deploy nor change the running
 acceptance tuple. Record the workflow run IDs. An uncertain dispatch response
 requires lookup by the original candidate/attempt, not blind redispatch.

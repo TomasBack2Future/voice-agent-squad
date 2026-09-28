@@ -21,7 +21,7 @@ matrix/policy evidence. Missing identity, policy audit or ownership blocks batch
 mutation. Preparation may build local tools while admission remains blocked.
 
 At most two development owners and one integration/release owner run per batch;
-all count within global product WIP <= 5, including paused/nonterminal tasks and
+all count within the effective user-selected product WIP limit (default 5), including paused/nonterminal tasks and
 unbound active reservations. Count a task once, not once per linked child. A
 handoff does not remove a still-active task from WIP. A release owner has one
 canonical primary release item, and ENV only when ready. No third exclusive
