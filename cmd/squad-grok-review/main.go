@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,6 +20,11 @@ import (
 )
 
 type config struct {
+	provider          string
+	repositoryHost    string
+	worktree          string
+	baseSHA           string
+	descriptionFile   string
 	configPath        string
 	doctor            bool
 	repository        string
@@ -55,7 +61,7 @@ type runtimeDependencies struct {
 	grokBinary        string
 	githubBinary      string
 	installationToken string
-	github            *grokreview.GitHubCLI
+	github            grokreview.PullRequestGateway
 	model             *grokreview.CLIRunner
 	bundle            reviewer.Bundle
 }
@@ -83,6 +89,10 @@ type doctorOutput struct {
 }
 
 type commandOutput struct {
+	Provider        string                    `json:"provider,omitempty"`
+	RepositoryHost  string                    `json:"repository_host,omitempty"`
+	DiffSHA256      string                    `json:"diff_sha256,omitempty"`
+	ContractSHA256  string                    `json:"contract_sha256,omitempty"`
 	Repository      string                    `json:"repository"`
 	PullRequest     int                       `json:"pull_request"`
 	BaseSHA         string                    `json:"base_sha"`
@@ -131,11 +141,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if configuration.doctor {
 		repositoryAccess := "not_checked"
 		if configuration.repository != "" {
-			if err := dependencies.github.CheckRepositoryAccess(ctx, configuration.repository, dependencies.installationToken); err != nil {
-				_, _ = fmt.Fprintln(stderr, err)
-				return 1
+			if github, ok := dependencies.github.(*grokreview.GitHubCLI); ok {
+				if err := github.CheckRepositoryAccess(ctx, configuration.repository, dependencies.installationToken); err != nil {
+					_, _ = fmt.Fprintln(stderr, err)
+					return 1
+				}
 			}
-			if configuration.pullRequest > 0 {
+			if configuration.pullRequest > 0 || configuration.provider == "local-git" {
 				if _, err := dependencies.github.FetchPullRequestIdentity(ctx, configuration.repository, configuration.pullRequest, dependencies.installationToken); err != nil {
 					_, _ = fmt.Fprintln(stderr, err)
 					return 1
@@ -159,7 +171,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			ReasoningEffort: grokHealth.ReasoningEffort,
 			GrokVersion:     grokHealth.Version, GrokAuthentication: "ok",
 			GrokCLIContract: "ok", GrokSessionStorage: "writable",
-			GitHubAuthentication: "ok", ReviewerBundle: "ok",
+			GitHubAuthentication: map[bool]string{true: "ok", false: "not_applicable"}[configuration.provider == "github"], ReviewerBundle: "ok",
 		})
 	}
 	var observers []grokreview.ReviewObserver
@@ -177,13 +189,24 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
-	report, reviewErr := service.ReviewPullRequest(
-		ctx, dependencies.installationToken, configuration.checkName, configuration.repository, configuration.pullRequest,
-	)
+	var report grokreview.ReviewReport
+	var reviewErr error
+	if configuration.provider == "local-git" {
+		report, reviewErr = service.ReviewWorktree(ctx, configuration.repository)
+	} else {
+		report, reviewErr = service.ReviewPullRequest(ctx, dependencies.installationToken, configuration.checkName, configuration.repository, configuration.pullRequest)
+	}
 	if report.Snapshot.HeadSHA != "" {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(newCommandOutput(report)); err != nil {
+		output := newCommandOutput(report)
+		if configuration.provider == "local-git" {
+			output.Provider = "local-git"
+			output.RepositoryHost = configuration.repositoryHost
+			output.DiffSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(report.Snapshot.Diff)))
+			output.ContractSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(report.Snapshot.Description)))
+		}
+		if err := encoder.Encode(output); err != nil {
 			_, _ = fmt.Fprintln(stderr, "encode review result:", err)
 			return 1
 		}
@@ -206,25 +229,34 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 	if err != nil {
 		return runtimeDependencies{}, err
 	}
-	githubBinary, err := resolveBinary(configuration.githubBinary)
-	if err != nil {
-		return runtimeDependencies{}, err
-	}
-	privateKey, err := os.ReadFile(configuration.appPrivateKey)
-	if err != nil {
-		return runtimeDependencies{}, fmt.Errorf("read GitHub App private key: %w", err)
-	}
-	appJWT, err := grokreview.MintAppJWT(configuration.appID, privateKey, time.Now())
-	if err != nil {
-		return runtimeDependencies{}, err
-	}
-	github, err := grokreview.NewGitHubCLI(githubBinary, time.Minute, configuration.maxGitHubOutput)
-	if err != nil {
-		return runtimeDependencies{}, err
-	}
-	installationToken, err := github.MintInstallationToken(ctx, appJWT, configuration.installationID)
-	if err != nil {
-		return runtimeDependencies{}, err
+	var githubBinary, installationToken string
+	var github grokreview.PullRequestGateway
+	if configuration.provider == "local-git" {
+		github, err = grokreview.NewLocalGitGateway(configuration.worktree, configuration.repositoryHost, configuration.baseSHA, configuration.descriptionFile, configuration.maxGitHubOutput)
+		if err != nil {
+			return runtimeDependencies{}, err
+		}
+	} else {
+		githubBinary, err = resolveBinary(configuration.githubBinary)
+		if err != nil {
+			return runtimeDependencies{}, err
+		}
+		privateKey, err := os.ReadFile(configuration.appPrivateKey)
+		if err != nil {
+			return runtimeDependencies{}, fmt.Errorf("read GitHub App private key: %w", err)
+		}
+		appJWT, err := grokreview.MintAppJWT(configuration.appID, privateKey, time.Now())
+		if err != nil {
+			return runtimeDependencies{}, err
+		}
+		github, err = grokreview.NewGitHubCLI(githubBinary, time.Minute, configuration.maxGitHubOutput)
+		if err != nil {
+			return runtimeDependencies{}, err
+		}
+		installationToken, err = github.(*grokreview.GitHubCLI).MintInstallationToken(ctx, appJWT, configuration.installationID)
+		if err != nil {
+			return runtimeDependencies{}, err
+		}
 	}
 	bundle, err := reviewer.Load()
 	if err != nil {
@@ -254,6 +286,11 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	flags := flag.NewFlagSet("squad-grok-review", flag.ContinueOnError)
 	flags.SetOutput(output)
+	flags.StringVar(&configuration.provider, "provider", "github", "review input: github or local-git (no publication)")
+	flags.StringVar(&configuration.repositoryHost, "repository-host", "", "explicit implementation Git host for local review")
+	flags.StringVar(&configuration.worktree, "worktree", "", "absolute clean local worktree")
+	flags.StringVar(&configuration.baseSHA, "base-sha", "", "frozen 40-character base SHA for local review")
+	flags.StringVar(&configuration.descriptionFile, "description-file", "", "absolute frozen local requirements/acceptance file")
 	flags.StringVar(&configuration.configPath, "config", "", "path to local reviewer configuration JSON")
 	flags.StringVar(&configuration.repository, "repo", "", "GitHub repository as owner/name")
 	flags.IntVar(&configuration.pullRequest, "pr", 0, "pull request number")
@@ -318,14 +355,26 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if configuration.doctor && (configuration.pullRequest < 0 || (configuration.pullRequest > 0 && configuration.repository == "")) {
 		return config{}, fmt.Errorf("doctor --pr requires --repo and a positive PR number")
 	}
-	if !configuration.doctor && (configuration.repository == "" || configuration.pullRequest <= 0) {
+	if configuration.provider == "github" && !configuration.doctor && (configuration.repository == "" || configuration.pullRequest <= 0) {
 		return config{}, fmt.Errorf("--repo and --pr are required")
 	}
-	if configuration.appID <= 0 || configuration.installationID <= 0 || configuration.appPrivateKey == "" {
-		return config{}, fmt.Errorf("reviewer identity is missing; configure %s or pass --app-id, --installation-id, and --app-private-key", configuration.configPath)
-	}
-	if !filepath.IsAbs(configuration.appPrivateKey) {
-		return config{}, fmt.Errorf("GitHub App private key path must be absolute")
+	switch configuration.provider {
+	case "github":
+		if configuration.appID <= 0 || configuration.installationID <= 0 || configuration.appPrivateKey == "" {
+			return config{}, fmt.Errorf("reviewer identity is missing; configure %s or pass --app-id, --installation-id, and --app-private-key", configuration.configPath)
+		}
+		if !filepath.IsAbs(configuration.appPrivateKey) {
+			return config{}, fmt.Errorf("GitHub App private key path must be absolute")
+		}
+	case "local-git":
+		if configuration.mode != "shadow" || configuration.repository == "" || configuration.pullRequest != 0 {
+			return config{}, fmt.Errorf("local review requires --repo, forbids --pr and cannot run in required mode")
+		}
+		if _, err := grokreview.NewLocalGitGateway(configuration.worktree, configuration.repositoryHost, configuration.baseSHA, configuration.descriptionFile, configuration.maxGitHubOutput); err != nil {
+			return config{}, err
+		}
+	default:
+		return config{}, fmt.Errorf("unsupported review provider")
 	}
 	if configuration.grokHome == "" {
 		home, err := os.UserHomeDir()
@@ -346,6 +395,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if configuration.timeout <= 0 || configuration.maxGitHubOutput <= 0 || configuration.maxReviewerOutput <= 0 {
 		return config{}, fmt.Errorf("timeouts and output limits must be positive")
+	}
+	if configuration.provider == "local-git" {
+		configuration.statusDir = filepath.Join(configuration.statusDir, "local-git", configuration.repositoryHost)
 	}
 	return configuration, nil
 }

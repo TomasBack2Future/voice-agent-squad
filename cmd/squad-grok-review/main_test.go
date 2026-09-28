@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,6 +238,27 @@ func TestCommandOutputDoesNotExposeFrozenDiffOrHiddenThought(t *testing.T) {
 	for _, required := range []string{"head", "approved", "request", "session", "prompt_file_format"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("output lacks %q: %s", required, text)
+		}
+	}
+}
+
+func TestLocalConfigRequiresNeitherPRNorHostingCredentials(t *testing.T) {
+	t.Setenv("SQUAD_GROK_REVIEW_CONFIG", "")
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--config", configPath, "--provider", "local-git", "--repository-host", "git.example.test", "--repo", "ipt/interceptor", "--worktree", t.TempDir(), "--base-sha", strings.Repeat("a", 40), "--description-file", filepath.Join(t.TempDir(), "contract.md")}
+	cfg, err := parseConfig(args, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.appID != 0 || cfg.pullRequest != 0 || !strings.Contains(cfg.statusDir, "local-git") {
+		t.Fatal("local mode acquired remote identity")
+	}
+	for _, extra := range [][]string{{"--pr", "1"}, {"--mode", "required"}, {"--base-sha", "master"}} {
+		if _, err = parseConfig(append(append([]string{}, args...), extra...), io.Discard); err == nil {
+			t.Fatal("accepted invalid local mode")
 		}
 	}
 }

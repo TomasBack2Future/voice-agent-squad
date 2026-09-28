@@ -41,6 +41,7 @@
       "For packaging changes, run the Docker build and container CLI smoke from .github/workflows/ci.yml, including the affected runtime invocation."
     ],
     "review": [
+      "Start at the first complete stable diff after fast gates and self-review, independently of merge hold, full CI completion and ENV waits; record readiness and start times",
       "one PR-wide independent review admitted only for the final complete frozen diff under the actual repository review policy",
       "one in-flight review per PR with a freeze write barrier and deterministic join",
       "full deterministic CI joined with the review result"

@@ -67,3 +67,22 @@ Use typed operation receipts in the checkpoint: a submitted/uncertain/completed
 intent cannot be the next dispatch; reconcile it instead. The context validator
 rejects that stale-next-action state. Existing untyped checkpoints need a verified
 conversion; their prose alone cannot prove absence of an operation.
+
+## Independent review lane
+
+A merge hold governs integration, not review. Evaluate the first complete stable
+PR as soon as the owning Worker records its verified admission receipt. Expose
+`review_next` independently of `merge_next`; the Dispatcher reads this signal
+but the owning Worker runs the reviewer. Do not create reviewer sessions or send
+routine pings. Use the existing durable decision route for a changed instruction.
+
+The optional member `review` object contains `ready_at`, `in_flight`, a verified
+`admission` (`receipt`, exact `base_sha`/`head_sha`, `verified`,
+`fast_gates_passed`, `companion_audit_complete`, `self_review_passed`), actual
+`review_blockers` and the last `attempt` base/head. Member `base_sha` is required
+for this lane. Missing admission is unknown. An in-flight or same-tuple attempt
+returns reconcile, never start again (including timeout/publication failures).
+`ready_wait_seconds` measures readiness to the current observation; retain
+`review_started_at` in checkpoint evidence to measure actual scheduling delay.
+Merge-only predecessors, CI-in-progress and ENV contention do not enter this
+lane. Missing interface semantics or unfinished implementation do.

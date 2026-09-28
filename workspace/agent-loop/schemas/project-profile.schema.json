@@ -10,6 +10,8 @@
     "id": {"type": "string", "minLength": 1},
     "version": {"type": "integer", "minimum": 1},
     "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "repository_host": {"type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$", "description": "Explicit implementation Git host; omitted means github.com, independent of the tracking Issue."},
+    "delivery_mode": {"enum": ["automated-pr", "human-pr"]},
     "context_by_phase": {"type": "object"},
     "gates": {"type": "object"},
     "resources": {"type": "object"},

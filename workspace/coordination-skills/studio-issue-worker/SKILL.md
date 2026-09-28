@@ -146,7 +146,8 @@ After the complete code, test, CI, documentation, deployment and operational
 companion audit passes, freeze one final PR head. Review the single complete
 `base...head` diff, never individual commits or a succession of partially
 finished heads. Run `squad-grok-review doctor` outside the environment claim,
-then start review alongside full CI; follow
+then start review at the first complete stable diff alongside full CI, even
+when merge is held or another PR/environment is pending; follow
 [references/review-readiness.md](references/review-readiness.md) for the parallel
 admission receipt, single-flight/freeze rules, join, stale-input handling, and
 timeout evidence. Run both
