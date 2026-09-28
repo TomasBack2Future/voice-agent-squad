@@ -379,3 +379,35 @@ The rolling planner now returns `review_next` independently of merge holds and
 CI/ENV waits. Only verified complete-diff admissions can enter it; in-flight or
 already-attempted tuples reconcile instead of sampling again. See the
 [review lane contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md#independent-review-lane).
+
+### Muse sessions
+
+`muse_session_host.py` is a line-oriented terminal client for Muse's public MSP
+`serve` protocol. It owns the server connection and retains native session logs
+that can later be opened with `muse resume`. It is not the native Muse TUI and
+never injects input into another client. External-agent ingress is not required.
+
+A separate JSON config supplies the absolute client/coordination executables,
+ledger, workspace, state directory and handoff prompt paths; the native UUIDv7,
+new agent identity, role (`worker` or `dispatcher`), explicit approval mode and
+sandbox posture. Workers also supply `assignment_file` and `dispatcher_agent_id`;
+Dispatchers supply the reservation keys whose custody must be verified. Optional
+`environment` accepts only PATH, GH_CONFIG_DIR and SQUAD_HOME paths, never credentials.
+`--prepare` creates the native session without model work or claims. Normal startup
+resumes it and checks custody before submitting the handoff exactly once.
+
+The host reuses canonical Worker binding/heartbeat guards. Its session-owned
+receiver blocks in Squad, passes fenced event data through MSP, and leaves ack to
+the owning model after reconciliation. Stable event IDs deduplicate turn admission;
+no timer schedules model turns. Pending old events after takeover must be included
+in the handoff. A crash between admission and receipt recording replays the same
+MSP command ID. Host exit never releases claims or proves external work ended.
+
+Human lines submit normal prompts. `/status` reads state, `/quit` stops the local
+host while retaining claims, and `/rpc {"method":...,"params":...}` passes an
+explicit human protocol command, including an approval's exact requirement/choice.
+Approval requests are displayed and stored as `attention.json`; the host never
+automatically approves tools. Treat all runtime/config receipts as local operational
+evidence, not repository content. Verify real tool access and event adoption before
+migrating a live assignment. Keep old clients stopped; do not load the same native
+session simultaneously in this host and the native TUI.
