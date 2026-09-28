@@ -383,7 +383,7 @@ from child Issue closure.
 
 A GitHub tracking Issue may assign a Bitbucket Server implementation repository.
 Keep `issue` and reservation `source_ref=github:<issue>` unchanged, while setting
-`repository`, `repository_host` and the matching project profile explicitly.
+`repository`, `repository_host`, `clone_layout` and the matching project profile explicitly.
 For Interceptor use `agent-loop/projects/interceptor/profile.json` from the same
 installed package. Read its `references/bitbucket-delivery.md` before dispatch.
 Never use the Studio Worker adapter or a GitHub PR check for this repository.

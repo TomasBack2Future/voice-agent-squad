@@ -28,22 +28,26 @@ def git(worktree: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def repository_name(remote: str, expected_host: str = "github.com") -> str:
+def repository_name(remote: str, expected_host: str = "github.com", clone_layout: str = "plain") -> str:
     # Match the explicit host as well as namespace/name. Never accept a local
     # path, credential-bearing URL, encoded path or a same-name foreign remote.
+    if clone_layout not in ("plain", "bitbucket-server") or (expected_host == "github.com" and clone_layout != "plain"):
+        raise ValidationError("unsupported host/clone layout")
     if not re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*", expected_host):
         raise ValidationError("invalid assigned repository host")
     if remote.startswith("git@") and ":" in remote and "://" not in remote:
         host, path = remote[4:].split(":", 1)
     else:
         parsed = urlsplit(remote)
-        if (parsed.scheme not in ("ssh", "https") or parsed.password
+        if (parsed.scheme not in ("ssh", "https") or parsed.password is not None
                 or parsed.query or parsed.fragment
                 or parsed.username not in (None, "git")):
             raise ValidationError("unsupported repository remote")
-        host, path = parsed.hostname, parsed.path.lstrip("/")
-        if parsed.scheme == "https" and path.startswith("scm/"):
-            path = path[4:]  # Bitbucket Server HTTPS clone URL
+        host, path = parsed.hostname, parsed.path.removeprefix("/")
+        if parsed.scheme == "https" and clone_layout == "bitbucket-server":
+            if not path.startswith("scm/"):
+                raise ValidationError("Bitbucket HTTPS remote requires the declared scm layout")
+            path = path[4:]
     path = path.removesuffix(".git")
     if host != expected_host or not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", path) or path.split("/")[1] in (".", ".."):
         raise ValidationError("assignment repository mismatch")
@@ -58,8 +62,8 @@ def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
     if profile_path is not None and declared.resolve() != profile_path.resolve():
         raise ValidationError("profile path differs from the assignment")
     profile = validate_file(declared, ROOT / "schemas/project-profile.schema.json")
-    if (selected["id"], selected["version"], assignment["repository"], assignment.get("repository_host", "github.com")) != (
-        profile["id"], profile["version"], profile["repository"], profile.get("repository_host", "github.com")
+    if (selected["id"], selected["version"], assignment["repository"], assignment.get("repository_host", "github.com"), assignment.get("clone_layout", "plain")) != (
+        profile["id"], profile["version"], profile["repository"], profile.get("repository_host", "github.com"), profile.get("clone_layout", "plain")
     ):
         raise ValidationError("assignment/profile identity mismatch")
     if profile.get("delivery_mode") == "human-pr" and any(assignment["authorization"][key] for key in ("pull_request", "merge", "staging", "production", "issue_close")):
@@ -75,7 +79,7 @@ def check_worktree(assignment: dict) -> None:
         raise ValidationError("assignment branch mismatch")
     if git(worktree, "rev-parse", "HEAD") != assignment["base_sha"]:
         raise ValidationError("cold-start base changed; refresh the assignment before launch")
-    if repository_name(git(worktree, "remote", "get-url", "origin"), assignment.get("repository_host", "github.com")) != assignment["repository"]:
+    if repository_name(git(worktree, "remote", "get-url", "origin"), assignment.get("repository_host", "github.com"), assignment.get("clone_layout", "plain")) != assignment["repository"]:
         raise ValidationError("assignment repository mismatch")
     if git(worktree, "status", "--porcelain"):
         raise ValidationError("cold-start worktree is dirty")

@@ -22,6 +22,7 @@ import (
 type config struct {
 	provider          string
 	repositoryHost    string
+	cloneLayout       string
 	worktree          string
 	baseSHA           string
 	descriptionFile   string
@@ -232,7 +233,7 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 	var githubBinary, installationToken string
 	var github grokreview.PullRequestGateway
 	if configuration.provider == "local-git" {
-		github, err = grokreview.NewLocalGitGateway(configuration.worktree, configuration.repositoryHost, configuration.baseSHA, configuration.descriptionFile, configuration.maxGitHubOutput)
+		github, err = grokreview.NewLocalGitGateway(configuration.worktree, configuration.repositoryHost, configuration.cloneLayout, configuration.baseSHA, configuration.descriptionFile, configuration.maxGitHubOutput)
 		if err != nil {
 			return runtimeDependencies{}, err
 		}
@@ -287,6 +288,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags := flag.NewFlagSet("squad-grok-review", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.StringVar(&configuration.provider, "provider", "github", "review input: github or local-git (no publication)")
+	flags.StringVar(&configuration.cloneLayout, "clone-layout", "plain", "HTTPS clone path layout: plain or bitbucket-server")
 	flags.StringVar(&configuration.repositoryHost, "repository-host", "", "explicit implementation Git host for local review")
 	flags.StringVar(&configuration.worktree, "worktree", "", "absolute clean local worktree")
 	flags.StringVar(&configuration.baseSHA, "base-sha", "", "frozen 40-character base SHA for local review")
@@ -370,7 +372,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		if configuration.mode != "shadow" || configuration.repository == "" || configuration.pullRequest != 0 {
 			return config{}, fmt.Errorf("local review requires --repo, forbids --pr and cannot run in required mode")
 		}
-		if _, err := grokreview.NewLocalGitGateway(configuration.worktree, configuration.repositoryHost, configuration.baseSHA, configuration.descriptionFile, configuration.maxGitHubOutput); err != nil {
+		if _, err := grokreview.NewLocalGitGateway(configuration.worktree, configuration.repositoryHost, configuration.cloneLayout, configuration.baseSHA, configuration.descriptionFile, configuration.maxGitHubOutput); err != nil {
 			return config{}, err
 		}
 	default:

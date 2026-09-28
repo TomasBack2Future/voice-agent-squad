@@ -48,5 +48,6 @@
     "deny forwarding internal credentials/headers to an untrusted Origin",
     "negative and regression tests for actual model-bound request evidence and redaction"
   ],
-  "delivery_mode": "human-pr"
+  "delivery_mode": "human-pr",
+  "clone_layout": "bitbucket-server"
 }

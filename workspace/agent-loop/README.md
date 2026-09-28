@@ -355,7 +355,9 @@ legacy checkpoints remain readable and require verified adoption before migratio
 ## Separate tracking and implementation hosts
 
 Assignments/profile pairs may explicitly set `repository_host`; omission retains
-GitHub compatibility. Preflight and the launcher validate host + namespace/name,
+GitHub compatibility. Bitbucket HTTPS `scm/` paths require an explicit matching
+`clone_layout: bitbucket-server` in both assignment and profile; plain hosts
+retain their original two-segment path (including a real owner named `scm`). Preflight and the launcher validate host + namespace/name,
 profile identity, branch/base and a clean checkout. The tracking `issue` and
 reservation `github:<issue>` remain independent of the code host. Interceptor's
 [profile](projects/interceptor/profile.json) and [delivery contract](projects/interceptor/references/bitbucket-delivery.md)

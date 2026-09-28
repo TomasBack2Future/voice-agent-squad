@@ -13,7 +13,7 @@ class InterceptorPreflightTests(unittest.TestCase):
     check = WorkerPreflightTests.check
     def select_interceptor(self):
         self.profile = Path(preflight.ROOT) / 'projects/interceptor/profile.json'
-        self.assignment.update(repository='ipt/interceptor', repository_host='git.agoralab.co',
+        self.assignment.update(repository='ipt/interceptor', repository_host='git.agoralab.co', clone_layout='bitbucket-server',
                                project_profile={'id':'interceptor','version':1,'path':str(self.profile)})
         self.assignment["authorization"] = {key: key == "source_mutation" for key in self.assignment["authorization"]}
         # Issue intentionally remains in Studio/GitHub, independently of code origin.
@@ -47,12 +47,12 @@ class InterceptorPreflightTests(unittest.TestCase):
         for remote in ('ssh://git@git.agoralab.co/ipt/interceptor.git',
                        'git@git.agoralab.co:ipt/interceptor.git',
                        'https://git.agoralab.co/scm/ipt/interceptor.git'):
-            self.assertEqual('ipt/interceptor',preflight.repository_name(remote,'git.agoralab.co'))
+            self.assertEqual('ipt/interceptor',preflight.repository_name(remote,'git.agoralab.co','bitbucket-server'))
         for remote in ('/tmp/ipt/interceptor', 'https://git.agoralab.co.evil/scm/ipt/interceptor.git',
                        'https://token:secret@git.agoralab.co/scm/ipt/interceptor.git',
                        'https://git.agoralab.co/scm/../interceptor',
                        'https://git.agoralab.co/scm/ipt/interceptor.git?x=1'):
-            with self.assertRaises(preflight.ValidationError):preflight.repository_name(remote,'git.agoralab.co')
+            with self.assertRaises(preflight.ValidationError):preflight.repository_name(remote,'git.agoralab.co','bitbucket-server')
 
 
 class InterceptorLauncherTests(unittest.TestCase):
@@ -76,3 +76,18 @@ class InterceptorLauncherTests(unittest.TestCase):
         result=self.run_launcher(check=True)
         self.assertNotEqual(0,result.returncode)
         self.assertFalse(self.started.exists())
+
+class HTTPSLayoutTests(unittest.TestCase):
+    def test_github_rejects_scm_alias_but_accepts_real_scm_owner(self):
+        self.assertEqual('scm/widget',preflight.repository_name('https://github.com/scm/widget.git'))
+        for remote in ('https://github.com/scm/acme/widget.git','https://git@github.com/scm/acme/widget.git','https://github.com//acme/widget.git'):
+            with self.assertRaises(preflight.ValidationError):preflight.repository_name(remote)
+        with self.assertRaises(preflight.ValidationError):
+            preflight.repository_name('https://github.com/scm/acme/widget.git','github.com','bitbucket-server')
+
+    def test_bitbucket_layout_is_explicit_and_profile_bound(self):
+        remote='https://git.example.test/scm/acme/widget.git'
+        with self.assertRaises(preflight.ValidationError):preflight.repository_name(remote,'git.example.test')
+        self.assertEqual('acme/widget',preflight.repository_name(remote,'git.example.test','bitbucket-server'))
+        with self.assertRaises(preflight.ValidationError):
+            preflight.repository_name('https://git.example.test/acme/widget.git','git.example.test','bitbucket-server')

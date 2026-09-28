@@ -40,7 +40,7 @@ func localFixture(t *testing.T) (*LocalGitGateway, string) {
 	if err := os.WriteFile(contract, []byte("Issue contract and acceptance"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	g, err := NewLocalGitGateway(dir, "git.example.test", base, contract, 1024*1024)
+	g, err := NewLocalGitGateway(dir, "git.example.test", "bitbucket-server", base, contract, 1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,5 +113,30 @@ func TestLocalGitReviewRejectsHostSpoofAndPRNumber(t *testing.T) {
 	localTestGit(t, g.worktree, "remote", "set-url", "origin", "git@github.com:ipt/interceptor.git")
 	if _, err := g.FetchPullRequest(context.Background(), "ipt/interceptor", 0, ""); err == nil {
 		t.Fatal("accepted foreign host")
+	}
+}
+
+func TestLocalGitHTTPSLayoutDoesNotAliasGitHub(t *testing.T) {
+	g, _ := localFixture(t)
+	g.host = "github.com"
+	g.cloneLayout = "plain"
+	if !g.matchesRemote("https://github.com/scm/widget.git", "scm/widget") {
+		t.Fatal("rejected real scm owner")
+	}
+	for _, remote := range []string{"https://github.com/scm/acme/widget.git", "https://git@github.com/scm/acme/widget.git"} {
+		if g.matchesRemote(remote, "acme/widget") {
+			t.Fatal("accepted scm alias")
+		}
+	}
+	if _, err := NewLocalGitGateway(g.worktree, "github.com", "bitbucket-server", g.baseSHA, g.descriptionFile, 1024); err == nil {
+		t.Fatal("accepted invalid GitHub layout")
+	}
+	g.host = "git.example.test"
+	if g.matchesRemote("https://git.example.test/scm/acme/widget.git", "acme/widget") {
+		t.Fatal("implicit Bitbucket layout")
+	}
+	g.cloneLayout = "bitbucket-server"
+	if !g.matchesRemote("https://git.example.test/scm/acme/widget.git", "acme/widget") {
+		t.Fatal("rejected explicit Bitbucket layout")
 	}
 }

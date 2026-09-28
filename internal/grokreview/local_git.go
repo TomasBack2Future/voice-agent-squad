@@ -18,19 +18,23 @@ import (
 type LocalGitGateway struct {
 	worktree        string
 	host            string
+	cloneLayout     string
 	baseSHA         string
 	descriptionFile string
 	maxBytes        int
 }
 
-func NewLocalGitGateway(worktree, host, baseSHA, descriptionFile string, maxBytes int) (*LocalGitGateway, error) {
+func NewLocalGitGateway(worktree, host, cloneLayout, baseSHA, descriptionFile string, maxBytes int) (*LocalGitGateway, error) {
 	if !filepath.IsAbs(worktree) || !filepath.IsAbs(descriptionFile) || maxBytes <= 0 {
 		return nil, fmt.Errorf("local review requires absolute worktree/contract paths and a positive input limit")
 	}
 	if !regexp.MustCompile(`^[a-z0-9]+(?:[.-][a-z0-9]+)*$`).MatchString(host) || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(baseSHA) {
 		return nil, fmt.Errorf("local review requires an explicit host and 40-character base SHA")
 	}
-	return &LocalGitGateway{worktree: worktree, host: host, baseSHA: baseSHA, descriptionFile: descriptionFile, maxBytes: maxBytes}, nil
+	if (cloneLayout != "plain" && cloneLayout != "bitbucket-server") || (host == "github.com" && cloneLayout != "plain") {
+		return nil, fmt.Errorf("unsupported host/clone layout")
+	}
+	return &LocalGitGateway{worktree: worktree, host: host, cloneLayout: cloneLayout, baseSHA: baseSHA, descriptionFile: descriptionFile, maxBytes: maxBytes}, nil
 }
 
 func (g *LocalGitGateway) git(ctx context.Context, args ...string) (string, error) {
@@ -76,7 +80,10 @@ func (g *LocalGitGateway) matchesRemote(remote, repository string) bool {
 			}
 		}
 		host, path = u.Hostname(), strings.TrimPrefix(u.Path, "/")
-		if u.Scheme == "https" {
+		if u.Scheme == "https" && g.cloneLayout == "bitbucket-server" {
+			if !strings.HasPrefix(path, "scm/") {
+				return false
+			}
 			path = strings.TrimPrefix(path, "scm/")
 		}
 	}

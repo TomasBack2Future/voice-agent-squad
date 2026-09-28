@@ -2,7 +2,7 @@
 
 The GitHub Issue is the requirements/dispatch source; implementation lives at
 `git.agoralab.co/ipt/interceptor`, default branch `master`. Set the assignment's
-`repository_host` to that host and use this profile. Preserve independent Git
+`repository_host` to that host and `clone_layout` to `bitbucket-server` and use this profile. Preserve independent Git
 history, worktree and claims. Do not change Studio as part of this assignment.
 
 PR creation, publication and merge are human-operated for this lane. Dispatch
@@ -25,11 +25,11 @@ containing the tracking Issue, requirements, interface decisions and acceptance
 mapping. Keep the file stable throughout review and retain its hash in evidence.
 
 ```sh
-squad-grok-review doctor --provider local-git --repository-host git.agoralab.co \
+squad-grok-review doctor --provider local-git --repository-host git.agoralab.co --clone-layout bitbucket-server \
   --repo ipt/interceptor --worktree /absolute/owned/worktree \
   --base-sha BASE_SHA --description-file /absolute/evidence/contract.md \
   --reasoning-effort high
-squad-grok-review --provider local-git --repository-host git.agoralab.co \
+squad-grok-review --provider local-git --repository-host git.agoralab.co --clone-layout bitbucket-server \
   --repo ipt/interceptor --worktree /absolute/owned/worktree \
   --base-sha BASE_SHA --description-file /absolute/evidence/contract.md \
   --reasoning-effort high --timeout 20m
