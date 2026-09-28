@@ -19,12 +19,14 @@
       "docs/deployment.md",
       "docs/environments-and-ci.md",
       "docs/release-acceptance.md",
+      "references/couchbase-environments.md before any direct database access or deployment configuration change",
       "the component-specific staging capability reference",
       "references/actions-sls-fallback.md only for an existing synthetic logging run when direct SLS credentials are unavailable"
     ],
     "production": [
       "docs/deployment.md",
-      "the separately authorized production capability reference"
+      "the separately authorized production capability reference",
+      "references/couchbase-environments.md before direct database access; staging migration does not change the production database"
     ]
   },
   "gates": {
@@ -43,6 +45,7 @@
     "staging": [
       "read-only prerequisite receipt before environment ownership; for report intake use node scripts/report_intake_preflight.mjs with the explicit target and exact CI tuple when that repository capability is available",
       "explicit kubeconfig and context selection",
+      "explicit Studio Couchbase environment and credential role; clear inherited CB_* values before loading the selected environment, and verify connected cluster, bucket and scope",
       "current PR tuple and required checks revalidated before and after ownership",
       "exact-revision rollout, functional acceptance, bounded SLS evidence and rollback disposition"
     ]
