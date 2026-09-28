@@ -1,0 +1,19 @@
+{
+  "schema_version": "agent-loop.project-profile.v1",
+  "id": "interceptor",
+  "version": 1,
+  "repository": "git.agoralab.co/ipt/interceptor",
+  "context_by_phase": {
+    "implementation": ["AGENTS.md", "docs/README.md", "docs/architecture.md", "docs/interceptor_caller_contract.md", "the owning runtime or protocol document"],
+    "review": ["the canonical tracking Issue and acceptance mapping", "docs/environments-and-ci.md", "the complete pushed branch diff for human handoff"],
+    "staging": ["docs/environments-and-ci.md", "deploy/README.md", "the exact target and separately authorized environment owner"],
+    "production": ["docs/environments-and-ci.md", "deploy/README.md", "the separately authorized production release contract"]
+  },
+  "gates": {
+    "fast": ["./regression/ci.sh", "root and regression Go module tests", "git diff --check"],
+    "review": ["For an authorized branch-only assignment, self-review the complete diff, push the exact commit, verify the remote branch SHA and hand its name and evidence to the human owner; do not create a PR or dispatch Jenkins."],
+    "staging": ["Require a separate exact environment identity and authorization before any Jenkins, Helm or deployment operation."]
+  },
+  "resources": {},
+  "risk_probes": ["For model request evidence, compare redacted trace content with a controllable model endpoint across enabled, disabled and failure paths.", "For protocol changes, test missing and malformed producer events without fabricating successful calls."]
+}

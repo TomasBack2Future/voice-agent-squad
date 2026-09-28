@@ -56,9 +56,17 @@ attribution and interrupted ENV ownership.
   keys and runbooks in the project profile. Do not copy project operations into
   this skill.
 - Use an isolated owned worktree and preserve unrelated user work.
-- Run the profile's fast checks before freezing a PR tuple. For durability,
+- Run the profile's fast checks before delivery. For durability,
   idempotency, concurrency, retry or migration changes, run the profile's risk
   probes before the first independent review.
+- When `authorization.pull_request=false` and `authorization.branch_push=true`,
+  use the branch-only handoff. Self-review the complete `base...head` diff,
+  commit and push the assigned branch, verify its exact remote SHA, and report
+  the branch, revision and check results to the human owner. Stop at that
+  handoff; do not create a PR, invoke a PR-only reviewer, merge, deploy or close
+  the Issue without separate authorization. Keep the Squad outcome accurate:
+  source delivered for human review is not Issue completion.
+- For a PR assignment, continue with the following review and release gates.
 - Before independent review, follow [review readiness](references/review-readiness.md).
   Admit one final, complete `base...head` PR diff only after the companion audit,
   fast gates and author self-review pass. A reviewer evaluates that aggregate
@@ -112,7 +120,8 @@ terminal state from a quiet session.
 ## Completion
 
 Return one terminal outcome containing the Issue/item/reservation generation,
-exact PR and revision, deterministic checks, review result, environment and
+exact PR or remote branch and revision, deterministic checks, review result or
+human handoff, environment and
 acceptance disposition, released resources, remaining limitations and safe
 follow-ups. The Dispatcher reconciles the reservation; the Worker does not
 rewrite scheduler state owned by another role.

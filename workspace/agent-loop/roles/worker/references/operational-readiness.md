@@ -25,14 +25,17 @@ user-facing feature is split into source and deployment items, the parent delive
 remains incomplete until the requested environment works. A loopback test does
 not establish a deployed route.
 
-Executable discovery is not permission or authentication. Check the actual
-repository through `gh` and, when review applies, use
+Executable discovery is not permission or authentication. For a GitHub source
+repository, check its access through `gh` and, when managed PR review applies, use
 `squad-grok-review doctor --repo OWNER/REPO` (optionally `--pr NUMBER`) before
 expensive work. A doctor result without a repository says `not_checked` for
 repository access. This reads through the reviewer App identity without sampling
 or publishing; it cannot prove permission to write a Check. If the installed
 binary lacks this capability, report that limitation; do not assume a global
-doctor proves repository access or install a binary implicitly.
+doctor proves repository access or install a binary implicitly. For a non-GitHub
+source repository, verify the assigned `origin` and branch-push capability through
+Git. Use `gh` only for a GitHub tracking Issue; do not treat that Issue host as
+proof of source-repository access. A branch-only assignment has no PR review gate.
 
 ## Execution capability and autonomy
 

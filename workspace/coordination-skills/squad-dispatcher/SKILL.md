@@ -248,6 +248,10 @@ Never wait for Worker termination to answer its blocking design question.
    still-valid decisions; unknown facts remain needs-investigation and unresolved
    product choices remain needs-decision. Persist a compact design reference in
    the assignment; never load the Dispatcher conversation into a Worker.
+   Select the implementation repository from the admitted Issue, independently
+   of the GitHub repository hosting that Issue. Match the assignment to the
+   corresponding workspace project profile and actual Git `origin`; a GitHub
+   tracking Issue may own a Bitbucket implementation branch.
    Select ready leaves that are unclaimed, unreserved, unblocked, and mutually
    independent. The default product-Worker WIP limit is five; an explicit user decision may override it. Record the effective limit and decision reference in the current policy. Count active or
    otherwise non-terminal Worker tasks and unbound active reservations, then
@@ -280,10 +284,13 @@ Never wait for Worker termination to answer its blocking design question.
    workspace policy), preserving fresh workspace/session identity and binding.
    Do not create a second App task in parallel with a cmux Worker. For an
    App-task deployment, create one Codex task whose title begins with `[#<issue>][<item>]` and whose
-   prompt explicitly invokes
-   `$studio-issue-worker`, names exactly one Issue and item, and includes the
+   prompt invokes `$studio-issue-worker` only for a Studio repository assignment;
+   use `$agent-loop-worker` with the matching project profile for another
+   workspace repository. The task names exactly one Issue and item. Include the
    phase-aware local-review contract in
-   [references/worker-task-prompt.md](references/worker-task-prompt.md).
+   [references/worker-task-prompt.md](references/worker-task-prompt.md) for Studio
+   PR work; for branch-only delivery, require explicit `branch_push` authorization,
+   remote-SHA verification and a human handoff without PR, merge or deployment.
    Omit model/reasoning overrides unless the scheduler prompt explicitly set
    them. Use the saved project worktree for Git repositories.
 9. Immediately bind the created task id with the same generation:

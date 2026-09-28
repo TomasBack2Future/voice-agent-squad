@@ -7,10 +7,12 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from validate_context_package import ROOT, ValidationError, validate_file
 
@@ -27,10 +29,25 @@ def git(worktree: Path, *args: str) -> str:
 
 
 def repository_name(remote: str) -> str:
-    for prefix in ("git@github.com:", "https://github.com/", "ssh://git@github.com/"):
-        if remote.startswith(prefix):
-            return remote[len(prefix):].removesuffix(".git")
-    raise ValidationError("origin must identify the assigned GitHub repository")
+    # Preserve the existing GitHub owner/repo identity. Include the host for
+    # other forges so an identically named repository cannot pass preflight.
+    scp = re.fullmatch(r"git@([A-Za-z0-9.-]+):([^?#]+)", remote)
+    if scp:
+        host, path = scp.groups()
+    else:
+        parsed = urlsplit(remote)
+        if parsed.scheme not in ("ssh", "https") or not parsed.hostname:
+            raise ValidationError("origin has an unsupported repository URL")
+        if parsed.username not in (None, "git") or parsed.password or parsed.port:
+            raise ValidationError("origin has an unsupported repository URL")
+        if parsed.query or parsed.fragment:
+            raise ValidationError("origin has an unsupported repository URL")
+        host, path = parsed.hostname, parsed.path.lstrip("/")
+    path = path.removesuffix(".git")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path):
+        raise ValidationError("origin repository path is invalid")
+    host = host.lower()
+    return path if host == "github.com" else f"{host}/{path}"
 
 
 def check_worktree(assignment: dict) -> None:
@@ -65,6 +82,10 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         profile["id"], profile["version"], profile["repository"]
     ):
         raise ValidationError("assignment/profile identity mismatch")
+    if not assignment["authorization"]["pull_request"]:
+        if (not assignment["authorization"]["source_mutation"]
+                or assignment["authorization"].get("branch_push") is not True):
+            raise ValidationError("branch-only delivery requires source_mutation and branch_push authorization")
     if len(json.dumps(assignment, separators=(",", ":")).encode()) > 2048:
         raise ValidationError("assignment exceeds 2048-byte cold-start budget")
     check_worktree(assignment)

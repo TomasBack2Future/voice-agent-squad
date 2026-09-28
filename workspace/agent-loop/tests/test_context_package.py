@@ -89,6 +89,19 @@ class ContextPackageTests(unittest.TestCase):
         self.assertNotIn("Data Analyze", skill)
         self.assertIn("Phase-scoped context", skill)
 
+    def test_workspace_has_distinct_profiles_for_all_four_repositories(self):
+        module = load_module()
+        schema = ROOT / "schemas" / "project-profile.schema.json"
+        expected = {
+            "studio": "TomasBack2Future/voice-agent-studio",
+            "squad": "TomasBack2Future/voice-agent-squad",
+            "importer": "TomasBack2Future/convoai-studio-importer",
+            "interceptor": "git.agoralab.co/ipt/interceptor",
+        }
+        for name, repository in expected.items():
+            profile = module.validate_file(ROOT / "projects" / name / "profile.json", schema)
+            self.assertEqual(profile["repository"], repository)
+
     def test_worker_review_contract_is_pr_wide_single_flight(self):
         skill = (ROOT / "roles" / "worker" / "SKILL.md").read_text()
         review = (

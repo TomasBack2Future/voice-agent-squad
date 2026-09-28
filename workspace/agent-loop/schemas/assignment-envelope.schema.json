@@ -33,7 +33,7 @@
         "generation": {"type": "integer", "minimum": 1}
       }
     },
-    "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$"},
     "worktree": {"type": "string", "pattern": "^/"},
     "branch": {"type": "string", "minLength": 1},
     "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
@@ -63,6 +63,7 @@
       "required": ["source_mutation", "pull_request", "merge", "staging", "production", "issue_close"],
       "properties": {
         "source_mutation": {"type": "boolean"},
+        "branch_push": {"type": "boolean"},
         "pull_request": {"type": "boolean"},
         "merge": {"type": "boolean"},
         "staging": {"type": "boolean"},
@@ -87,4 +88,3 @@
     }
   }
 }
-

@@ -19,6 +19,8 @@ large prompt:
 | Review admission, single-flight and freeze | `roles/worker/references/review-readiness.md` |
 | Studio repository and delivery capabilities | `projects/studio/profile.json` |
 | Importer repository and Compose delivery capabilities | `projects/importer/profile.json` |
+| Squad repository and source review capabilities | `projects/squad/profile.json` |
+| Interceptor repository and branch handoff capabilities | `projects/interceptor/profile.json` |
 | Bounded dispatch input | `schemas/assignment-envelope.schema.json` |
 | Compact/resume continuity | `schemas/checkpoint.schema.json` |
 | Live cmux session transport | `tools/cmux-sessions/SKILL.md` |
@@ -50,6 +52,16 @@ instructions and Python/Docker gates. The Studio profile is not a fallback:
 preflight continues to reject any assignment/profile/checkout repository mismatch.
 The package synchronization includes this profile with the Worker scripts and
 skills; never add it by editing an installed snapshot.
+
+The Squad and Interceptor profiles complete the four-repository workspace map.
+GitHub repository identities retain the existing `owner/repo` form. Other Git
+forges use `host/owner/repo`, so preflight rejects a matching path on the wrong
+host. A GitHub tracking Issue can assign work in a Bitbucket source repository;
+the reservation remains `github:<issue>` while the assignment and profile name
+the Bitbucket source. For Interceptor branch-only delivery, the assignment must
+set `pull_request=false` and `branch_push=true`. The Worker pushes and verifies
+the branch, then hands it to the human owner. This does not imply PR creation,
+merge, Jenkins dispatch or deployment.
 
 Importer owns ENV-003/004 and uses its repository's Compose delivery adapter.
 Independent Studio and Importer work may proceed concurrently after resource
