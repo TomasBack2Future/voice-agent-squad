@@ -79,7 +79,21 @@ def load_json(path: Path) -> Any:
 def validate_file(document: Path, schema: Path) -> dict[str, Any]:
     value = load_json(document)
     validate(value, load_json(schema))
+    if value.get("schema_version") == "agent-loop.checkpoint.v1":
+        validate_checkpoint_operations(value)
     return value
+
+
+def validate_checkpoint_operations(value: dict) -> None:
+    receipts = value.get("operation_receipts", [])
+    ids = [receipt["intent"] for receipt in receipts]
+    if len(ids) != len(set(ids)):
+        raise ValidationError("duplicate current operation intent; retain history outside current checkpoint")
+    next_action = value.get("next_operation") or {}
+    if next_action.get("action") == "dispatch":
+        existing = next((r for r in receipts if r["intent"] == next_action["intent"]), None)
+        if existing and existing["state"] != "intent-recorded":
+            raise ValidationError("next dispatch already submitted; reconcile the original intent")
 
 
 def main() -> int:

@@ -22,3 +22,8 @@ test('not-applicable logs require both a reason and no affected structured-log p
 });
 test('integrated contribution remains open without staging logs; no independent deploy gate added',()=>{const s=state();assert.deepEqual(auditBatch(s).errors,[]);s.children[0].state='exact-SHA-accepted';assert(auditBatch(s).errors.includes('794:log-evidence'));});
 test('source-CI race, grouped artifact mismatch and sole runner deadlock block release',()=>{const s=state();s.proposedAction='release';s.tasks[0].claims.push('ENV-001');s.policyCurrent=s.ciGreen=s.reviewAuthorized=s.sourceTerminal=s.prefetchGrouped=true;assert.deepEqual(auditBatch(s).errors,[]);for(const flag of ['sourceTerminal','prefetchGrouped']){const c=structuredClone(s);c[flag]=false;assert(auditBatch(c).errors.includes('release-gate'));}s.runnerDeadlock=true;assert(auditBatch(s).errors.includes('release-gate'));});
+test('explicit user WIP override is honored without treating paused work as free',()=>{
+ const s=state();for(let i=0;i<5;i++)s.tasks.push({id:`paused-${i}`,terminal:false,paused:true,claims:[]});
+ s.policy={wipLimit:10,userDecisionRef:'decision:10'};assert(!auditBatch(s).errors.includes('global-wip'));
+ delete s.policy.userDecisionRef;assert(auditBatch(s).errors.includes('wip-policy'));
+});

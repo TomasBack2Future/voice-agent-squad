@@ -127,7 +127,7 @@ as a user task. Include companion acceptance operations in the initial scope
 so the Worker does not repeatedly seek approval for an already requested
 outcome. Use the Worker delivery-quality contract for automatic operation and
 human fallback. Keep runtime approval policy, product authority, ENV ownership
-and WIP limits distinct. Honor a smaller user-selected WIP cap across waiting
+and WIP limits distinct. Honor the effective user-selected WIP cap across waiting
 and unresolved work; do not kill existing Workers to make room.
 
 ## Live admission and continuation identity
@@ -249,13 +249,13 @@ Never wait for Worker termination to answer its blocking design question.
    product choices remain needs-decision. Persist a compact design reference in
    the assignment; never load the Dispatcher conversation into a Worker.
    Select ready leaves that are unclaimed, unreserved, unblocked, and mutually
-   independent. The global product-Worker WIP limit is five. Count active or
+   independent. The default product-Worker WIP limit is five; an explicit user decision may override it. Record the effective limit and decision reference in the current policy. Count active or
    otherwise non-terminal Worker tasks and unbound active reservations, then
    create only enough Workers to fill the remaining slots. Quiet, idle,
    waiting, or claim-contending Workers still count until reconciled terminal.
-   A task prompt may set a smaller limit, never a larger one.
+   Read the effective policy instead of inferring a limit from an older prompt. Only an explicit user decision changes the limit.
    External Grok review executions are not Codex Workers, reservations, or Squad
-   claims and never consume one of these five slots.
+   claims and never consume a product-Worker slot.
 7. Before creating or accepting any missing item, derive a stable key
    `DISPATCH-<REPO-SHORT>-<ISSUE-NUMBER>` and atomically reserve the canonical
    source:
@@ -297,6 +297,14 @@ Never wait for Worker termination to answer its blocking design question.
    task by title/id and repair the binding in a later cycle.
 10. Return a compact cycle report: scanned, blocked, already owned/reserved,
     newly dispatched with task ids, recovery candidates, and errors.
+
+## Rolling merge planning
+
+For authorized rolling preparation and shared deployment, read
+[rolling delivery](references/rolling-delivery.md). Start planning at first
+admission, progress ready independent merges, and freeze a dependency-closed
+candidate at the cutoff. Use the read-only rolling planner on fresh ledger/PR
+facts; do not wait for a global ready signal or silently migrate active Workers.
 
 ## Session-owned terminal receiver
 
@@ -366,7 +374,7 @@ does not activate the separate implementation batch mode below.
 
 Only explicitly authorized batches with verified minimum-baseline-and-batch-contract
 READY use [batch dispatch](references/batch-dispatch.md). Read it before selecting
-a batch task. Preserve existing nonbatch Workers, global WIP <= 5, reservations,
+a batch task. Preserve existing nonbatch Workers, the effective user-selected WIP limit (default 5), reservations,
 child holds and path ownership. Dispatcher still never implements or releases
 product work. A00 READY and A14 implementation/evidence readiness are distinct
 from child Issue closure.

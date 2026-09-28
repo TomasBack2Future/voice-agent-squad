@@ -342,3 +342,12 @@ only after OLD is done/released and NEW is claimed. CLI and
 transition in the reservation note; old-item events are no longer accepted.
 Use this operation instead of a prose-only continuation mapping. Resource checks
 are also exposed as `squad_resources_check` and never claim or release resources.
+
+## Rolling delivery planning
+
+`rolling_delivery.py SNAPSHOT.json` evaluates a fresh, read-only ledger/PR snapshot
+for the next independent merges, a dependency-closed cutoff set, effective WIP and
+completion/reservation reconciliation. It neither assigns nor merges work. See
+[the Dispatcher contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md).
+Typed checkpoint operation receipts reject dispatch of an already submitted intent;
+legacy checkpoints remain readable and require verified adoption before migration.

@@ -29,3 +29,10 @@ session continuity, not keystroke callback injection. Group repeated failure
 fingerprints (operation, component revision, error class) under one root-cause
 owner; repair or change the failed condition before another attempt. Do not add a
 monitor daemon, a new approval form, or another source of decision truth.
+
+For rolling shared delivery, the decision identifies the common candidate owner,
+allowed merge phase, per-Issue acceptance and handoff boundary. Record adoption
+before changing delivery modes. Add `decision_revision`, `operation_receipts`
+and `next_operation` to the existing checkpoint. Run validate_context_package.py
+before resuming a typed checkpoint; if an intent was already submitted, reconcile
+it instead of dispatching again. Preserve ambiguous operations and their locks.

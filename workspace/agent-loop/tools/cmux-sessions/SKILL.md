@@ -172,3 +172,9 @@ For new Claude Workers needing asynchronous design decisions, include
 publish capability; the canonical launcher creates a Worker-role native receiver
 with the child's own identity/PID/incarnation. Decision replies use the durable
 ledger, never terminal input. Existing Workers are not silently restarted.
+
+For an established durable Squad callback/decision route, publish the authorized
+event there even when a terminal shows unsent input or an automatic suggestion.
+Input state only constrains keystroke injection, not ledger message publication.
+A suggestion is neither a user instruction nor approval. Unknown human drafts
+remain protected; verify acknowledgment/adoption through the durable receiver.

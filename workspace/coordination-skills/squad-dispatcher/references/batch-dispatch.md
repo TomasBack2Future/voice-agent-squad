@@ -18,7 +18,7 @@ shared-path dependency gates. Use the three Epic793 boundaries in the contract.
 Reserve the exact primary canonical source before release-task creation just as
 for an Issue, attach the one primary item, and bind the returned generation.
 Never duplicate a reservation/task while creation/binding/transfer is uncertain.
-The release item is primary ownership, not another ENV lock. Global WIP <= 5
+The release item is primary ownership, not another ENV lock. The effective user-selected WIP limit (default 5)
 includes every nonterminal development/integration task and unbound reservation;
 per batch at most two development owners and one integration owner. Paused tasks
 count. Count bound tasks once even when they accept multiple child contributions.
