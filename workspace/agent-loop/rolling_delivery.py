@@ -23,6 +23,38 @@ def timestamp(value):
     return result
 
 
+def review_readiness(member: dict, now: datetime) -> dict:
+    """Review scheduling is independent of merge decisions, CI and ENV queues.
+
+    The caller verifies the durable admission receipt and existing attempt.
+    Missing evidence is unknown, never implicit permission to sample again.
+    """
+    review = member.get("review")
+    if not review or member.get("state") in INTEGRATED:
+        return {"action": "none", "reason": "no-review-admission"}
+    ready_at = timestamp(review["ready_at"])
+    if ready_at > now:
+        raise ValueError("review readiness is future dated")
+    result = {"ready_at": review["ready_at"],
+              "ready_wait_seconds": int((now-ready_at).total_seconds())}
+    # Even a changed head cannot overlap an older still-running invocation.
+    if review.get("in_flight"):
+        return dict(result, action="reconcile", reason="single-flight")
+    base, head = member.get("base_sha"), member.get("head_sha")
+    admission = review.get("admission", {})
+    if (not all(isinstance(x, str) and re.fullmatch(r"[0-9a-f]{40}", x) for x in (base, head))
+            or admission.get("base_sha") != base or admission.get("head_sha") != head
+            or not admission.get("receipt")
+            or any(admission.get(key) is not True for key in ("verified", "fast_gates_passed", "companion_audit_complete", "self_review_passed"))):
+        return dict(result, action="wait", reason="incomplete-or-stale-admission")
+    if review.get("review_blockers"):
+        return dict(result, action="wait", reason="review-dependency")
+    attempt = review.get("attempt")
+    if attempt and attempt.get("base_sha") == base and attempt.get("head_sha") == head:
+        return dict(result, action="reconcile", reason="existing-tuple-attempt")
+    return dict(result, action="start", reason="stable-diff-ready")
+
+
 def evaluate(snapshot: dict, *, now: datetime) -> dict:
     if snapshot.get("schema_version") != "agent-loop.rolling_delivery.v1":
         raise ValueError("unsupported rolling plan schema")
@@ -60,6 +92,7 @@ def evaluate(snapshot: dict, *, now: datetime) -> dict:
     for identifier in indexed:
         visit(identifier)
     eligible, waiting, reconcile = [], {}, []
+    reviews = {m["id"]: review_readiness(m, now) for m in members}
     for member in members:
         reasons = []
         if member.get("state") != "review-ready":
@@ -100,6 +133,7 @@ def evaluate(snapshot: dict, *, now: datetime) -> dict:
     unbound = sum(1 for r in snapshot.get("reservations", []) if r.get("active") and not r.get("task"))
     return {"schema_version": "agent-loop.rolling_delivery_result.v1", "advisory": True,
             "decision_revision": decision["revision"], "merge_next": eligible, "waiting": waiting,
+            "review_next": [key for key, value in reviews.items() if value["action"] == "start"], "reviews": reviews,
             "freeze_members": frozen if cutoff or len(frozen) == len(members) else [],
             "deferred": [m["id"] for m in members if m["id"] not in frozen] if cutoff else [],
             "acceptance_owner": snapshot["acceptance_owner"], "reconcile": reconcile,

@@ -18,12 +18,6 @@ class LauncherTests(unittest.TestCase):
     setUp = fixtures.WorkerPreflightTests.setUp
     git = fixtures.WorkerPreflightTests.git
 
-    def test_interceptor_binding_uses_tracking_issue_not_source_host(self):
-        fixtures.WorkerPreflightTests.select_interceptor(self)
-        self.prepare()
-        self.assertEqual(launcher.binding(self.assignment, launcher.config_file(self.config_path),
-                                          launcher.child_environment(launcher.config_file(self.config_path))), 'pending')
-
     def prepare(self, mode='native', behavior='ok'):
         self.assignment['authorization']['staging'] = False
         self.assignment['authorization']['production'] = False

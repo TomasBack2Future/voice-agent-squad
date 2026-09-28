@@ -19,8 +19,8 @@ large prompt:
 | Review admission, single-flight and freeze | `roles/worker/references/review-readiness.md` |
 | Studio repository and delivery capabilities | `projects/studio/profile.json` |
 | Importer repository and Compose delivery capabilities | `projects/importer/profile.json` |
-| Squad repository and source review capabilities | `projects/squad/profile.json` |
-| Interceptor repository and branch handoff capabilities | `projects/interceptor/profile.json` |
+| Squad source and review capabilities | `projects/squad/profile.json` |
+| Interceptor source and human PR handoff | `projects/interceptor/profile.json` |
 | Bounded dispatch input | `schemas/assignment-envelope.schema.json` |
 | Compact/resume continuity | `schemas/checkpoint.schema.json` |
 | Live cmux session transport | `tools/cmux-sessions/SKILL.md` |
@@ -53,15 +53,14 @@ preflight continues to reject any assignment/profile/checkout repository mismatc
 The package synchronization includes this profile with the Worker scripts and
 skills; never add it by editing an installed snapshot.
 
-The Squad and Interceptor profiles complete the four-repository workspace map.
-GitHub repository identities retain the existing `owner/repo` form. Other Git
-forges use `host/owner/repo`, so preflight rejects a matching path on the wrong
-host. A GitHub tracking Issue can assign work in a Bitbucket source repository;
-the reservation remains `github:<issue>` while the assignment and profile name
-the Bitbucket source. For Interceptor branch-only delivery, the assignment must
-set `pull_request=false` and `branch_push=true`. The Worker pushes and verifies
-the branch, then hands it to the human owner. This does not imply PR creation,
-merge, Jenkins dispatch or deployment.
+Select the Worker role from the implementation repository, independently of
+the GitHub tracking Issue: Studio uses `studio-issue-worker`; Squad, Importer
+and Interceptor use `agent-loop-worker` with their matching project profile.
+Keep the source `repository`, explicit `repository_host` and `clone_layout`
+consistent with the checkout. A tracking Issue grants no source-host permissions.
+The Squad profile supplies source/review gates only; it does not authorize binary
+installation, live database changes or session restarts. Interceptor retains its
+local review and human PR handoff contract.
 
 Importer owns ENV-003/004 and uses its repository's Compose delivery adapter.
 Independent Studio and Importer work may proceed concurrently after resource
@@ -363,3 +362,20 @@ completion/reservation reconciliation. It neither assigns nor merges work. See
 [the Dispatcher contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md).
 Typed checkpoint operation receipts reject dispatch of an already submitted intent;
 legacy checkpoints remain readable and require verified adoption before migration.
+
+## Separate tracking and implementation hosts
+
+Assignments/profile pairs may explicitly set `repository_host`; omission retains
+GitHub compatibility. Bitbucket HTTPS `scm/` paths require an explicit matching
+`clone_layout: bitbucket-server` in both assignment and profile; plain hosts
+retain their original two-segment path (including a real owner named `scm`). Preflight and the launcher validate host + namespace/name,
+profile identity, branch/base and a clean checkout. The tracking `issue` and
+reservation `github:<issue>` remain independent of the code host. Interceptor's
+[profile](projects/interceptor/profile.json) and [delivery contract](projects/interceptor/references/bitbucket-delivery.md)
+cover Bitbucket Server source/test/local-review and human-operated PR handoff.
+No hosting API credentials or automatic PR publication are required.
+
+The rolling planner now returns `review_next` independently of merge holds and
+CI/ENV waits. Only verified complete-diff admissions can enter it; in-flight or
+already-attempted tuples reconcile instead of sampling again. See the
+[review lane contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md#independent-review-lane).

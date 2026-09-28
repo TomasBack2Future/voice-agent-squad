@@ -4,16 +4,39 @@
   "version": 1,
   "repository": "TomasBack2Future/voice-agent-squad",
   "context_by_phase": {
-    "implementation": ["AGENTS.md", "docs/contributing.md", "docs/architecture.md", "docs/README.md", "the owning command or coordination contract"],
-    "review": ["the canonical Issue and acceptance mapping", "docs/environments-and-ci.md", "the current repository review policy"],
+    "implementation": [
+      "AGENTS.md",
+      "docs/contributing.md",
+      "docs/architecture.md",
+      "docs/README.md",
+      "the owning command or coordination contract",
+      "source changes do not authorize binary installation, live database changes or session restarts"
+    ],
+    "review": [
+      "the canonical Issue and acceptance mapping",
+      "docs/environments-and-ci.md",
+      "the current repository review policy"
+    ],
     "staging": [],
     "production": []
   },
   "gates": {
-    "fast": ["go vet ./...", "CGO_ENABLED=1 go test -race ./...", "CGO_ENABLED=0 go build ./...", "golangci-lint run when available", "git diff --check"],
-    "review": ["review the complete base...head diff and satisfy the repository's current PR policy"],
+    "fast": [
+      "git diff --check",
+      "targeted tests and format checks for the touched contracts"
+    ],
+    "review": [
+      "Start review at the first complete stable diff after fast gates and self-review; preserve exact-revision admission and one in-flight review",
+      "review the complete base...head diff and satisfy the repository review policy",
+      "go vet ./...",
+      "CGO_ENABLED=1 go test -race ./...",
+      "CGO_ENABLED=0 go build ./...",
+      "golangci-lint run"
+    ],
     "staging": []
   },
   "resources": {},
-  "risk_probes": ["For claim, reservation or migration changes, test atomicity, fencing, idempotency and negative paths with isolated state."]
+  "risk_probes": [
+    "For claim, reservation or migration changes, test atomicity, fencing, idempotency and negative paths with isolated state."
+  ]
 }

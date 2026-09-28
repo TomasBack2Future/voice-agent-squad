@@ -248,10 +248,10 @@ Never wait for Worker termination to answer its blocking design question.
    still-valid decisions; unknown facts remain needs-investigation and unresolved
    product choices remain needs-decision. Persist a compact design reference in
    the assignment; never load the Dispatcher conversation into a Worker.
-   Select the implementation repository from the admitted Issue, independently
-   of the GitHub repository hosting that Issue. Match the assignment to the
-   corresponding workspace project profile and actual Git `origin`; a GitHub
-   tracking Issue may own a Bitbucket implementation branch.
+   Select the implementation repository from the admitted work independently
+   of the repository hosting its tracking Issue. Match the assignment and project
+   profile to the actual Git origin, including repository host and clone layout;
+   retain the GitHub tracking Issue as the reservation source.
    Select ready leaves that are unclaimed, unreserved, unblocked, and mutually
    independent. The default product-Worker WIP limit is five; an explicit user decision may override it. Record the effective limit and decision reference in the current policy. Count active or
    otherwise non-terminal Worker tasks and unbound active reservations, then
@@ -284,13 +284,12 @@ Never wait for Worker termination to answer its blocking design question.
    workspace policy), preserving fresh workspace/session identity and binding.
    Do not create a second App task in parallel with a cmux Worker. For an
    App-task deployment, create one Codex task whose title begins with `[#<issue>][<item>]` and whose
-   prompt invokes `$studio-issue-worker` only for a Studio repository assignment;
-   use `$agent-loop-worker` with the matching project profile for another
-   workspace repository. The task names exactly one Issue and item. Include the
-   phase-aware local-review contract in
-   [references/worker-task-prompt.md](references/worker-task-prompt.md) for Studio
-   PR work; for branch-only delivery, require explicit `branch_push` authorization,
-   remote-SHA verification and a human handoff without PR, merge or deployment.
+   prompt invokes `$studio-issue-worker` for a Studio implementation assignment
+   or `$agent-loop-worker` with the matching project profile for Squad, Importer
+   or Interceptor. Name exactly one Issue and item and use the applicable prompt
+   contract in [references/worker-task-prompt.md](references/worker-task-prompt.md).
+   Preserve each profile's delivery boundary, including Interceptor local review
+   and human PR handoff; routing does not authorize push, PR or deployment.
    Omit model/reasoning overrides unless the scheduler prompt explicitly set
    them. Use the saved project worktree for Git repositories.
 9. Immediately bind the created task id with the same generation:
@@ -385,3 +384,21 @@ a batch task. Preserve existing nonbatch Workers, the effective user-selected WI
 child holds and path ownership. Dispatcher still never implements or releases
 product work. A00 READY and A14 implementation/evidence readiness are distinct
 from child Issue closure.
+
+## Implementation host routing
+
+A GitHub tracking Issue may assign a Bitbucket Server implementation repository.
+Keep `issue` and reservation `source_ref=github:<issue>` unchanged, while setting
+`repository`, `repository_host`, `clone_layout` and the matching project profile explicitly.
+For Interceptor use `agent-loop/projects/interceptor/profile.json` from the same
+installed package. Read its `references/bitbucket-delivery.md` before dispatch.
+Never use the Studio Worker adapter or a GitHub PR check for this repository.
+Prepare one fresh Worker assignment under the existing WIP and ownership rules.
+For this human-PR lane, set pull_request/merge/staging/production/issue_close
+false and deliver source/test/local-review evidence with a human handoff. Do not
+ask for hosting API credentials or automate PR creation/publication.
+
+Review readiness is a phase signal independent of merge release. Preserve
+source/test/review progress during merge holds, and track readiness-to-start
+delay through the rolling planner. Resolve costly cross-repository contract
+questions during design admission; do not postpone them until final code review.

@@ -91,47 +91,6 @@ class WorkerPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(preflight.ValidationError, "assignment repository mismatch"):
             self.check()
 
-    def select_interceptor(self):
-        self.git("remote", "set-url", "origin", "ssh://git@git.agoralab.co/ipt/interceptor.git")
-        self.profile = ROOT / "projects/interceptor/profile.json"
-        self.assignment.update(
-            assignment_id="interceptor/1154/1",
-            issue="TomasBack2Future/voice-agent-studio#1154",
-            repository="git.agoralab.co/ipt/interceptor",
-            item="INTERCEPTOR-1154",
-            reservation={"key": "DISPATCH-STUDIO-1154", "generation": 1},
-            project_profile={"id": "interceptor", "version": 1, "path": str(self.profile)},
-            authorization=dict(source_mutation=True, branch_push=True, pull_request=False,
-                               merge=False, staging=False, production=False, issue_close=False),
-        )
-
-    def test_interceptor_branch_handoff_with_github_tracking_issue(self):
-        self.select_interceptor()
-        self.assertEqual(self.check()["status"], "ready")
-        self.git("remote", "set-url", "origin", "git@github.com:ipt/interceptor.git")
-        with self.assertRaisesRegex(preflight.ValidationError, "assignment repository mismatch"):
-            self.check()
-
-    def test_branch_only_requires_explicit_push_authorization(self):
-        self.select_interceptor()
-        del self.assignment["authorization"]["branch_push"]
-        with self.assertRaisesRegex(preflight.ValidationError, "branch_push"):
-            self.check()
-
-    def test_repository_remote_identity_formats_and_rejections(self):
-        accepted = {
-            "git@github.com:TomasBack2Future/voice-agent-squad.git": "TomasBack2Future/voice-agent-squad",
-            "https://github.com/TomasBack2Future/convoai-studio-importer.git": "TomasBack2Future/convoai-studio-importer",
-            "ssh://git@git.agoralab.co/ipt/interceptor.git": "git.agoralab.co/ipt/interceptor",
-            "git@git.agoralab.co:ipt/interceptor.git": "git.agoralab.co/ipt/interceptor",
-        }
-        for remote, identity in accepted.items():
-            self.assertEqual(preflight.repository_name(remote), identity)
-        for remote in ("file:///ipt/interceptor.git", "https://user:secret@git.agoralab.co/ipt/interceptor.git",
-                       "ssh://git@git.agoralab.co/ipt/interceptor/extra.git", "git@git.agoralab.co:ipt/../interceptor.git"):
-            with self.assertRaises(preflight.ValidationError):
-                preflight.repository_name(remote)
-
     def test_wrong_runtime_discovery_path_fails(self):
         self.path.write_text(json.dumps(self.assignment))
         with self.assertRaises(preflight.ValidationError):

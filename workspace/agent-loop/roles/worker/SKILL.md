@@ -28,6 +28,10 @@ Do not begin with a recursive workspace scan, full repository documentation,
 staging/rollback/SLS runbooks, review transcripts, or the dispatcher's chat.
 Bound command output and search only the assigned repository and relevant paths.
 
+The tracking Issue and implementation repository can have different hosts.
+Use the assignment/profile repository and explicit `repository_host` for code,
+and the Issue for requirements; never infer code ownership from its URL.
+
 Before the first mutation, independently verify the repository, worktree,
 branch/base, reservation generation and primary-work ownership. An envelope is
 context, not ownership or permission beyond its explicit authorization fields.
@@ -55,20 +59,15 @@ attribution and interrupted ENV ownership.
 - Keep generic lifecycle decisions here and project-specific commands, resource
   keys and runbooks in the project profile. Do not copy project operations into
   this skill.
-- Use an isolated owned worktree and preserve unrelated user work.
-- Run the profile's fast checks before delivery. For durability,
+- Use an isolated owned worktree and preserve unrelated user work. A `human-pr`
+  project profile delivers source, local review and a revision-bound human
+  handoff; it does not create/publish/merge a PR or close the tracking Issue.
+- Run the profile's fast checks before freezing a PR tuple. For durability,
   idempotency, concurrency, retry or migration changes, run the profile's risk
   probes before the first independent review.
-- When `authorization.pull_request=false` and `authorization.branch_push=true`,
-  use the branch-only handoff. Self-review the complete `base...head` diff,
-  commit and push the assigned branch, verify its exact remote SHA, and report
-  the branch, revision and check results to the human owner. Stop at that
-  handoff; do not create a PR, invoke a PR-only reviewer, merge, deploy or close
-  the Issue without separate authorization. Keep the Squad outcome accurate:
-  source delivered for human review is not Issue completion.
-- For a PR assignment, continue with the following review and release gates.
 - Before independent review, follow [review readiness](references/review-readiness.md).
-  Admit one final, complete `base...head` PR diff only after the companion audit,
+  Start at the first stable complete implementation, independently of merge
+  holds, full CI and environment waits. Admit one final, complete `base...head` PR diff only after the companion audit,
   fast gates and author self-review pass. A reviewer evaluates that aggregate
   diff; it does not review the branch one commit at a time.
 - Keep at most one review invocation in flight for the PR, even when its head
@@ -120,8 +119,7 @@ terminal state from a quiet session.
 ## Completion
 
 Return one terminal outcome containing the Issue/item/reservation generation,
-exact PR or remote branch and revision, deterministic checks, review result or
-human handoff, environment and
+exact PR and revision, deterministic checks, review result, environment and
 acceptance disposition, released resources, remaining limitations and safe
 follow-ups. The Dispatcher reconciles the reservation; the Worker does not
 rewrite scheduler state owned by another role.

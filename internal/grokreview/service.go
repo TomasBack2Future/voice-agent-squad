@@ -81,7 +81,7 @@ type LocalReviewService struct {
 
 func NewLocalReviewService(model ModelReviewer, github PullRequestGateway, coreHash, policyHash string, observers ...ReviewObserver) (*LocalReviewService, error) {
 	if model == nil || github == nil {
-		return nil, fmt.Errorf("model reviewer and GitHub gateway are required")
+		return nil, fmt.Errorf("model reviewer and input gateway are required")
 	}
 	if coreHash == "" || policyHash == "" {
 		return nil, fmt.Errorf("reviewer core and policy hashes are required")
@@ -97,6 +97,18 @@ func NewLocalReviewService(model ModelReviewer, github PullRequestGateway, coreH
 }
 
 func (s *LocalReviewService) ReviewPullRequest(ctx context.Context, token, checkName, repository string, number int) (ReviewReport, error) {
+	return s.review(ctx, token, checkName, repository, number, false)
+}
+
+// ReviewWorktree produces local evidence only; no remote PR/approval is created.
+func (s *LocalReviewService) ReviewWorktree(ctx context.Context, repository string) (ReviewReport, error) {
+	if _, ok := s.github.(*LocalGitGateway); !ok {
+		return ReviewReport{}, fmt.Errorf("local review requires a local git gateway")
+	}
+	return s.review(ctx, "", "local-review", repository, 0, true)
+}
+
+func (s *LocalReviewService) review(ctx context.Context, token, checkName, repository string, number int, local bool) (ReviewReport, error) {
 	s.observe(ReviewObservation{
 		State:    ReviewStateFreezing,
 		Snapshot: PullRequestSnapshot{Repository: repository, Number: number},
@@ -106,7 +118,13 @@ func (s *LocalReviewService) ReviewPullRequest(ctx context.Context, token, check
 		s.observe(ReviewObservation{State: ReviewStateError, FailureStage: "freezing", Snapshot: PullRequestSnapshot{Repository: repository, Number: number}})
 		return ReviewReport{FailureStage: "freezing"}, err
 	}
-	if err := validateSnapshot(snapshot); err != nil {
+	var snapshotErr error
+	if local {
+		snapshotErr = validateLocalSnapshot(snapshot)
+	} else {
+		snapshotErr = validateSnapshot(snapshot)
+	}
+	if err := snapshotErr; err != nil {
 		s.observe(ReviewObservation{State: ReviewStateError, FailureStage: "freezing", Snapshot: snapshot})
 		return ReviewReport{Snapshot: snapshot, FailureStage: "freezing"}, err
 	}

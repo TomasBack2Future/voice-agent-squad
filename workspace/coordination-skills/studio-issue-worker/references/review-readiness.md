@@ -3,6 +3,30 @@
 Use this after author self-review and before any environment claim. Parallel
 execution changes scheduling, not merge authority.
 
+## Trigger review at readiness
+
+The first complete, stable implementation that passes the companion audit,
+fast local gates and author self-review is ready for formal review. "Final"
+means no known implementation correction remains for this attempt; it does not
+mean merge permission, the whole batch, full CI or an environment is ready.
+Start the owning Worker's managed review immediately on that frozen tuple,
+in parallel with full CI. A merge hold, ENV queue or merge-only predecessor
+must not defer review. An unresolved implementation/interface dependency that
+makes the diff incomplete still blocks admission; record that specific reason.
+
+For cross-repository interfaces, authentication, migrations or similarly costly
+contracts, resolve the design/contract risks during design admission, before
+implementation. This bounded design check does not approve code and does not
+add a mandatory second model review to ordinary changes. A design decision that
+needs another owner goes through the existing decision route, not a new reviewer
+session. The full-diff code review remains bound to the exact PR tuple.
+
+Record `review_ready_at`, `review_started_at`, and the reason for any delay in
+checkpoint evidence. Reconcile an existing invocation before sampling; do not
+turn repeated scheduling checks into repeated reviews. Before merging, recheck
+exact revision and current required gates; earlier timing does not make stale
+review evidence valid. Keep the existing single-flight and write barrier.
+
 ## One final full-diff review
 
 A review invocation always receives one complete pull-request diff from the

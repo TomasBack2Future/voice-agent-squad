@@ -7,12 +7,12 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+import re
 from urllib.parse import urlsplit
+from datetime import datetime, timezone
 
 from validate_context_package import ROOT, ValidationError, validate_file
 
@@ -28,26 +28,47 @@ def git(worktree: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def repository_name(remote: str) -> str:
-    # Preserve the existing GitHub owner/repo identity. Include the host for
-    # other forges so an identically named repository cannot pass preflight.
-    scp = re.fullmatch(r"git@([A-Za-z0-9.-]+):([^?#]+)", remote)
-    if scp:
-        host, path = scp.groups()
+def repository_name(remote: str, expected_host: str = "github.com", clone_layout: str = "plain") -> str:
+    # Match the explicit host as well as namespace/name. Never accept a local
+    # path, credential-bearing URL, encoded path or a same-name foreign remote.
+    if clone_layout not in ("plain", "bitbucket-server") or (expected_host == "github.com" and clone_layout != "plain"):
+        raise ValidationError("unsupported host/clone layout")
+    if not re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*", expected_host):
+        raise ValidationError("invalid assigned repository host")
+    if remote.startswith("git@") and ":" in remote and "://" not in remote:
+        host, path = remote[4:].split(":", 1)
     else:
         parsed = urlsplit(remote)
-        if parsed.scheme not in ("ssh", "https") or not parsed.hostname:
-            raise ValidationError("origin has an unsupported repository URL")
-        if parsed.username not in (None, "git") or parsed.password or parsed.port:
-            raise ValidationError("origin has an unsupported repository URL")
-        if parsed.query or parsed.fragment:
-            raise ValidationError("origin has an unsupported repository URL")
-        host, path = parsed.hostname, parsed.path.lstrip("/")
+        if (parsed.scheme not in ("ssh", "https") or parsed.password is not None
+                or parsed.query or parsed.fragment
+                or parsed.username not in (None, "git")):
+            raise ValidationError("unsupported repository remote")
+        host, path = parsed.hostname, parsed.path.removeprefix("/")
+        if parsed.scheme == "https" and clone_layout == "bitbucket-server":
+            if not path.startswith("scm/"):
+                raise ValidationError("Bitbucket HTTPS remote requires the declared scm layout")
+            path = path[4:]
     path = path.removesuffix(".git")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path):
-        raise ValidationError("origin repository path is invalid")
-    host = host.lower()
-    return path if host == "github.com" else f"{host}/{path}"
+    if host != expected_host or not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", path) or path.split("/")[1] in (".", ".."):
+        raise ValidationError("assignment repository mismatch")
+    return path
+
+
+def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
+    selected = assignment["project_profile"]
+    declared = Path(selected["path"])
+    if not declared.is_absolute():
+        declared = Path(assignment["worktree"]) / declared
+    if profile_path is not None and declared.resolve() != profile_path.resolve():
+        raise ValidationError("profile path differs from the assignment")
+    profile = validate_file(declared, ROOT / "schemas/project-profile.schema.json")
+    if (selected["id"], selected["version"], assignment["repository"], assignment.get("repository_host", "github.com"), assignment.get("clone_layout", "plain")) != (
+        profile["id"], profile["version"], profile["repository"], profile.get("repository_host", "github.com"), profile.get("clone_layout", "plain")
+    ):
+        raise ValidationError("assignment/profile identity mismatch")
+    if profile.get("delivery_mode") == "human-pr" and any(assignment["authorization"][key] for key in ("pull_request", "merge", "staging", "production", "issue_close")):
+        raise ValidationError("human-PR profile allows source/test/local-review handoff only")
+    return profile
 
 
 def check_worktree(assignment: dict) -> None:
@@ -58,7 +79,7 @@ def check_worktree(assignment: dict) -> None:
         raise ValidationError("assignment branch mismatch")
     if git(worktree, "rev-parse", "HEAD") != assignment["base_sha"]:
         raise ValidationError("cold-start base changed; refresh the assignment before launch")
-    if repository_name(git(worktree, "remote", "get-url", "origin")) != assignment["repository"]:
+    if repository_name(git(worktree, "remote", "get-url", "origin"), assignment.get("repository_host", "github.com"), assignment.get("clone_layout", "plain")) != assignment["repository"]:
         raise ValidationError("assignment repository mismatch")
     if git(worktree, "status", "--porcelain"):
         raise ValidationError("cold-start worktree is dirty")
@@ -71,21 +92,7 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
     assignment = validate_file(
         assignment_path, ROOT / "schemas/assignment-envelope.schema.json"
     )
-    profile = validate_file(profile_path, ROOT / "schemas/project-profile.schema.json")
-    selected = assignment["project_profile"]
-    declared_profile = Path(selected["path"])
-    if not declared_profile.is_absolute():
-        declared_profile = Path(assignment["worktree"]) / declared_profile
-    if declared_profile.resolve() != profile_path.resolve():
-        raise ValidationError("profile path differs from the assignment")
-    if (selected["id"], selected["version"], assignment["repository"]) != (
-        profile["id"], profile["version"], profile["repository"]
-    ):
-        raise ValidationError("assignment/profile identity mismatch")
-    if not assignment["authorization"]["pull_request"]:
-        if (not assignment["authorization"]["source_mutation"]
-                or assignment["authorization"].get("branch_push") is not True):
-            raise ValidationError("branch-only delivery requires source_mutation and branch_push authorization")
+    profile = check_profile(assignment, profile_path)
     if len(json.dumps(assignment, separators=(",", ":")).encode()) > 2048:
         raise ValidationError("assignment exceeds 2048-byte cold-start budget")
     check_worktree(assignment)

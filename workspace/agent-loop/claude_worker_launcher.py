@@ -16,7 +16,7 @@ import uuid
 import terminal_receiver
 
 from validate_context_package import ROOT, ValidationError, validate_file
-from worker_preflight import check_worktree
+from worker_preflight import check_profile, check_worktree
 
 IDENTITY_ENV = ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'SQUAD_SESSION_ID',
                 'SQUAD_AGENT', 'CLAUDE_SESSION_ID')
@@ -141,6 +141,7 @@ def check_heartbeat_runtime(c: dict, env: dict) -> None:
 
 
 def check_launch(assignment: dict, config_path: Path) -> dict:
+    check_profile(assignment)
     check_worktree(assignment)
     c = config_file(config_path)
     env = child_environment(c)
@@ -231,11 +232,13 @@ def main() -> int:
         if args.check:
             print(json.dumps(check_launch(a, args.config), sort_keys=True))
             return 0
+        check_profile(a)
         check_worktree(a)
         c = config_file(args.config)
         env = child_environment(c)
         check_resources(a, c, env)
         wait_for_binding(a, c, env, args.wait_seconds)
+        check_profile(a)
         check_worktree(a)
         # Read the prompt only after binding. Never echo it or the child environment.
         prompt = Path(c['prompt_file']).read_text()
