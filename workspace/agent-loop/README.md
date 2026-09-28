@@ -351,3 +351,20 @@ completion/reservation reconciliation. It neither assigns nor merges work. See
 [the Dispatcher contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md).
 Typed checkpoint operation receipts reject dispatch of an already submitted intent;
 legacy checkpoints remain readable and require verified adoption before migration.
+
+## Separate tracking and implementation hosts
+
+Assignments/profile pairs may explicitly set `repository_host`; omission retains
+GitHub compatibility. Bitbucket HTTPS `scm/` paths require an explicit matching
+`clone_layout: bitbucket-server` in both assignment and profile; plain hosts
+retain their original two-segment path (including a real owner named `scm`). Preflight and the launcher validate host + namespace/name,
+profile identity, branch/base and a clean checkout. The tracking `issue` and
+reservation `github:<issue>` remain independent of the code host. Interceptor's
+[profile](projects/interceptor/profile.json) and [delivery contract](projects/interceptor/references/bitbucket-delivery.md)
+cover Bitbucket Server source/test/local-review and human-operated PR handoff.
+No hosting API credentials or automatic PR publication are required.
+
+The rolling planner now returns `review_next` independently of merge holds and
+CI/ENV waits. Only verified complete-diff admissions can enter it; in-flight or
+already-attempted tuples reconcile instead of sampling again. See the
+[review lane contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md#independent-review-lane).

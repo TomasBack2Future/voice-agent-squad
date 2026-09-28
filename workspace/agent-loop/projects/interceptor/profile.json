@@ -1,0 +1,53 @@
+{
+  "schema_version": "agent-loop.project-profile.v1",
+  "id": "interceptor",
+  "version": 1,
+  "repository": "ipt/interceptor",
+  "repository_host": "git.agoralab.co",
+  "context_by_phase": {
+    "implementation": [
+      "AGENTS.md",
+      "docs/README.md",
+      "docs/architecture.md",
+      "docs/interceptor_caller_contract.md",
+      "the assigned component document; default branch origin/master"
+    ],
+    "review": [
+      "references/bitbucket-delivery.md in this installed profile directory",
+      "the frozen tracking Issue and acceptance mapping",
+      "docs/environments-and-ci.md"
+    ],
+    "staging": [
+      "explicit assignment and target-specific environment contract required"
+    ],
+    "production": [
+      "separate explicit production authorization and target-specific release contract required"
+    ]
+  },
+  "gates": {
+    "fast": [
+      "git diff --check",
+      "targeted root and regression module tests for touched contracts"
+    ],
+    "review": [
+      "Start at the first complete stable diff after fast gates and self-review; merge hold does not block review",
+      "managed squad-grok-review --provider local-git; one frozen base/head/diff/contract in flight",
+      "./regression/ci.sh (root and nested regression modules); report missing Linux/cgo/WeText prerequisites, never substitute a partial pass",
+      "PR creation, publication and merge are human-operated; deliver a local revision-bound handoff"
+    ],
+    "staging": [
+      "no environment is supplied by this source/PR profile; resolve an explicit authorized target and claim before any shared write"
+    ]
+  },
+  "resources": {
+    "production_default": "forbidden unless explicitly authorized; this profile grants no environment",
+    "delivery": "source/test/local-review and human handoff only; no automatic PR, push, comments, Jenkins, merge or deploy"
+  },
+  "risk_probes": [
+    "preserve stream ordering, cancellation and final-chunk semantics",
+    "deny forwarding internal credentials/headers to an untrusted Origin",
+    "negative and regression tests for actual model-bound request evidence and redaction"
+  ],
+  "delivery_mode": "human-pr",
+  "clone_layout": "bitbucket-server"
+}

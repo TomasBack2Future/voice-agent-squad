@@ -34,6 +34,8 @@
       }
     },
     "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "clone_layout": {"enum": ["plain", "bitbucket-server"], "description": "HTTPS path layout; omitted means plain namespace/name."},
+    "repository_host": {"type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$", "description": "Explicit implementation Git host; omitted means github.com, independent of the tracking Issue."},
     "worktree": {"type": "string", "pattern": "^/"},
     "branch": {"type": "string", "minLength": 1},
     "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},

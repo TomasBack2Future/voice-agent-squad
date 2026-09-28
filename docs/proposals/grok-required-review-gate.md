@@ -137,3 +137,20 @@ Tests must preserve frozen input identity, stale-result rejection, strict
 output validation, credential isolation, sanitized publication, timeout/error
 classification and the distinction between model approval and publication.
 No test should use live credentials or a real environment as its fixture.
+
+## Local Git review for human-operated PR lanes
+
+`--provider local-git --repository-host HOST --repo namespace/name --worktree
+/absolute/checkout --base-sha SHA --description-file /absolute/contract.md`
+reviews a clean local worktree with the existing bounded Grok runner. Use these
+same flags with `doctor`. No hosting API, GitHub App key, PR, comment or check is
+created. `--pr` and `--mode required` are rejected in this mode. Results are local
+revision-bound evidence for human handoff, never native approval or merge authority.
+The frozen input includes the complete binary-aware diff and contract text. Local
+origin (without encoded aliases), base/head, clean status and the full contract/diff are rechecked after
+sampling; changed input invalidates the result. Status is namespaced by local
+host/repository. See the [Interceptor handoff](../../workspace/agent-loop/projects/interceptor/references/bitbucket-delivery.md).
+
+Local Git inspection disables replace refs and legacy grafts, and clears inherited
+`GIT_*` repository/index/config overrides. It preserves normal HOME/PATH and does
+not delete or rewrite the user's replacement refs or Git configuration.

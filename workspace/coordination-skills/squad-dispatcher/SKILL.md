@@ -378,3 +378,21 @@ a batch task. Preserve existing nonbatch Workers, the effective user-selected WI
 child holds and path ownership. Dispatcher still never implements or releases
 product work. A00 READY and A14 implementation/evidence readiness are distinct
 from child Issue closure.
+
+## Implementation host routing
+
+A GitHub tracking Issue may assign a Bitbucket Server implementation repository.
+Keep `issue` and reservation `source_ref=github:<issue>` unchanged, while setting
+`repository`, `repository_host`, `clone_layout` and the matching project profile explicitly.
+For Interceptor use `agent-loop/projects/interceptor/profile.json` from the same
+installed package. Read its `references/bitbucket-delivery.md` before dispatch.
+Never use the Studio Worker adapter or a GitHub PR check for this repository.
+Prepare one fresh Worker assignment under the existing WIP and ownership rules.
+For this human-PR lane, set pull_request/merge/staging/production/issue_close
+false and deliver source/test/local-review evidence with a human handoff. Do not
+ask for hosting API credentials or automate PR creation/publication.
+
+Review readiness is a phase signal independent of merge release. Preserve
+source/test/review progress during merge holds, and track readiness-to-start
+delay through the rolling planner. Resolve costly cross-repository contract
+questions during design admission; do not postpone them until final code review.

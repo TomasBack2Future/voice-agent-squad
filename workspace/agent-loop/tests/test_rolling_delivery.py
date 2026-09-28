@@ -63,6 +63,33 @@ class RollingTests(unittest.TestCase):
         result=planner.evaluate(value,now=NOW)
         self.assertEqual(['a'],result['merge_next']);self.assertIn('shared-path-predecessor',result['waiting']['c'])
 
+    def ready_review(self):
+        value=snapshot(); value['decision']['action']='hold'
+        m=value['members'][1];m.update(base_sha='b'*40,head_sha='c'*40,ci_green=False)
+        m['review']={'ready_at':(NOW-timedelta(seconds=40)).isoformat(), 'in_flight':False,
+                     'admission':{'base_sha':'b'*40,'head_sha':'c'*40,'receipt':'admission.json',
+                                  'verified':True,'fast_gates_passed':True,'companion_audit_complete':True,'self_review_passed':True}}
+        return value
+
+    def test_review_starts_during_merge_hold_ci_and_predecessor_wait(self):
+        result=planner.evaluate(self.ready_review(),now=NOW)
+        self.assertEqual(['b'],result['review_next'])
+        self.assertEqual([],result['merge_next'])
+        self.assertEqual(40,result['reviews']['b']['ready_wait_seconds'])
+
+    def test_running_or_previous_attempt_is_reconciled_not_resampled(self):
+        for change in ({'in_flight':True}, {'attempt':{'base_sha':'b'*40,'head_sha':'c'*40,'status':'timeout'}}):
+            value=self.ready_review();value['members'][1]['review'].update(change)
+            result=planner.evaluate(value,now=NOW)
+            self.assertEqual([],result['review_next']);self.assertEqual('reconcile',result['reviews']['b']['action'])
+
+    def test_review_requires_complete_current_admission_and_review_dependencies(self):
+        for mutate in (lambda r:r['admission'].update(head_sha='d'*40),
+                       lambda r:r['admission'].update(fast_gates_passed=False),
+                       lambda r:r.update(review_blockers=['interface-not-defined'])):
+            value=self.ready_review();mutate(value['members'][1]['review'])
+            self.assertEqual([],planner.evaluate(value,now=NOW)['review_next'])
+
     def test_checkpoint_cannot_repeat_dispatched_intent(self):
         for state in ('submitted','uncertain','running','completed','reconciled'):
             value={'operation_receipts':[{'intent':'release-1','state':state}], 'next_operation':{'action':'dispatch','intent':'release-1'}}
