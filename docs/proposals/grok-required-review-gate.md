@@ -147,6 +147,10 @@ same flags with `doctor`. No hosting API, GitHub App key, PR, comment or check i
 created. `--pr` and `--mode required` are rejected in this mode. Results are local
 revision-bound evidence for human handoff, never native approval or merge authority.
 The frozen input includes the complete binary-aware diff and contract text. Local
-origin, base/head, clean status and the full contract/diff are rechecked after
+origin (without encoded aliases), base/head, clean status and the full contract/diff are rechecked after
 sampling; changed input invalidates the result. Status is namespaced by local
 host/repository. See the [Interceptor handoff](../../workspace/agent-loop/projects/interceptor/references/bitbucket-delivery.md).
+
+Local Git inspection disables replace refs and legacy grafts, and clears inherited
+`GIT_*` repository/index/config overrides. It preserves normal HOME/PATH and does
+not delete or rewrite the user's replacement refs or Git configuration.

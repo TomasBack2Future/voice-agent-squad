@@ -140,3 +140,58 @@ func TestLocalGitHTTPSLayoutDoesNotAliasGitHub(t *testing.T) {
 		t.Fatal("rejected explicit Bitbucket layout")
 	}
 }
+
+func TestLocalGitRejectsEncodedOriginAliases(t *testing.T) {
+	g, _ := localFixture(t)
+	for _, layout := range []string{"plain", "bitbucket-server"} {
+		g.cloneLayout = layout
+		prefix := "https://git.example.test/"
+		if layout == "bitbucket-server" {
+			prefix += "scm/"
+		}
+		for _, path := range []string{"ipt%2Finterceptor.git", "ipt/interceptor%2egit", "%69pt/interceptor.git"} {
+			if g.matchesRemote(prefix+path, "ipt/interceptor") {
+				t.Fatalf("accepted encoded origin %s", path)
+			}
+		}
+	}
+}
+
+func TestLocalGitIgnoresReplaceRefsAndInheritedGitEnvironment(t *testing.T) {
+	g, _ := localFixture(t)
+	head := localTestGit(t, g.worktree, "rev-parse", "HEAD")
+	localTestGit(t, g.worktree, "checkout", "--detach", g.baseSHA)
+	if err := os.WriteFile(filepath.Join(g.worktree, "code.txt"), []byte("replacement-only\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	localTestGit(t, g.worktree, "commit", "-am", "replacement tree")
+	tree := localTestGit(t, g.worktree, "rev-parse", "HEAD^{tree}")
+	replacement := localTestGit(t, g.worktree, "commit-tree", tree, "-m", "root replacement")
+	localTestGit(t, g.worktree, "checkout", "--detach", head)
+	localTestGit(t, g.worktree, "replace", g.baseSHA, replacement)
+	altered := localTestGit(t, g.worktree, "diff", g.baseSHA+"...HEAD")
+	if !strings.Contains(altered, "-replacement-only") {
+		t.Fatal("fixture did not demonstrate replace-ref substitution")
+	}
+	snapshot, err := g.FetchPullRequest(context.Background(), "ipt/interceptor", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.HeadSHA != head || !strings.Contains(snapshot.Diff, "-old") || strings.Contains(snapshot.Diff, "replacement-only") {
+		t.Fatal("review diff follows replace refs")
+	}
+	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "foreign.git"))
+	t.Setenv("GIT_WORK_TREE", t.TempDir())
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(t.TempDir(), "index"))
+	t.Setenv("GIT_OBJECT_DIRECTORY", t.TempDir())
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.bare")
+	t.Setenv("GIT_CONFIG_VALUE_0", "true")
+	again, err := g.FetchPullRequest(context.Background(), "ipt/interceptor", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Diff != snapshot.Diff || again.HeadSHA != snapshot.HeadSHA {
+		t.Fatal("inherited Git variables changed the reviewed input")
+	}
+}

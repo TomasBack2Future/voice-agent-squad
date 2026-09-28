@@ -40,7 +40,15 @@ func NewLocalGitGateway(worktree, host, cloneLayout, baseSHA, descriptionFile st
 func (g *LocalGitGateway) git(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", g.worktree}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-C", g.worktree}, args...)...)
+	// Local inspection must not inherit a caller's alternate repository/index
+	// or configuration injection. Preserve ordinary HOME/PATH, not GIT_* overrides.
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "GIT_GRAFT_FILE="+os.DevNull, "GIT_OPTIONAL_LOCKS=0")
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", fmt.Errorf("open git output")
@@ -63,6 +71,9 @@ func (g *LocalGitGateway) git(ctx context.Context, args ...string) (string, erro
 func (g *LocalGitGateway) matchesRemote(remote, repository string) bool {
 	var host, path string
 	remote = strings.TrimSpace(remote)
+	if strings.Contains(remote, "%") {
+		return false
+	} // Compare canonical paths, never decoded aliases.
 	if strings.HasPrefix(remote, "git@") && !strings.Contains(remote, "://") {
 		pieces := strings.SplitN(strings.TrimPrefix(remote, "git@"), ":", 2)
 		if len(pieces) != 2 {
