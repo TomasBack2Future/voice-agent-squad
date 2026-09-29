@@ -10,6 +10,12 @@ retained fixtures, read [delivery quality](references/delivery-quality.md).
 
 Before isolated database setup, read
 [execution efficiency](references/execution-efficiency.md).
+Before Studio database access or deployment configuration changes, read the
+assigned Studio project profile's `references/couchbase-environments.md`.
+Production uses `couchbase-cn-2`, `voice-agent-studio._default`, and the independent
+`voice-agent-studio-production` runtime account. Preserve the documented scoped
+query permissions and separate DDL identity; do not infer production settings
+from staging or rewrite business SQL merely to switch database credentials.
 Batch progress polling belongs to the Dispatcher. Integration Workers keep
 handoff and release ownership, record waiting checkpoints and yield when no
 actionable work remains; an idle turn does not release the primary claim.
