@@ -59,10 +59,24 @@ Pod-local host aliases cover the six advertised Couchbase names. The production
 NetworkPolicy must admit their IPs on the actual Query/KV ports and TCP 8094
 for Search. Check both DNS and network policy from the Pod environment before
 claiming connectivity. The `PRODUCTION_COUCHBASE_RUNTIME_USERNAME` and
-`PRODUCTION_COUCHBASE_RUNTIME_PASSWORD` pair selects the application Secret;
-`PRODUCTION_COUCHBASE_USERNAME` and `PRODUCTION_COUCHBASE_PASSWORD` remain
-schema DDL credentials. An absent runtime pair falls back to the schema pair;
-a partial pair fails configuration preparation.
+`PRODUCTION_COUCHBASE_RUNTIME_PASSWORD` pair selects the scoped account in the
+application Secret. The base `PRODUCTION_COUCHBASE_USERNAME` and
+`PRODUCTION_COUCHBASE_PASSWORD` pair is also the scoped runtime identity, so a
+fallback does not grant DDL access. Additive schema work uses the separately
+protected `PRODUCTION_COUCHBASE_MIGRATION_DDL_USERNAME` and
+`PRODUCTION_COUCHBASE_MIGRATION_DDL_PASSWORD` pair. A partial runtime pair fails
+configuration preparation.
+
+The production runtime account has `data_reader`, `data_writer`, `query_select`,
+`fts_searcher`, and `query_use_sequential_scans`, each restricted to
+`voice-agent-studio._default.*`. Sequential scans preserve the existing
+application SQL behavior when replacing the former administrator account; do not
+rewrite business SQL or grant administrator access merely to switch credentials.
+For REST RBAC updates, a scope grant is written as
+`query_use_sequential_scans[voice-agent-studio:_default]`; the role read-back
+reports `collection_name: "*"`. Verify both allowed production queries and a
+rejected cross-scope query after changing roles. Check staging's actual role
+assignments separately rather than inferring them from production.
 
 Check the tool's actual variable names before using this tuple. A helper that
 accepts only `CB_QUERY_ENDPOINT` needs an explicitly selected endpoint from the
@@ -97,8 +111,9 @@ on an operator laptop says nothing about a Pod or the source XDCR nodes.
   target, rather than assuming that a successfully loaded file was used. A fresh
   indexed Query and SDK KV/Search check cover different service paths.
 - Both Studio runtime accounts are scope-limited to their own scope and support
-  application KV reads/writes, indexed Query reads and Search. It is not an index migration or
-  administration account. Use separately authorized operations credentials for
+  application KV reads/writes, Query reads and Search. Production additionally
+  permits scope-limited sequential scans as specified above. Neither is an index
+  migration or administration account. Use separately authorized operations credentials for
   collection/index DDL, FTS definitions, user management or replication. Do not
   grant runtime credentials administrative roles to make a helper pass.
 - Use Studio APIs for business import, labeling and other API-owned workflows.
