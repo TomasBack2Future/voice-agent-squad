@@ -30,6 +30,24 @@ Load phase-specific references only when that phase begins, and resume from a
 schema-valid checkpoint rather than transcript replay. Data Analyze is historical
 migration evidence, not a runtime dependency of this workspace.
 
+## Studio database routing
+
+Before Studio database access or deployment configuration changes, read the
+current installed `.agents/project-profiles/studio/profile.json` and its
+`references/couchbase-environments.md`. Their canonical source is
+`voice-agent-squad/workspace/agent-loop/projects/studio/`; update and install that
+source rather than editing a historical package snapshot.
+
+Studio staging and production use `couchbase-cn-2` and bucket
+`voice-agent-studio`, with separate scopes and runtime users: staging uses
+`staging` / `voice-agent-studio-staging`; production uses `_default` /
+`voice-agent-studio-production`. Production retains scope-limited sequential
+query permission for its existing SQL. DDL uses separate operations credentials.
+Keep the existing one-way old-to-new XDCR unchanged; writes on the new cluster
+must be reconciled before any database rollback. Connection addresses, aliases
+and network rules belong in the canonical reference, not inferred from old
+reports or another environment.
+
 ## Session control plane
 
 Squad is durable authority for assignment, ownership, dependency and environment

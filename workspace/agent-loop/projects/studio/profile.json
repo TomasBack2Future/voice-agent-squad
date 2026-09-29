@@ -26,7 +26,7 @@
     "production": [
       "docs/deployment.md",
       "the separately authorized production capability reference",
-      "references/couchbase-environments.md before direct database access; staging migration does not change the production database"
+      "references/couchbase-environments.md before direct database access or deployment configuration change; verify production cluster, bucket, scope and runtime identity from the live accepted cutover receipt"
     ]
   },
   "gates": {
