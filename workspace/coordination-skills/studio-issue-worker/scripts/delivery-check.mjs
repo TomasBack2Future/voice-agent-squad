@@ -4,6 +4,11 @@ import {pathToFileURL} from 'node:url';
 
 const text = x => typeof x === 'string' && x.trim().length > 0;
 const sha = x => typeof x === 'string' && /^[0-9a-f]{40}$/.test(x);
+const record = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+const immutable = x => sha(x) || (typeof x === 'string' && /^sha256:[0-9a-f]{64}$/.test(x));
+const failureFields = ['phase','environment','component','componentRevision','code','condition'];
+const validFailure = f => record(f) && failureFields.every(k => text(f[k])) && immutable(f.componentRevision) && text(f.attemptId) && text(f.evidence) && ['deterministic','transient','unknown'].includes(f.kind);
+const failureKey = f => JSON.stringify(failureFields.map(k => f[k]));
 export function checkDelivery(s) {
   const errors = [];
   if (!s || s.schema !== 'squad.delivery-check.v1') return {ok:false, errors:['schema']};
@@ -31,6 +36,63 @@ export function checkDelivery(s) {
       if (s.kind === 'path-release' && s.writerReleased !== true) errors.push('writer-live');
       if (s.kind === 'acceptance' && s.accepted !== true) errors.push('acceptance-pending');
       if (s.kind === 'external-access' && (s.targetVerified !== true || s.accessVerified !== true)) errors.push('external-unverified');
+      break;
+    }
+    case 'acceptance-readiness': {
+      if (!text(s.owner) || !text(s.target) || !text(s.planEvidence)) errors.push('acceptance-plan');
+      if (!sha(s.revision)) errors.push('acceptance-revision');
+      if (!record(s.access) || s.access.target !== s.target || !text(s.access.executionEvidence)) errors.push('acceptance-access');
+      if (!Array.isArray(s.steps) || !s.steps.length) errors.push('acceptance-steps');
+      for (const r of Array.isArray(s.steps) ? s.steps : []) {
+        if (!record(r)) { errors.push('acceptance-step'); continue; }
+        if (!['id','command','assertion','evidencePath'].every(k => text(r[k])) || !Number.isInteger(r.timeoutSeconds) || r.timeoutSeconds < 1 || typeof r.mutates !== 'boolean') errors.push('acceptance-step');
+        const f = r.fixture;
+        if (!record(f) || !text(f.reference) || !text(f.evidence)) errors.push('fixture-evidence');
+        if (!record(f) || !text(f.state) || !Array.isArray(f.eligibleStates) || !f.eligibleStates.length || f.eligibleStates.some(x => !text(x)) || !f.eligibleStates.includes(f.state)) errors.push('fixture-state');
+        if (!record(f) || (f.mode === 'retained' ? f.verified !== true : f.mode === 'create' ? f.prepared !== true || !text(f.command) : true)) errors.push('fixture-preparation');
+        if (r.mutates === true) {
+          if (r.disposition === 'ephemeral') {
+            if (!text(r.cleanupCommand) || !record(s.access) || !text(s.access.cleanupEvidence)) errors.push('acceptance-cleanup');
+          } else if (r.disposition !== 'retain' || !text(r.custodyEvidence)) errors.push('acceptance-custody');
+        }
+      }
+      if (!Array.isArray(s.humanPrerequisites)) errors.push('human-prerequisites-unknown');
+      for (const h of Array.isArray(s.humanPrerequisites) ? s.humanPrerequisites : []) {
+        if (!record(h) || !text(h.action) || !text(h.owner) || h.completed !== true || !text(h.evidence)) errors.push('human-prerequisite-pending');
+      }
+      break;
+    }
+    case 'shared-failure': {
+      const f = s.failure;
+      if (!validFailure(f)) { errors.push('failure-evidence'); break; }
+      if (!Array.isArray(s.previousAttempts) || s.previousAttempts.some(x => !validFailure(x))) { errors.push('failure-history'); break; }
+      const ids = s.previousAttempts.map(x => x.attemptId);
+      if (ids.includes(f.attemptId) || new Set(ids).size !== ids.length) errors.push('duplicate-failure-attempt');
+      if (!['diagnose','wait-repair','retry'].includes(s.decision)) errors.push('failure-decision');
+      if (s.decision === 'wait-repair') {
+        const r = s.repair;
+        if (!record(r) || !text(r.item) || !text(r.owner) || !text(r.claimEvidence) || !validFailure(r.failure) || failureKey(r.failure) !== failureKey(f)) errors.push('repair-owner');
+      }
+      if (s.decision === 'retry') {
+        if (!text(s.retrySafetyEvidence)) errors.push('retry-safety');
+        // An actual repaired/changed condition permits targeted revalidation.
+        // A planned fix, different Worker, or unrelated merge does not.
+        if (s.changeVerified === true && text(s.changedConditionEvidence)) break;
+        if (f.kind !== 'transient') { errors.push('unchanged-failure'); break; }
+        const limit = s.retryLimit === undefined ? 1 : s.retryLimit;
+        if (!Number.isInteger(limit) || limit < 0 || (limit > 1 && !text(s.retryPolicyEvidence))) errors.push('retry-policy');
+        else if (s.previousAttempts.filter(x => failureKey(x) === failureKey(f)).length >= limit) errors.push('retry-budget-exhausted');
+      }
+      break;
+    }
+    case 'blocker': {
+      if (!['phase','operation','target','observed','evidence'].every(k => text(s[k])) || !['verified','unknown'].includes(s.causeStatus)) errors.push('blocker-evidence');
+      if (s.basis === 'failed-path') {
+        if (!text(s.attemptedTarget) || s.attemptedTarget !== s.target) errors.push('wrong-failed-path');
+        if (!text(s.recoveryEvidence)) errors.push('blocker-recovery');
+      } else if (s.basis !== 'authority-boundary' || !text(s.authorityEvidence)) errors.push('blocker-basis');
+      if (!record(s.nextAction) || !text(s.nextAction.owner) || !text(s.nextAction.action)) errors.push('blocker-next-action');
+      if (s.humanAction !== undefined && (!text(s.humanAction) || !text(s.humanOnlyEvidence))) errors.push('human-only-unverified');
       break;
     }
     case 'successful-samples': {

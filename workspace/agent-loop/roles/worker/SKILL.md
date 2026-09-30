@@ -36,8 +36,9 @@ Before the first mutation, independently verify the repository, worktree,
 branch/base, reservation generation and primary-work ownership. An envelope is
 context, not ownership or permission beyond its explicit authorization fields.
 Use [operational readiness](references/operational-readiness.md) at startup,
-when a shared blocker appears, and before environment admission. Keep its
-startup receipt separate from ownership and release evidence.
+when a shared blocker appears, before transferring a blocker, and before
+environment admission. Keep its startup receipt separate from ownership and
+release evidence.
 
 Before environment admission, use [acceptance readiness](references/acceptance-readiness.md)
 to prepare executable assertions and fixtures. Use the same reference for timeout

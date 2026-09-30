@@ -12,7 +12,8 @@ Adopt per reservation; a file refresh does not migrate active work.
 For complete work packages, typed dependencies and convergence supervision, read
 [delivery quality](../studio-issue-worker/references/delivery-quality.md).
 
-For batch monitoring and asynchronous task creation, read
+For unattended invocation checks, shared-failure reconciliation, batch monitoring
+and asynchronous task creation, read
 [dispatch reliability](references/dispatch-reliability.md). The Dispatcher is
 the sole batch progress monitor; integration Workers retain delivery ownership.
 
