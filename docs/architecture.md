@@ -17,6 +17,7 @@ delivery ownership. Do not change module imports just to rename the checkout.
 | `internal/mcp/` | MCP transport over coordination operations |
 | `internal/server/`, `tui/` | Local presentation/API; capabilities depend on configured mode |
 | `internal/scaffold/`, `plugin/` | Adoption templates, generated entry points, hooks and optional agent integration |
+| `scripts/squad-observer/` | Optional Python stdio MCP observer with read-only ledger access; separate from the installed CLI |
 
 ## Durable state
 
