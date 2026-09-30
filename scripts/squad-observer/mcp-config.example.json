@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "squad-observer": {
+      "command": "python3",
+      "args": [
+        "/absolute/voice-agent-squad/scripts/squad-observer/observer.py",
+        "--db",
+        "/absolute/squad/global.db",
+        "--repo-root",
+        "/absolute/coordination-repository"
+      ]
+    }
+  }
+}
