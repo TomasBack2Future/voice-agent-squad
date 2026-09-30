@@ -141,7 +141,9 @@ Run the read-only preflight with an independently checked snapshot:
 Use `schema: squad.delivery-check.v1` and the applicable action: `work-package`
 before product edits, `dependency` when resolving an edge, `successful-samples`
 before publishing successful-operation timings, `review` before sampling, and
-`cleanup` immediately before deleting test resources. The executable fixtures in
+`cleanup` immediately before deleting test resources. Also use `acceptance-readiness`
+before ENV admission, `shared-failure` before retrying or waiting on a shared repair,
+and `blocker` before transferring an external/human prerequisite. The executable fixtures in
 `scripts/delivery-check.test.mjs` define the small action-specific input shapes;
 reuse or extend the existing manifest/acceptance/review evidence instead of
 creating a second ledger, long prose checklist, new polling loop or extra hosted
@@ -154,3 +156,28 @@ evidence or plan, not overriding the result. Run all skill contract tests with
 CI coverage separately when no repository workflow owns these local helpers.
 Its checks guide the owner; atomic Squad claims and real branch/ENV gates still
 provide authority. Never fill a snapshot from assumptions just to obtain a pass.
+
+The readiness snapshot binds the candidate SHA and contains prepared step commands,
+assertions/timeouts, immutable fixture references and eligible states, target-bound
+execution/cleanup evidence,
+cleanup or retained custody, and completed human prerequisites. A `create` fixture
+describes verified preparation, not a successful creation; verify its actual state
+after acquiring the applicable resource. Read-only steps need no cleanup assertion.
+
+The failure snapshot uses an immutable component SHA or SHA-256 digest, sanitized
+component/run evidence and the existing incident
+history, deduplicated by run/attempt/request identity. `previousAttempts` excludes
+the current failure; the helper rejects duplicate identities. `diagnose`,
+`wait-repair` and `retry` are proposed actions, not terminal
+outcomes. A repair wait requires the exact matching fingerprint and live claim receipt.
+A retry requires terminal/idempotence evidence; the default transient budget is one,
+zero is allowed for stricter policy, and a larger budget requires an existing-policy
+reference. A verified changed condition permits targeted revalidation. Do not reset
+history, relabel a deterministic failure, or cite unrelated main advancement to pass.
+
+The blocker snapshot binds the attempted and configured target for a failed path,
+records observed versus unknown cause and bounded recovery, and names the next owner
+and action. An explicit authority boundary uses its governing reference instead of
+requiring a prohibited attempt. Human action additionally needs human-only evidence.
+These checks validate receipt structure; the owner must independently verify the
+evidence. They add no hosted job, live mutation, release bypass or new approval gate.

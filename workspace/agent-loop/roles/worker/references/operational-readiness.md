@@ -69,6 +69,39 @@ failure, matching run/revision and existing PR once to the Dispatcher and contin
 independent authorized work. Dependencies apply at the affected phase, not
 necessarily to all implementation.
 
+Include a bounded failure fingerprint: affected phase/environment, component and
+immutable component revision, stable error code, normalized failed condition and
+run/trace evidence. Match those inputs before reusing an incident; differing revisions
+need explicit evidence of the same cause. Never combine no-change, timeout, storage
+and upstream errors merely because one pipeline produced them. The canonical item
+records the repair claim, affected items/phases and verified resume condition. Reuse
+its history across Workers; changing the Worker does not reset a retry budget.
+
+For a deterministic failure, do not launch another unchanged attempt. For a transient
+failure, follow the stricter existing policy or at most one safe retry when no budget
+exists, with terminal/idempotence evidence. Unknown cause requires bounded diagnosis.
+After a verified repair, rerun affected assertions and required final gates, retaining
+unaffected valid evidence. Use the delivery helper's `shared-failure` action where
+available; its advisory result neither creates a claim nor proves a repair.
+
+## Evidence before declaring a blocker
+
+Record the blocked operation/phase, configured target, observed result, run/request
+evidence, bounded recovery already checked, next action and its owner in the existing
+checkpoint. Separate an observed failure from an unknown cause. Verify the failed
+attempt used the intended protocol/endpoint, resource identity and actual API/schema
+contract; an HTTP failure does not prove the configured HTTPS route is unavailable,
+and an unverified field name does not prove a migration is needed. Use one cheap,
+authorized read-only probe or documented alternative before transferring the blocker.
+Do not probe a mutating path without authority or route around a denial.
+
+An explicit permission boundary or user-only login/MFA is evidence in its own right;
+no forbidden attempt is required. Cite that boundary and request only the smallest
+human action. Otherwise, a failed tool path or missing binary alone does not establish
+an external/user-only prerequisite. Use `blocker` in the existing delivery helper
+where available; keep independent authorized work moving while its affected phase
+waits. No new status template or human message relay is required.
+
 ## Release preparation before the environment lock
 
 Use the selected project's read-only preparation capability before claiming ENV:

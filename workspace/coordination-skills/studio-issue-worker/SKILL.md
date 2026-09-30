@@ -5,8 +5,9 @@ description: "Resolve exactly one explicitly assigned Voice Agent Studio GitHub 
 
 # Studio Single-Issue Worker
 
-Before work-package planning, performance sampling, repeated review corrections or
-retained fixtures, read [delivery quality](references/delivery-quality.md).
+Before work-package planning, ENV admission, shared-failure retry or blocker
+handoff, performance sampling, repeated review corrections or retained fixtures,
+read [delivery quality](references/delivery-quality.md).
 
 Before isolated database setup, read
 [execution efficiency](references/execution-efficiency.md).
