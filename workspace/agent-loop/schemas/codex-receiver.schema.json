@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bounded Codex receiver configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "native_session_id",
+    "client",
+    "model",
+    "effort",
+    "provider",
+    "sandbox",
+    "approval_policy",
+    "approvals_reviewer",
+    "endpoint",
+    "server_pid",
+    "agent_id",
+    "dispatcher_agent_id",
+    "client_executable",
+    "coordination_executable",
+    "ledger_directory",
+    "prompt_file",
+    "qualification_file",
+    "state_directory",
+    "role",
+    "worktree",
+    "owner_pid",
+    "incarnation",
+    "max_seconds",
+    "server_identity",
+    "owner_started_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent-loop.codex-launch.v1"
+    },
+    "native_session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f-]{36}$"
+    },
+    "client": {
+      "enum": [
+        "cli",
+        "app"
+      ]
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "effort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "provider": {
+      "const": "openai"
+    },
+    "sandbox": {
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ]
+    },
+    "approval_policy": {
+      "enum": [
+        "on-request",
+        "untrusted",
+        "never",
+        "on-failure"
+      ]
+    },
+    "approvals_reviewer": {
+      "enum": [
+        "user",
+        "auto_review"
+      ]
+    },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^unix:///"
+    },
+    "server_pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "dispatcher_agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "client_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "coordination_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "ledger_directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "prompt_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "qualification_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "state_directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "human_authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignment_id",
+        "repository",
+        "reference",
+        "operations",
+        "managed_review"
+      ],
+      "properties": {
+        "assignment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$"
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "source",
+              "test",
+              "pull_request",
+              "managed_review",
+              "gated_merge",
+              "issue_close"
+            ]
+          }
+        },
+        "managed_review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "destination",
+            "content"
+          ],
+          "properties": {
+            "provider": {
+              "const": "grok"
+            },
+            "destination": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"
+            },
+            "content": {
+              "const": "source_diff_and_issue_contract_only"
+            }
+          }
+        }
+      }
+    },
+    "delivery_readiness_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "checkpoint_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "role": {
+      "enum": [
+        "worker",
+        "dispatcher"
+      ]
+    },
+    "worktree": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "owner_pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "incarnation": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "max_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "server_identity": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "reservation": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "item": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "owner_started_at": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

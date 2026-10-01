@@ -313,6 +313,34 @@ func TestConcurrentPublishIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestNativeAcceptanceRechecksRoutingFence(t *testing.T) {
+	for _, mutation := range []string{
+		"UPDATE dispatch_reservations SET generation=2",
+		"UPDATE dispatch_reservations SET reserved_by='other'",
+		"UPDATE dispatch_reservations SET worker_thread_id='new-native'",
+		"UPDATE dispatch_reservations SET state='failed'",
+	} {
+		t.Run(mutation, func(t *testing.T) {
+			s := fixture(t)
+			ctx := context.Background()
+			post(t, s, eventID, "worker")
+			if err := s.Discover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.Exec(mutation); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Delivered(ctx, eventID, "old-incarnation"); err == nil {
+				t.Fatal("stale native acceptance recorded")
+			}
+			var delivered, processed int64
+			if err := s.DB.QueryRow("SELECT delivered_at,processed_at FROM terminal_event_receipts WHERE event_id=?", eventID).Scan(&delivered, &processed); err != nil || delivered != 0 || processed != 0 {
+				t.Fatal(delivered, processed, err)
+			}
+		})
+	}
+}
+
 func TestLegacyNullMessageMetadataDoesNotStopReceiver(t *testing.T) {
 	s := fixture(t)
 	post(t, s, eventID, "worker")

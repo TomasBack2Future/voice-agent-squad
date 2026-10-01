@@ -185,6 +185,7 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
  FROM terminal_event_receipts e JOIN dispatch_reservations r
  ON r.repo_id=e.repo_id AND r.item_id=e.reservation_key AND r.generation=e.generation
  AND r.worker_thread_id=e.worker_session
+ AND r.state IN ('dispatched','completed')
  AND (r.reserved_by=e.recipient OR (e.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
  (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id=e.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id!=e.recipient AND c.claimed_at>=r.reserved_at)))
  WHERE e.repo_id=? AND e.recipient=? AND e.processed_at=0
@@ -207,12 +208,33 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
 }
 
 func (s Store) Delivered(ctx context.Context, id, session string) error {
-	if session == "" {
-		return fmt.Errorf("delivery session required")
+	if session == "" || s.Repo == "" || s.Recipient == "" {
+		return fmt.Errorf("repo, recipient and delivery session required")
 	}
-	_, err := s.DB.ExecContext(ctx, `UPDATE terminal_event_receipts SET delivered_session=?,delivered_at=?
- WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0`, session, time.Now().Unix(), s.Repo, s.Recipient, id)
-	return err
+	// Transport can finish after ownership or decision changes. Recheck the same
+	// routing fence atomically before recording acceptance, including released
+	// Worker custody. A stale receipt must not become acknowledgement-eligible.
+	result, err := s.DB.ExecContext(ctx, `UPDATE terminal_event_receipts SET delivered_session=?,delivered_at=?
+ WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0
+ AND (kind!='decision-resolved' OR NOT EXISTS (SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=terminal_event_receipts.repo_id AND d.reservation_key=terminal_event_receipts.reservation_key AND d.generation=terminal_event_receipts.generation AND d.item_id=terminal_event_receipts.item_id AND d.outcome_id!=terminal_event_receipts.outcome_id))
+ AND EXISTS(SELECT 1 FROM dispatch_reservations r WHERE r.repo_id=terminal_event_receipts.repo_id
+ AND r.item_id=terminal_event_receipts.reservation_key AND r.generation=terminal_event_receipts.generation
+ AND r.worker_thread_id=terminal_event_receipts.worker_session
+ AND r.state IN ('dispatched','completed')
+ AND (terminal_event_receipts.kind!='decision-resolved' OR terminal_event_receipts.item_id=r.canonical_item_id)
+ AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
+ (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id!=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, session, time.Now().Unix(), s.Repo, s.Recipient, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrInvalidEvent
+	}
+	return nil
 }
 
 // Ack is an explicit recipient action after reconciliation, not an output/read
@@ -227,6 +249,7 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
  AND EXISTS(SELECT 1 FROM dispatch_reservations r WHERE r.repo_id=terminal_event_receipts.repo_id
  AND r.item_id=terminal_event_receipts.reservation_key AND r.generation=terminal_event_receipts.generation
  AND r.worker_thread_id=terminal_event_receipts.worker_session
+ AND r.state IN ('dispatched','completed')
  AND (terminal_event_receipts.kind!='decision-resolved' OR terminal_event_receipts.item_id=r.canonical_item_id)
  AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
  (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id!=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, time.Now().Unix(), note, s.Repo, s.Recipient, id)

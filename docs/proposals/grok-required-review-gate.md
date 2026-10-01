@@ -154,3 +154,39 @@ host/repository. See the [Interceptor handoff](../../workspace/agent-loop/projec
 Local Git inspection disables replace refs and legacy grafts, and clears inherited
 `GIT_*` repository/index/config overrides. It preserves normal HOME/PATH and does
 not delete or rewrite the user's replacement refs or Git configuration.
+
+## Post-sampling timeout capability boundary
+
+A terminal sampling timeout with no valid verdict is a workflow failure, not a
+source defect that warrants a no-op commit. The current command exposes no
+`resume`/`recover` operation. Its status files are observations; they cannot
+prove that an owning process and all children were joined, recover a partial
+model result or authorize resampling. Keep the failed Check and exact tuple.
+The existing no-blind-retry rule remains in force.
+
+The owner of the failed invocation must first join it and retain the sanitized
+command report/status, exact repository/PR/base/head, complete diff/contract
+hashes, process exit receipt, configured model/effort/timeout, publication links
+and known usage. Missing request/session/model/cost fields remain **unknown**.
+Check both the invocation result and current published gate for a valid verdict;
+a publication-only failure is not permission to sample again. An in-flight,
+uncertain, unjoined or already valid attempt remains ineligible for recovery.
+
+The bounded repair owner is the maintained `squad-grok-review` runtime owner,
+coordinated by the installation owner; the source Worker must not retry another
+Worker's PR. A supported recovery implementation must add a durable,
+repository/PR-scoped single-flight admission and a one-use recovery slot linked
+to the joined failed invocation. Reserve the slot before starting the existing
+managed reviewer; interrupted or replayed admission must not sample again.
+Permit at most **one** recovery of a joined sampling timeout with no verdict,
+using the unchanged required model, effort and timeout and the same frozen
+input. Reject stale input, any valid verdict, unresolved process custody or an
+already used slot. Retain both attempts and cost unknowns. A second timeout or
+uncertain launch stops at the capability boundary, never timeout-as-pass.
+
+That recovery must be implemented and reviewed before operational use, with
+negative tests for valid verdicts, active/unjoined attempts, changed tuple or
+settings, and interrupted/replayed slots. The recovered result must still pass
+real current-head managed-review publication and CI gates before merge. This
+section specifies an evidenced repair boundary; it does **not** add a supported
+retry switch or grant an exception executable by the current command.

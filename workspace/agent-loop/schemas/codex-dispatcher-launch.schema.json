@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Controlled same-native Dispatcher CLI transition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "native_session_id",
+    "client",
+    "model",
+    "effort",
+    "provider",
+    "sandbox",
+    "approval_policy",
+    "approvals_reviewer",
+    "endpoint",
+    "server_pid",
+    "agent_id",
+    "dispatcher_agent_id",
+    "client_executable",
+    "coordination_executable",
+    "ledger_directory",
+    "prompt_file",
+    "qualification_file",
+    "state_directory",
+    "worktree",
+    "transition_file"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "agent-loop.codex-dispatcher-launch.v1"
+    },
+    "native_session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f-]{36}$"
+    },
+    "client": {
+      "const": "cli"
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "effort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "provider": {
+      "const": "openai"
+    },
+    "sandbox": {
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ]
+    },
+    "approval_policy": {
+      "enum": [
+        "on-request",
+        "untrusted",
+        "never",
+        "on-failure"
+      ]
+    },
+    "approvals_reviewer": {
+      "enum": [
+        "user",
+        "auto_review"
+      ]
+    },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^unix:///"
+    },
+    "server_pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "dispatcher_agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "client_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "coordination_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "ledger_directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "prompt_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "qualification_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "state_directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "worktree": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "transition_file": {
+      "type": "string",
+      "pattern": "^/"
+    }
+  }
+}

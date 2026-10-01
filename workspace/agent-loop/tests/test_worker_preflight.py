@@ -96,6 +96,15 @@ class WorkerPreflightTests(unittest.TestCase):
         with self.assertRaises(preflight.ValidationError):
             preflight.check(self.path, self.profile, "codex", [self.skill], [])
 
+    def test_codex_requires_qualified_launcher_not_executable_presence(self):
+        self.path.write_text(json.dumps(self.assignment))
+        skill = self.root / '.agents/skills/agent-loop-worker/SKILL.md'
+        skill.parent.mkdir(parents=True)
+        skill.symlink_to(ROOT / 'roles/worker/SKILL.md')
+        with patch('worker_preflight.shutil.which', return_value='/qualified/tool'):
+            with self.assertRaisesRegex(preflight.ValidationError, 'Codex launch config required'):
+                preflight.check(self.path, self.profile, 'codex', [skill], [])
+
     def test_changed_base_branch_repository_and_dirty_tree_fail(self):
         for field, value in [("base_sha", "0" * 40), ("branch", "wrong")]:
             original = self.assignment[field]

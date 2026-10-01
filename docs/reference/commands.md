@@ -880,6 +880,18 @@ with optional `scope`. MCP claims remain immediate; blocking wait is a CLI facil
 
 ## `squad terminal-events`
 
+`listen --defer-delivery` returns pending event pointers, recipient and receiver
+incarnation without recording delivery. A structured client calls
+`terminal-events delivered <event-id> --delivery-session <incarnation>` only
+after confirmed native transport acceptance. MCP parity is
+`squad_terminal_events_delivered` with `event_id`, `delivery_session` and optional
+`agent_id`. Acceptance rechecks the current reservation/native/generation,
+recipient and decision-custody fence atomically; failed/transferred/stale routes
+are rejected. It does not acknowledge handling, close work or grant authority.
+The default listen path retains Claude hook compatibility. See the
+[qualified Codex adapter](../../workspace/agent-loop/README.md#qualified-codex-control-plane)
+for version/client qualification, dedupe and uncertain-submission recovery.
+
 `terminal-events listen --delivery-session <incarnation> --max 23h` waits on a
 loopback notification endpoint with a 15-second durable catch-up check. It emits
 up to 16 event pointers as JSON, never terminal keystrokes or sender instructions.

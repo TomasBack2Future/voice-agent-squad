@@ -1,65 +1,101 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Claude Worker launch configuration (separate from assignment)",
+  "title": "Bound Codex CLI resume configuration",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "native_session_id",
+    "client",
+    "model",
+    "effort",
+    "provider",
+    "sandbox",
+    "approval_policy",
+    "approvals_reviewer",
+    "endpoint",
+    "server_pid",
     "agent_id",
     "dispatcher_agent_id",
-    "coordination_executable",
-    "coordination_mode",
-    "ledger_directory",
     "client_executable",
-    "permission_mode",
-    "prompt_file"
+    "coordination_executable",
+    "ledger_directory",
+    "prompt_file",
+    "qualification_file",
+    "state_directory"
   ],
   "properties": {
     "schema_version": {
-      "const": "agent-loop.claude-launch.v1"
+      "const": "agent-loop.codex-launch.v1"
     },
     "native_session_id": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^[0-9a-f-]{36}$"
+    },
+    "client": {
+      "enum": [
+        "cli",
+        "app"
+      ]
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "effort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    "provider": {
+      "const": "openai"
+    },
+    "sandbox": {
+      "enum": [
+        "read-only",
+        "workspace-write"
+      ]
+    },
+    "approval_policy": {
+      "enum": [
+        "on-request",
+        "untrusted"
+      ]
+    },
+    "approvals_reviewer": {
+      "enum": [
+        "user",
+        "auto_review"
+      ]
+    },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^unix:///"
+    },
+    "server_pid": {
+      "type": "integer",
+      "minimum": 1
     },
     "agent_id": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+      "pattern": "^[A-Za-z0-9_-]+$"
     },
     "dispatcher_agent_id": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
-    },
-    "coordination_executable": {
-      "type": "string",
-      "pattern": "^/"
-    },
-    "coordination_mode": {
-      "enum": [
-        "native",
-        "codex-wrapper-compat"
-      ]
-    },
-    "ledger_directory": {
-      "type": "string",
-      "pattern": "^/"
+      "pattern": "^[A-Za-z0-9_-]+$"
     },
     "client_executable": {
       "type": "string",
       "pattern": "^/"
     },
-    "permission_mode": {
-      "enum": [
-        "auto",
-        "acceptEdits",
-        "bypassPermissions",
-        "manual",
-        "dontAsk",
-        "plan"
-      ]
+    "coordination_executable": {
+      "type": "string",
+      "pattern": "^/"
     },
-    "event_executable": {
+    "ledger_directory": {
       "type": "string",
       "pattern": "^/"
     },
@@ -67,49 +103,11 @@
       "type": "string",
       "pattern": "^/"
     },
-    "resource_overrides": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "staging": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "item",
-            "admission_reference"
-          ],
-          "properties": {
-            "item": {
-              "type": "string",
-              "pattern": "^ENV-[0-9]+$"
-            },
-            "admission_reference": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        },
-        "production": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "item",
-            "admission_reference"
-          ],
-          "properties": {
-            "item": {
-              "type": "string",
-              "pattern": "^ENV-[0-9]+$"
-            },
-            "admission_reference": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        }
-      }
+    "qualification_file": {
+      "type": "string",
+      "pattern": "^/"
     },
-    "delivery_readiness_file": {
+    "state_directory": {
       "type": "string",
       "pattern": "^/"
     },
@@ -171,6 +169,14 @@
           }
         }
       }
+    },
+    "delivery_readiness_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "checkpoint_file": {
+      "type": "string",
+      "pattern": "^/"
     }
   }
 }

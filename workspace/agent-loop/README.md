@@ -379,3 +379,179 @@ The rolling planner now returns `review_next` independently of merge holds and
 CI/ENV waits. Only verified complete-diff admissions can enter it; in-flight or
 already-attempted tuples reconcile instead of sampling again. See the
 [review lane contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md#independent-review-lane).
+
+## Qualified Codex control plane
+
+Assigned Codex Workers use `codex_worker_launcher.py`, not the standalone
+provider-selection helper. `schemas/codex-launch.schema.json` is a separate
+launch config: exact native UUID, actor and Dispatcher, absolute executables,
+selected model/provider/effort, approval policy **and** approval reviewer,
+sandbox, ledger, prompt, private state directory, and an explicit owning local
+Unix endpoint/PID. The config accepts no bypass option or arbitrary credentials.
+The source adapter currently qualifies the installed **0.159.2 CLI** contract on
+the OpenAI route. Other versions/providers and App targets are unavailable until
+separately implemented and qualified. An App thread ID is never inferred from a
+CLI reservation, and a paused/old-target schedule is never enabled as fallback.
+
+The endpoint must already belong to the intended native server and have the
+exact thread loaded. The helper verifies its process and socket incarnation,
+reads live thread identity/model/effort, and rejoins the loaded thread without
+settings overrides to inspect effective approval and sandbox. It never resumes
+an unloaded thread to manufacture delivery capability. Native servers are
+client infrastructure supplied by the selected client, not new background
+controllers installed by this package. A lost route does not kill that client,
+its server or external operations, or reacquire its claims.
+
+Before adoption, explicitly qualify the selected binary/model and CLI idle
+queue on a **new isolated thread**. Point the qualification config at a private
+probe server, never a live Worker/Dispatcher endpoint. The probe uses an empty
+isolated directory, read-only sandbox and tools-disabled instructions; it
+performs two small inference turns and exercises the installed `codex queue
+--remote … --thread … --message …` command. It writes only a safe local receipt,
+not credentials, model reasoning or private output. `model/list`, executable
+presence, queue help and saved target metadata are insufficient. Qualification
+expires after 24 hours or any binary/selection change. It proves CLI queue
+semantics and selected-model access for that probe, not App delivery or quota.
+
+```sh
+python3 codex_worker_launcher.py --assignment /absolute/assignment.json \
+  --config /absolute/probe-launch.json --qualify /absolute/empty-probe-directory
+python3 worker_preflight.py --assignment /absolute/assignment.json \
+  --profile /absolute/selected/profile.json --runtime codex \
+  --skill /absolute/workspace/.agents/skills/agent-loop-worker/SKILL.md \
+  --launch-config /absolute/worker-launch.json
+python3 codex_worker_launcher.py --assignment /absolute/assignment.json \
+  --config /absolute/worker-launch.json
+```
+
+The launch config's `qualification_file` selects that receipt. Its Worker target
+is verified independently against the reservation and live endpoint before
+resume. Cold start retains the clean assigned base check. Later same-native
+resume requires `checkpoint_file` matching the actual branch/base/head/dirty
+state and ownership generation; its head must descend from the original base.
+No old client or competing writer may remain active: the canonical native
+launcher lock supplies exclusion for this lane, and ordinary takeover policy
+still applies to any writer outside it. Checkpoint validation never grants
+new operations or permission to overwrite unrelated edits.
+
+The launcher supervises only its selected CLI and bounded receiver/heartbeat.
+`codex_receiver.py` also supports a Dispatcher-role config owned by that selected
+native client's PID, with the same qualified binary/selection/endpoint, live
+worktree identity, server incarnation, fresh receiver incarnation and bounded
+lifetime. Dispatcher callbacks derive their recipients from Squad; Worker
+decision events additionally match exact reservation/generation/native/item.
+Receiver configs are launch artifacts, separate from assignment envelopes.
+
+Structured native submission is preceded by an fsynced local intent. **0.159.2
+does not dedupe repeated `clientUserMessageId` values**. Accepted intents are
+not resubmitted after restart. A lost reply gets one bounded inspection of
+native queue/history; if acceptance cannot be proved, delivery remains uncertain
+and stops without a duplicate. Operator recovery must reconcile that intent,
+not delete the journal to force another submission. Native queue acceptance is
+recorded with `terminal-events delivered EVENT --delivery-session INCARNATION`
+(or MCP `squad_terminal_events_delivered`). Handling remains the recipient's
+explicit `terminal-events ack` after reading current decisions/reconciling the
+outcome. A receipt is data, never new authority. Retry is bounded; faults remain
+pending reconciliation. No terminal input or user drafts are touched.
+
+`terminal-events listen --defer-delivery` leaves pipe output pending until native
+acceptance. Default listen/hook behavior remains compatible with Claude.
+Delivered/ack updates recheck current reservation, recipient, native, generation,
+state and decision custody atomically, including valid released-claim history.
+
+An optional `human_authorization` object carries an existing human reference,
+assignment/repository, authorized operations and the explicitly selected managed
+review provider/destination/content scope. Claude and Codex both pass it as
+compact machine-readable prompt context. Missing receipts are explicitly absent.
+It cannot expand assignment operations, change runtime permissions, infer new
+sensitive disclosure authorization, or enable bypass after a denial. Never put
+credentials, customer logs or private output in this object.
+
+## Phase-specific delivery readiness
+
+`delivery_readiness.py` evaluates an independently verified trigger-chain
+snapshot; it is advisory and cannot merge, deploy or close an Issue. Optional
+`delivery_readiness_file` on the launch config binds that snapshot to the exact
+assignment/reservation/generation/native/actor and current Dispatcher admission.
+The launcher re-reads the adopted bound decision before using it. A snapshot
+records each actual workflow event/effect, immutable revision/evidence reference,
+and downstream trigger links. Main-push reachability to a deploy node retains
+the auto-deploy environment gate; CI-only main push, tag publication and an
+independent workflow-dispatch deployment form a manual-deploy lane. Missing or
+unverified trigger evidence is not permission to reclassify a legacy lane.
+Claude configs without this opt-in retain their existing resource policy.
+
+Readiness is computed separately for source, merge, deploy, acceptance and
+closure. A Dispatcher-admitted manual-deploy source merge requires exact
+review/CI, but does not require staging fixture access, a deployment candidate
+or an unrelated environment claim. Actual auto-deploy merges retain current
+protected ENV ownership checks. Deploy/acceptance require their own verified
+candidate/ownership and acceptance access. The source launcher admits source
+or merge phases only; environment operations still use the project's supported
+adapter and atomic resource admission. The generic Squad source-only profile
+has no staging requirement.
+
+Snapshots and checkpoints keep `pr-created`, `source-merged`,
+`staging-accepted` and `issue-closed` distinct, with exact-revision outcome
+receipts. An unaccepted product Issue cannot be closed from a PR or merge
+observation. A source-only Issue can close on its verified source outcome.
+Checkpoint `delivery_readiness` records selected phase/lane/outcome, admission
+owner/revision, same native ID and receipt pointer. A waiting decision reaches
+the existing Dispatcher through the fenced event route; adoption resumes that
+same native Worker through its remaining authorized gates.
+
+### Dispatcher continuity and the shared-App boundary
+
+`codex_dispatcher_launcher.py` supplies a separate Dispatcher-role CLI path;
+it does not take a Worker assignment, claim work or run a Dispatcher controller.
+Its bounded receiver routes to the existing Dispatcher actor, and native event
+handling invokes the existing Dispatcher skill for one reconciliation cycle.
+A transition uses `schemas/codex-dispatcher-launch.schema.json` and an immutable
+`schemas/codex-dispatcher-transition.schema.json` receipt. The latter binds the
+exact native UUID/actor/cwd, existing checkpoint hash, prior App selection,
+current reservation generations/native Workers, authorization reference and
+joined old writer/receiver/external operations. The callback actor must match
+those current reservations. Launch resumes that UUID without permission/model
+settings overrides and checks the effective response before any prompt.
+
+Unlike a Worker launch, this transition may **preserve** an existing `never` /
+`danger-full-access` selection. It cannot infer or enable that policy from a
+new Worker assignment: both the prior receipt and effective native resume must
+match exactly. A mismatch blocks, including an attempted silent downgrade.
+Qualification still uses read-only, tools-disabled isolated turns.
+
+```sh
+python3 codex_dispatcher_launcher.py --config /absolute/dispatcher-probe.json \
+  --qualify /absolute/empty-probe-directory
+python3 codex_dispatcher_launcher.py --config /absolute/dispatcher-launch.json --check
+# Only the installation/adoption owner runs launch, from the selected terminal:
+python3 codex_dispatcher_launcher.py --config /absolute/dispatcher-launch.json
+```
+
+The currently implemented ownership fence supports an already joined
+**dedicated** old process, verified by PID/start identity, followed by a distinct
+selected native server. It does not stop that process itself. A **shared App
+backend** fails closed before any native resume or process-cutover check: process
+exit would affect unrelated sessions, and `thread/unsubscribe` only detaches a
+subscriber, not all other writers. Neither idle status, saved metadata, closing
+an App window nor a local helper lock establishes native exclusive ownership.
+Codex 0.159.2 has no qualified per-thread writer-epoch transfer in this adapter.
+Therefore a shared-App Dispatcher cannot currently adopt this CLI path safely.
+Do not terminate its backend, issue business-session probes or change its policy
+as a workaround. This is a concrete remaining adapter gap, not live-flow success.
+
+The activation owner owns that boundary: obtain/implement and isolate-qualify a
+supported per-thread transfer that fences the old native writer without stopping
+shared infrastructure, retains checkpoint/policy/callback custody, rejects old
+writer input, and permits a fenced reverse transfer. Qualify one candidate;
+unsupported/uncertain ownership remains blocked rather than retried. No timer,
+second controller or permanent supervisor is a permitted replacement.
+
+For a supported cutover, retain the installed package/binary and old client
+configuration. Receiver health follows the selected CLI process/start identity;
+its config and delivery journal persist the receiver incarnation and native
+intent/acceptance. Confirm a legitimate event's native acceptance separately
+from explicit handled acknowledgement. To return to App, first join the new
+CLI and its receiver at a safe operation boundary, retain journals and claims,
+then resume the same UUID with its original effective selection. A shared-App
+return also needs the supported per-thread reverse fence; do not invent one.

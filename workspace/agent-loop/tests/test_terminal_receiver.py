@@ -78,4 +78,13 @@ class ReceiverTests(unittest.TestCase):
             self.assertEqual(h['command'],sys.executable)
             self.assertIn(str(self.config.resolve()),h['args'])
 
+    def test_codex_never_uses_claude_rewake_or_identity(self):
+        self.data['runtime'] = 'codex'
+        self.config.write_text(json.dumps(self.data))
+        with self.assertRaisesRegex(ValueError, 'Claude only'):
+            receiver.settings(self.config)
+        p = self.start(); out, err = p.communicate(timeout=5)
+        self.assertFalse((self.root / 'calls').exists())
+        self.assertEqual(p.returncode, 2)
+
 if __name__ == '__main__': unittest.main()
