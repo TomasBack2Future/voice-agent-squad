@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import subprocess
 import json
 from pathlib import Path
 import sys
@@ -8,7 +10,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from delivery_readiness import evaluate, selected_readiness, trigger_lane, verify_admission
+from delivery_readiness import evaluate, selected_readiness, trigger_lane, verify_admission, verify_workflow_inventory
 from validate_context_package import ValidationError
 from claude_worker_launcher import check_resources
 
@@ -36,6 +38,11 @@ class DeliveryReadinessTests(unittest.TestCase):
         return [self.node('pr','pull_request','ci'),self.node('ci','main_push','ci'),
                 self.node('release','tag_push','publish'),self.node('deploy','workflow_dispatch','deploy')]
 
+    def test_omitted_deploy_evidence_cannot_make_environment_assignment_source_only(self):
+        for nodes in ([], [self.node('ci','main_push','ci')]):
+            self.s['trigger_chain']=nodes
+            with self.assertRaises(ValidationError):evaluate(self.s,self.a,self.c)
+
     def test_manual_source_merge_is_independent_of_fixture_access(self):
         result = evaluate(self.s,self.a,self.c)
         self.assertEqual(result['lane'],'manual-deploy')
@@ -45,11 +52,34 @@ class DeliveryReadinessTests(unittest.TestCase):
         self.assertFalse(result['phase_gates']['closure']['ready'])
         self.assertEqual(result['same_native_resume'],'same-native')
 
+    def test_actual_workflow_inventory_rejects_omission_and_changed_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);workflows=root/'.github/workflows';workflows.mkdir(parents=True)
+            (workflows/'ci.yml').write_text('name: ci\non: [push]\n')
+            (workflows/'deploy.yml').write_text('name: deploy\non: [workflow_dispatch]\n')
+            subprocess.run(['git','init','-q',str(root)],check=True)
+            subprocess.run(['git','-C',str(root),'add','.'],check=True)
+            subprocess.run(['git','-C',str(root),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid',
+                            '-c','core.hooksPath=/dev/null','commit','-qm','fixture'],check=True)
+            head=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
+            s=copy.deepcopy(self.s);s['head_sha']=head;s['trigger_chain']=[self.node('ci','main_push','ci'),self.node('deploy','workflow_dispatch','deploy')]
+            for node,name in zip(s['trigger_chain'],('ci.yml','deploy.yml')):
+                node.update(workflow_path='.github/workflows/'+name,revision=head)
+            s['workflow_inventory']=[dict(path='.github/workflows/'+name,sha256=hashlib.sha256((workflows/name).read_bytes()).hexdigest()) for name in ('ci.yml','deploy.yml')]
+            a=dict(self.a,worktree=tmp)
+            verify_workflow_inventory(s,a)
+            omitted=copy.deepcopy(s);omitted['workflow_inventory'].pop()
+            with self.assertRaises(ValidationError):verify_workflow_inventory(omitted,a)
+            omitted=copy.deepcopy(s);omitted['trigger_chain'].pop()
+            with self.assertRaises(ValidationError):verify_workflow_inventory(omitted,a)
+            (workflows/'deploy.yml').write_text('changed deployment trigger')
+            with self.assertRaises(ValidationError):verify_workflow_inventory(s,a)
+
     def test_source_admission_skips_manual_deploy_resource_prerequisites(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/'readiness.json';p.write_text(json.dumps(self.s))
             c=dict(self.c,delivery_readiness_file=str(p))
-            with patch('delivery_readiness.verify_admission'), patch('claude_worker_launcher.subprocess.run',side_effect=AssertionError('source merge must not check staging resource/fixture')):
+            with patch('delivery_readiness.verify_admission'), patch('delivery_readiness.verify_workflow_inventory'), patch('claude_worker_launcher.subprocess.run',side_effect=AssertionError('source merge must not check staging resource/fixture')):
                 self.assertEqual(check_resources(self.a,c,{}),[])
 
     def test_stale_current_admission_does_not_resume_a_new_native_worker(self):

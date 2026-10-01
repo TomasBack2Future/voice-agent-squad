@@ -12,7 +12,7 @@ import uuid
 from codex_rpc import RPC
 from codex_worker_launcher import (check_delivery_runtime, check_effective, check_qualification, child_environment,
                                    digest, live_target, qualify, selection, server_identity)
-from codex_receiver import process_start, supervise
+from codex_receiver import supervise
 from validate_context_package import ROOT, ValidationError, validate_file
 
 
@@ -40,16 +40,14 @@ def fence(c):
     if receipt['old_writer_scope'] != 'dedicated-process':
         raise ValidationError('shared App backend has no qualified per-thread ownership fence; transition blocked without stopping backend')
     # A quiet or unloaded thread is not proof that the old writer was joined.
-    # Operator receipt plus independently checked PID/start fence are both needed.
-    current_start = process_start(receipt['old_writer_pid'])
-    if current_start is None:
-        try:
-            os.kill(receipt['old_writer_pid'], 0)
-        except ProcessLookupError:
-            pass
-        else:
-            raise ValidationError('old writer process identity unavailable; cannot prove stopped')
-    if current_start == receipt['old_writer_started_at']:
+    # Operator receipt plus independently checked process absence are both needed.
+    try:
+        os.kill(receipt['old_writer_pid'], 0)
+    except ProcessLookupError:
+        pass
+    else:
+        # A changed text timestamp is not independent proof of PID reuse.
+        # Conservatively reject any live recorded PID, including possible reuse.
         raise ValidationError('old App writer remains active; no resume or receiver started')
     if receipt['old_writer_pid'] == c['server_pid']:
         raise ValidationError('old writer and selected server must have separate custody')

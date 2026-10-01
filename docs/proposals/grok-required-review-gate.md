@@ -155,38 +155,67 @@ Local Git inspection disables replace refs and legacy grafts, and clears inherit
 `GIT_*` repository/index/config overrides. It preserves normal HOME/PATH and does
 not delete or rewrite the user's replacement refs or Git configuration.
 
-## Post-sampling timeout capability boundary
+## Bounded recovery of a joined sampling timeout
 
-A terminal sampling timeout with no valid verdict is a workflow failure, not a
-source defect that warrants a no-op commit. The current command exposes no
-`resume`/`recover` operation. Its status files are observations; they cannot
-prove that an owning process and all children were joined, recover a partial
-model result or authorize resampling. Keep the failed Check and exact tuple.
-The existing no-blind-retry rule remains in force.
+The GitHub wrapper now reserves a durable repository/PR single-flight before
+sampling, independently of the status directory. Its private SQLite admission
+store defaults to `~/.squad/grok-review-admission`; configure `admission_dir` once
+for the reviewer installation. Every invocation for that installation must use
+that same directory. Changing it to evade custody is unsupported. It is separate
+from the Squad ledger. Receipts store input hashes and selected settings, never
+source diffs, prompts, credentials or raw model output. Normal invocation also rejects an existing managed Check on that head; it cannot sidestep recovery by omitting `recover`.
 
-The owner of the failed invocation must first join it and retain the sanitized
-command report/status, exact repository/PR/base/head, complete diff/contract
-hashes, process exit receipt, configured model/effort/timeout, publication links
-and known usage. Missing request/session/model/cost fields remain **unknown**.
-Check both the invocation result and current published gate for a valid verdict;
-a publication-only failure is not permission to sample again. An in-flight,
-uncertain, unjoined or already valid attempt remains ineligible for recovery.
+A normal invocation prints `attempt_id`. Only a joined sampling timeout with no
+valid verdict and its failed published required Check is eligible for one
+explicit recovery:
 
-The bounded repair owner is the maintained `squad-grok-review` runtime owner,
-coordinated by the installation owner; the source Worker must not retry another
-Worker's PR. A supported recovery implementation must add a durable,
-repository/PR-scoped single-flight admission and a one-use recovery slot linked
-to the joined failed invocation. Reserve the slot before starting the existing
-managed reviewer; interrupted or replayed admission must not sample again.
-Permit at most **one** recovery of a joined sampling timeout with no verdict,
-using the unchanged required model, effort and timeout and the same frozen
-input. Reject stale input, any valid verdict, unresolved process custody or an
-already used slot. Retain both attempts and cost unknowns. A second timeout or
-uncertain launch stops at the capability boundary, never timeout-as-pass.
+```sh
+squad-grok-review recover --from ORIGINAL_ATTEMPT_ID \
+  --repo owner/repo --pr 9 --mode required \
+  --model grok-4.7 --reasoning-effort medium --timeout 20m
+```
 
-That recovery must be implemented and reviewed before operational use, with
-negative tests for valid verdicts, active/unjoined attempts, changed tuple or
-settings, and interrupted/replayed slots. The recovered result must still pass
-real current-head managed-review publication and CI gates before merge. This
-section specifies an evidenced repair boundary; it does **not** add a supported
-retry switch or grant an exception executable by the current command.
+Use the original configuration and output limits. The operation rejects changes
+to repository/PR/base/head, title/body, complete diff, reviewer core/policy,
+model/effort/timeout, mode, App identity or output bounds. It verifies all
+current-head required Checks from the configured App, rejects valid verdicts and
+unresolved Checks, and requires the original failed Check. It reserves the
+one-use slot atomically before invoking the existing bounded managed reviewer.
+The synchronous child invocation and publication must return before the flight
+is joined. Status observations are never join authority. The result still uses
+the real current-head Check publication; review and CI gates remain required.
+
+Publication-only failures, cancellations, unknown/unjoined custody and valid
+approved/blocking findings cannot recover. A second timeout cannot chain another
+recovery. Interruption after reservation leaves the flight and slot occupied;
+restarting the command or changing head cannot sample again. No force-clear or
+automatic retry is provided. Preserve both attempts; absent usage/cost remains
+unknown, never zero-cost evidence. An admission-store failure blocks sampling;
+a join-write failure blocks completion even if publication succeeded.
+
+Older invocations have no authoritative admission receipt. The owning Worker
+may provide an absolute `--from` legacy custody JSON of schema
+`squad.review-recovery.legacy.v1` (see `LegacyRecoveryReceipt` in
+`internal/grokreview/legacy_recovery.go`). It supplies the exact original frozen
+bundle SHA-256 and settings, original safe terminal status path/hash, and a
+pre-sampling `squad.review-input.v1` input receipt (`LegacyInputReceipt`) with its
+path/hash and recorded timestamp. A hash of only diff/body or a later reconstructed
+bundle cannot stand in for missing original complete-input evidence. It also needs a
+bounded `squad.review-join.v1` exit receipt path/hash for both wrapper and owned
+reviewer PIDs. Alternatively, `native_join` references the owning Codex native
+history's original launch, join and terminal tool records, with SHA-256 for each
+raw call and output line. The qualified host-retained exec/write_stdin/wait chain
+must link the original returned tool session, eventual completed cell and exit-1
+structured timeout report to the exact tuple/settings/failed Check. No asserted
+"joined" prose or invented PID is accepted. Unfamiliar native history formats
+remain unavailable. Append-only history may grow without changing those records.
+The adapter independently verifies the selected join provenance, matches the
+original terminal status and inventories its sibling status files for live or
+valid attempts on the relevant exact tuple; valid different-head history is retained without blocking that recovery. Missing original inputs/settings or joined process evidence
+blocks import; a failure comment is insufficient. Existing receipt/slot custody
+cannot be overwritten by reimporting legacy JSON. Preserve old receipts read-only.
+
+This is source capability, not installation or authorization to invoke another
+Worker's review. The installation owner controls adoption. The existing Worker
+owns the failed invocation and any eligible recovery after reviewed installation;
+source preparation never invokes a foreign Worker’s recovery.

@@ -266,6 +266,21 @@ class CodexControlPlaneTests(unittest.TestCase):
         with patch.object(receiver,'process_start',return_value='process-incarnation'):
             self.assertFalse(receiver.alive(self.rc,path))
 
+    def test_transient_heartbeat_timeout_is_retried_without_stopping_client(self):
+        child=Mock(pid=os.getpid())
+        child.__enter__=Mock(return_value=child);child.__exit__=Mock(return_value=False)
+        child.wait.side_effect=[subprocess.TimeoutExpired('client',30),subprocess.TimeoutExpired('client',30),0]
+        helper=Mock()
+        helper.__enter__=Mock(return_value=helper);helper.__exit__=Mock(return_value=False)
+        helper.poll.return_value=None
+        with patch.object(receiver.subprocess,'Popen',side_effect=[child,helper]), \
+             patch.object(receiver,'process_start',return_value='start'), \
+             patch.object(receiver,'heartbeat',side_effect=[subprocess.TimeoutExpired('heartbeat',10),None]) as renew:
+            self.assertEqual(receiver.supervise(['client'],self.a,self.c,{},self.path,[1,2,3,4,5]),0)
+            self.assertEqual(renew.call_count,2)
+            child.terminate.assert_not_called();child.kill.assert_not_called()
+            helper.terminate.assert_called_once()
+
     def test_receiver_never_uses_paused_or_old_target_timer_fallback(self):
         c = dict(self.rc,endpoint='unix:///missing-old-target')
         receipt=dict(type='worker-terminal-delivery-v1',recipient='worker',delivery_session='one',events=[self.event])

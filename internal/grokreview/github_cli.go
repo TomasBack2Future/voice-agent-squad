@@ -457,3 +457,60 @@ func truncateUTF8(value string, limit int) string {
 	}
 	return value[:end]
 }
+
+// VerifyRecoveryCheck inspects every current-head Check from the configured App.
+// Failure alone is insufficient: blocking is a valid verdict, error is not.
+func (g *GitHubCLI) VerifyRecoveryCheck(ctx context.Context, token string, appID int64, prior AttemptReceipt) error {
+	found := false
+	for page := 1; page <= 10; page++ {
+		endpoint := fmt.Sprintf("repos/%s/commits/%s/check-runs?per_page=100&page=%d", prior.Identity.Repository, prior.Identity.HeadSHA, page)
+		raw, err := g.call(ctx, token, []string{"api", endpoint}, nil)
+		if err != nil {
+			return fmt.Errorf("read current review Checks: %w", err)
+		}
+		var response struct {
+			Total  int `json:"total_count"`
+			Checks []struct {
+				ID         int64  `json:"id"`
+				Name       string `json:"name"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+				HeadSHA    string `json:"head_sha"`
+				App        struct {
+					ID int64 `json:"id"`
+				} `json:"app"`
+				Output struct {
+					Title string `json:"title"`
+				} `json:"output"`
+			} `json:"check_runs"`
+		}
+		if err = json.Unmarshal(raw, &response); err != nil {
+			return err
+		}
+		for _, c := range response.Checks {
+			checkName := "grok-review"
+			if prior.Settings.Mode == "shadow" {
+				checkName = "grok-review-shadow"
+			}
+			if c.Name != checkName || c.App.ID != appID {
+				continue
+			}
+			if prior.ID == "" {
+				return fmt.Errorf("current input already has a managed review Check; reconcile its original receipt")
+			}
+			if c.HeadSHA != prior.Identity.HeadSHA || c.Status != "completed" || c.Conclusion != "failure" || c.Output.Title != "Grok review error" {
+				return fmt.Errorf("current required review Check has a verdict or unresolved invocation")
+			}
+			if c.ID == prior.Publication.CheckRunID {
+				found = true
+			}
+		}
+		if page*100 >= response.Total {
+			if !found && prior.ID != "" {
+				return fmt.Errorf("original failed required Check not found on current head")
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("current Check inventory exceeds bounded verification")
+}

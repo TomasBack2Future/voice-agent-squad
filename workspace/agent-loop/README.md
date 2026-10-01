@@ -435,6 +435,10 @@ still applies to any writer outside it. Checkpoint validation never grants
 new operations or permission to overwrite unrelated edits.
 
 The launcher supervises only its selected CLI and bounded receiver/heartbeat.
+A transient heartbeat timeout/transport failure retries on the existing 30-second
+client interval, each command bounded to ten seconds. A rejected ownership fence
+stops renewal and requires reconciliation before protected writes. Neither case
+kills the native client or reacquires claims.
 `codex_receiver.py` also supports a Dispatcher-role config owned by that selected
 native client's PID, with the same qualified binary/selection/endpoint, live
 worktree identity, server incarnation, fresh receiver incarnation and bounded
@@ -479,6 +483,11 @@ and downstream trigger links. Main-push reachability to a deploy node retains
 the auto-deploy environment gate; CI-only main push, tag publication and an
 independent workflow-dispatch deployment form a manual-deploy lane. Missing or
 unverified trigger evidence is not permission to reclassify a legacy lane.
+For environment-enabled projects or assignments, `workflow_inventory` must
+cover every tracked `.github/workflows/*.yml`/`.yaml` file with its actual content
+SHA-256 at the current source head. Trigger nodes bind `workflow_path` to that
+inventory and revision; omissions, empty chains and changed files block readiness.
+An environment-enabled project cannot infer a source-only lane from CI evidence.
 Claude configs without this opt-in retain their existing resource policy.
 
 Readiness is computed separately for source, merge, deploy, acceptance and
@@ -529,8 +538,8 @@ python3 codex_dispatcher_launcher.py --config /absolute/dispatcher-launch.json
 ```
 
 The currently implemented ownership fence supports an already joined
-**dedicated** old process, verified by PID/start identity, followed by a distinct
-selected native server. It does not stop that process itself. A **shared App
+**dedicated** old process, independently verified absent by its recorded PID, followed by a distinct
+selected native server. Any live recorded PID is rejected even if its start text differs; PID reuse is conservatively blocked. It does not stop that process itself. A **shared App
 backend** fails closed before any native resume or process-cutover check: process
 exit would affect unrelated sessions, and `thread/unsubscribe` only detaches a
 subscriber, not all other writers. Neither idle status, saved metadata, closing

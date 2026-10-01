@@ -35,8 +35,7 @@ class DispatcherContinuityTests(unittest.TestCase):
         Path(self.c['transition_file']).write_text(json.dumps(self.transition))
 
     def fence(self, start=None):
-        with patch.object(launcher,'process_start',return_value=start), \
-             patch.object(launcher.os,'kill',side_effect=ProcessLookupError), \
+        with patch.object(launcher.os,'kill',side_effect=ProcessLookupError if start is None else None), \
              patch.object(launcher.subprocess,'run',return_value=Mock(returncode=0,stdout=json.dumps(self.rows))):
             return launcher.fence(self.c)
 
@@ -61,6 +60,11 @@ class DispatcherContinuityTests(unittest.TestCase):
                 self.assertEqual(params,{'threadId':self.c['native_session_id'],'excludeTurns':True})
         self.assertNotIn('thread/start',[m for m,_ in rpc.calls])
 
+    def test_live_pid_with_mismatched_recorded_start_cannot_pass_fence(self):
+        with patch.object(launcher.os,'kill',return_value=None), \
+             patch.object(launcher.subprocess,'run',return_value=Mock(returncode=0,stdout=json.dumps(self.rows))):
+            with self.assertRaisesRegex(ValidationError,'remains active'):launcher.fence(self.c)
+
     def test_active_old_writer_and_unjoined_operation_reject_before_resume(self):
         with self.assertRaisesRegex(ValidationError,'remains active'):self.fence('old-start')
         for key in ('old_writer_joined','old_receiver_joined','external_operations_joined'):
@@ -70,7 +74,7 @@ class DispatcherContinuityTests(unittest.TestCase):
 
     def test_shared_backend_rejected_without_process_stop_or_native_calls(self):
         self.transition['old_writer_scope']='shared-backend';self.persist()
-        with patch.object(launcher,'process_start',side_effect=AssertionError('must not inspect process as cutover fence')), patch.object(launcher,'RPC') as rpc:
+        with patch.object(launcher.os,'kill',side_effect=AssertionError('must not inspect process as cutover fence')), patch.object(launcher,'RPC') as rpc:
             with self.assertRaisesRegex(ValidationError,'per-thread ownership fence'):launcher.fence(self.c)
             rpc.assert_not_called()
 

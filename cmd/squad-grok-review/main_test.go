@@ -262,3 +262,30 @@ func TestLocalConfigRequiresNeitherPRNorHostingCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestParseConfigSupportsExplicitRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.json")
+	if err := os.WriteFile(path, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	_, err := parseConfig([]string{"recover", "--from", "0123456789abcdef", "--config", path, "--repo", "owner/repo", "--pr", "9", "--mode", "required"}, &out)
+	if err != nil {
+		t.Fatalf("supported recovery operation rejected: %v", err)
+	}
+}
+
+func TestParseConfigRejectsRecoveryModeBypass(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.json")
+	if err := os.WriteFile(path, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"recover", "--from", "original", "--repo", "owner/repo", "--pr", "9", "--mode", "shadow"},
+		{"--from", "original", "--repo", "owner/repo", "--pr", "9", "--mode", "required"},
+	} {
+		if _, err := parseConfig(append(args, "--config", path), io.Discard); err == nil {
+			t.Fatal("unsupported recovery bypass accepted")
+		}
+	}
+}

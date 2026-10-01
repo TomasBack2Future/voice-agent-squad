@@ -5,6 +5,7 @@ This module grants no merge/deploy/closure authority and never acquires ENV.
 """
 from __future__ import annotations
 import json
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -15,7 +16,7 @@ OUTCOMES = ('working', 'pr-created', 'source-merged', 'staging-accepted', 'issue
 
 
 def trigger_lane(chain):
-    if not isinstance(chain, list):
+    if not isinstance(chain, list) or not chain:
         raise ValidationError('explicit verified trigger chain required')
     nodes = {node['id']: node for node in chain}
     if len(nodes) != len(chain):
@@ -72,6 +73,8 @@ def evaluate(snapshot, assignment, c):
     if phase not in PHASES or outcome not in OUTCOMES:
         raise ValidationError('explicit selected phase and distinct outcome required')
     lane = trigger_lane(snapshot.get('trigger_chain'))
+    if lane == 'source-only' and any(assignment['authorization'][p] for p in ('staging', 'production')):
+        raise ValidationError('environment assignment lacks deployment evidence; cannot infer source-only delivery')
     receipts = snapshot.get('outcome_receipts', {})
     required = list(OUTCOMES[1:OUTCOMES.index(outcome) + 1])
     if lane == 'source-only':
@@ -152,7 +155,20 @@ def evaluate(snapshot, assignment, c):
 def selected_readiness(assignment, c):
     path = c.get('delivery_readiness_file')
     if path:
-        result = evaluate(json.loads(Path(path).read_text()), assignment, c)
+        snapshot = json.loads(Path(path).read_text())
+        result = evaluate(snapshot, assignment, c)
+        selected = assignment.get('project_profile')
+        resources = {}
+        if selected:
+            profile = Path(selected['path'])
+            if not profile.is_absolute():
+                profile = Path(assignment['worktree']) / profile
+            resources = json.loads(profile.read_text()).get('resources', {})
+        project_environment = any(resources.get(p) for p in ('staging', 'production'))
+        if project_environment and result['lane'] == 'source-only':
+            raise ValidationError('environment project lacks deployment evidence; cannot infer source-only delivery')
+        if project_environment or any(assignment['authorization'][p] for p in ('staging', 'production')):
+            verify_workflow_inventory(snapshot, assignment)
         if not result['phase_gates'][result['selected_phase']]['ready']:
             raise ValidationError('selected phase blocked: ' + ','.join(result['phase_gates'][result['selected_phase']]['blockers']))
         return result
@@ -163,6 +179,37 @@ def selected_readiness(assignment, c):
     return {'lane': 'source-only', 'selected_phase': 'source', 'outcome': 'working',
             'environment_required_now': False, 'same_native_resume': c['native_session_id'],
             'staging': 'not-applicable', 'authority': 'assignment-source-only'}
+
+
+def verify_workflow_inventory(snapshot, assignment):
+    """Omission is not evidence: cover every tracked workflow at the exact head."""
+    worktree = Path(assignment['worktree']).resolve(strict=True)
+    result = subprocess.run(['git', '-C', str(worktree), 'ls-files', '-z', '--', '.github/workflows'],
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise ValidationError('current workflow inventory unavailable')
+    paths = {p for p in result.stdout.split('\0') if p.endswith(('.yml', '.yaml'))}
+    inventory = snapshot.get('workflow_inventory')
+    if not paths or not isinstance(inventory, list) or len(inventory) != len(paths):
+        raise ValidationError('complete current workflow inventory required')
+    declared = {entry.get('path'): entry for entry in inventory if isinstance(entry, dict)}
+    if set(declared) != paths:
+        raise ValidationError('workflow inventory omits or adds a workflow')
+    head = subprocess.run(['git', '-C', str(worktree), 'rev-parse', 'HEAD'],
+                          capture_output=True, text=True, timeout=10)
+    if head.returncode or head.stdout.strip() != snapshot.get('head_sha'):
+        raise ValidationError('workflow inventory revision is not the current source head')
+    covered = set()
+    for node in snapshot['trigger_chain']:
+        if node.get('workflow_path') not in paths or node['revision'] != snapshot['head_sha']:
+            raise ValidationError('trigger node lacks current workflow inventory evidence')
+        covered.add(node['workflow_path'])
+    if covered != paths:
+        raise ValidationError('trigger chain omits a current workflow')
+    for name, entry in declared.items():
+        path = worktree / name
+        if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('sha256'):
+            raise ValidationError('workflow content differs from verified trigger evidence')
 
 
 def verify_admission(assignment, c, env, readiness):

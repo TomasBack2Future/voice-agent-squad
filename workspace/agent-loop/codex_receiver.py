@@ -211,6 +211,7 @@ def supervise(argv, assignment, c, env, config_path, owner):
             previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
             try:
                 renewing = True
+                heartbeat_reported = False
                 receiver_reported = False
                 while True:
                     try:
@@ -219,9 +220,17 @@ def supervise(argv, assignment, c, env, config_path, owner):
                         if renewing and assignment:
                             try:
                                 heartbeat(assignment, c, env)
-                            except (OSError, ValueError, subprocess.SubprocessError):
+                                heartbeat_reported = False
+                            except (OSError, subprocess.SubprocessError):
+                                # Each command is bounded; retry only at the next
+                                # existing client-owned renewal interval. Never
+                                # reacquire or change the dispatch/claim fence.
+                                if not heartbeat_reported:
+                                    heartbeat_reported = True
+                                    print('Codex heartbeat temporarily unavailable; ownership not verified. Reconcile before protected writes. Renewal will be checked at the next client interval.', file=sys.stderr)
+                            except ValueError:
                                 renewing = False
-                                print('Codex heartbeat unavailable; preserve claims and reconcile. Client was not stopped.', file=sys.stderr)
+                                print('Codex heartbeat fence rejected; ownership not verified. Reconcile before protected writes. Client was not stopped.', file=sys.stderr)
                         if helper.poll() is not None and not receiver_reported:
                             receiver_reported = True
                             print('Codex receiver unavailable; events pending reconciliation. Native client remains running.', file=sys.stderr)

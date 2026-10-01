@@ -86,6 +86,21 @@ func NewReviewStatusWriter(dir, mode string, timeout time.Duration) (*ReviewStat
 	}, nil
 }
 
+// BindAttempt links observations to mandatory admission custody before the
+// first observation. A status file alone remains insufficient join authority.
+func (w *ReviewStatusWriter) BindAttempt(id string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.path != "" {
+		return fmt.Errorf("review status already started")
+	}
+	if raw, err := hex.DecodeString(id); err != nil || len(raw) != 8 {
+		return fmt.Errorf("invalid admitted review attempt")
+	}
+	w.attempt = id
+	return nil
+}
+
 func (w *ReviewStatusWriter) Observe(observation ReviewObservation) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
