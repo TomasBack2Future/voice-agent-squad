@@ -105,12 +105,12 @@ class CodexControlPlaneTests(unittest.TestCase):
 
     def test_preflight_joins_binding_ownership_and_live_runtime_before_ready(self):
         from types import SimpleNamespace
-        with patch.object(launcher,'check_profile'), patch.object(launcher,'resume_worktree'), \
+        with patch.object(launcher,'require_execution_fence'), patch.object(launcher,'check_profile'), patch.object(launcher,'resume_worktree'), \
              patch.object(launcher,'binding',return_value='bound'), patch.object(launcher,'check_heartbeat_runtime'), patch.object(launcher,'check_delivery_runtime'), \
              patch.object(launcher,'check_qualification',return_value={'version':'qualified'}), \
              patch.object(launcher,'server_identity',return_value=[1,2,3,4,5]), \
              patch.object(launcher,'RPC',return_value=self.rpc), \
-             patch.object(launcher.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps({'env_claim':None}))):
+             patch.object(launcher.subprocess,'run',side_effect=lambda argv,**kw: SimpleNamespace(returncode=0,stdout='--json --require-primary' if '--help' in argv else json.dumps({'env_claim':None}))):
             receipt=launcher.check_launch(self.a,self.path)
             self.assertEqual(receipt['binding'],'bound')
             self.assertEqual(receipt['delivery']['app'],'unavailable')
@@ -266,25 +266,39 @@ class CodexControlPlaneTests(unittest.TestCase):
         with patch.object(receiver,'process_start',return_value='process-incarnation'):
             self.assertFalse(receiver.alive(self.rc,path))
 
+    def test_transient_heartbeat_nonzero_is_retried_without_stopping_client(self):
+        self._transient_heartbeat(ValueError('SQLite temporarily unavailable'))
+
     def test_transient_heartbeat_timeout_is_retried_without_stopping_client(self):
+        self._transient_heartbeat(subprocess.TimeoutExpired('heartbeat',10))
+
+    def _transient_heartbeat(self, failure):
         child=Mock(pid=os.getpid())
         child.__enter__=Mock(return_value=child);child.__exit__=Mock(return_value=False)
         child.wait.side_effect=[subprocess.TimeoutExpired('client',30),subprocess.TimeoutExpired('client',30),0]
         helper=Mock()
         helper.__enter__=Mock(return_value=helper);helper.__exit__=Mock(return_value=False)
         helper.poll.return_value=None
-        with patch.object(receiver.subprocess,'Popen',side_effect=[child,helper]), \
+        with patch.object(receiver,'require_execution_fence'), patch.object(receiver.subprocess,'Popen',side_effect=[child,helper]), \
              patch.object(receiver,'process_start',return_value='start'), \
-             patch.object(receiver,'heartbeat',side_effect=[subprocess.TimeoutExpired('heartbeat',10),None]) as renew:
+             patch.object(receiver,'heartbeat',side_effect=[failure,None]) as renew:
             self.assertEqual(receiver.supervise(['client'],self.a,self.c,{},self.path,[1,2,3,4,5]),0)
             self.assertEqual(renew.call_count,2)
             child.terminate.assert_not_called();child.kill.assert_not_called()
             helper.terminate.assert_called_once()
 
+    def test_unqualified_execution_fence_blocks_worker_before_native_or_client_calls(self):
+        with patch.object(receiver.subprocess,'Popen') as popen, patch.object(receiver,'RPC') as rpc:
+            with self.assertRaisesRegex(ValidationError,'execution fence unavailable'):
+                receiver.supervise(['client'],self.a,self.c,{},self.path,[1,2,3,4,5])
+            with self.assertRaisesRegex(ValidationError,'execution fence unavailable'):
+                receiver.run(self.write_receiver(self.rc))
+            popen.assert_not_called();rpc.assert_not_called()
+
     def test_receiver_never_uses_paused_or_old_target_timer_fallback(self):
         c = dict(self.rc,endpoint='unix:///missing-old-target')
         receipt=dict(type='worker-terminal-delivery-v1',recipient='worker',delivery_session='one',events=[self.event])
-        with patch.object(receiver,'check_qualification'), patch.object(receiver,'listen',return_value=receipt), \
+        with patch.object(receiver,'require_execution_fence'), patch.object(receiver,'check_qualification'), patch.object(receiver,'listen',return_value=receipt), \
              patch.object(receiver,'alive',return_value=True), \
              patch.object(receiver,'server_identity',return_value=[9,9,9,9,9]), \
              patch.object(receiver,'RPC') as rpc, \

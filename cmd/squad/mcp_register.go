@@ -73,14 +73,16 @@ func attDirOf(repoRoot string) string   { return filepath.Join(repoRoot, ".squad
 func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
 	srv.Register(mcp.Tool{
 		Name: "squad_heartbeat", Description: "Renew owned active claims under the exact dispatched Worker generation; does not consume messages.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_id":{"type":"string"},"reservation":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1},"check":{"type":"boolean"}},"required":["reservation","worker_session","generation"],"additionalProperties":false}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_id":{"type":"string"},"reservation":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1},"check":{"type":"boolean"},"json":{"type":"boolean"},"require_primary":{"type":"boolean"}},"required":["reservation","worker_session","generation"],"additionalProperties":false}`),
 		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var a struct {
-				Agent       string `json:"agent_id"`
-				Reservation string `json:"reservation"`
-				Session     string `json:"worker_session"`
-				Generation  int64  `json:"generation"`
-				Check       bool   `json:"check"`
+				Agent          string `json:"agent_id"`
+				Reservation    string `json:"reservation"`
+				Session        string `json:"worker_session"`
+				Generation     int64  `json:"generation"`
+				Check          bool   `json:"check"`
+				JSON           bool   `json:"json"`
+				RequirePrimary bool   `json:"require_primary"`
 			}
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
@@ -92,7 +94,10 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 			if err != nil {
 				return nil, err
 			}
-			err = claims.New(db, repoID, nil).WorkerHeartbeat(ctx, agent, a.Reservation, a.Session, a.Generation, a.Check)
+			err = claims.New(db, repoID, nil).WorkerHeartbeat(ctx, agent, a.Reservation, a.Session, a.Generation, a.Check, a.RequirePrimary)
+			if a.JSON {
+				return heartbeatReceipt(err, agent, a.Reservation, a.Session, a.Generation, a.Check, a.RequirePrimary), nil
+			}
 			return map[string]bool{"ok": err == nil}, err
 		},
 	})

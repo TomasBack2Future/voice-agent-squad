@@ -15,7 +15,7 @@ import uuid
 
 from codex_rpc import RPC
 from codex_worker_launcher import child_environment, check_qualification, live_target, save, server_identity
-from claude_worker_launcher import heartbeat
+from codex_heartbeat import heartbeat, CustodyRejected, require_execution_fence
 from validate_context_package import ROOT, ValidationError, validate_file
 
 EVENT = re.compile(r'worker-terminal-v1/([A-Za-z0-9_-]+)/([1-9][0-9]*)/([A-Za-z0-9_-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed)/([1-9][0-9]*)\Z')
@@ -151,6 +151,8 @@ def run(path):
     c = validate_file(Path(path), ROOT / 'schemas/codex-receiver.schema.json')
     if c['client'] != 'cli':
         raise ValidationError('Codex App receiver unavailable')
+    if c['role'] == 'worker':
+        require_execution_fence(c)
     check_qualification(c)
     if not 1 <= c['max_seconds'] <= 82800:
         raise ValidationError('receiver lifetime must be bounded by selected client')
@@ -195,6 +197,8 @@ def run(path):
 def supervise(argv, assignment, c, env, config_path, owner):
     # Existing native server is not a new daemon owned by this helper. Only the
     # bounded receiver/heartbeat follow this selected CLI process's lifetime.
+    if assignment:
+        require_execution_fence(c)
     state = Path(c['state_directory'])
     path = state / (c['native_session_id'] + '.receiver.json')
     with subprocess.Popen(argv, cwd=assignment['worktree'] if assignment else c['worktree'], env=env) as child:
@@ -221,16 +225,17 @@ def supervise(argv, assignment, c, env, config_path, owner):
                             try:
                                 heartbeat(assignment, c, env)
                                 heartbeat_reported = False
-                            except (OSError, subprocess.SubprocessError):
+                            except CustodyRejected:
+                                renewing = False
+                                save(path, dict(receiver, custody='rejected', execution='unavailable-native-write-fence'))
+                                print('Verified custody rejection. Adoption requires a qualified execution fence; no claim reacquired.', file=sys.stderr)
+                            except (OSError, ValueError, subprocess.SubprocessError):
                                 # Each command is bounded; retry only at the next
                                 # existing client-owned renewal interval. Never
                                 # reacquire or change the dispatch/claim fence.
                                 if not heartbeat_reported:
                                     heartbeat_reported = True
                                     print('Codex heartbeat temporarily unavailable; ownership not verified. Reconcile before protected writes. Renewal will be checked at the next client interval.', file=sys.stderr)
-                            except ValueError:
-                                renewing = False
-                                print('Codex heartbeat fence rejected; ownership not verified. Reconcile before protected writes. Client was not stopped.', file=sys.stderr)
                         if helper.poll() is not None and not receiver_reported:
                             receiver_reported = True
                             print('Codex receiver unavailable; events pending reconciliation. Native client remains running.', file=sys.stderr)

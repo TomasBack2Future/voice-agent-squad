@@ -2,6 +2,7 @@ package claims
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -88,5 +89,48 @@ func TestWaitRenewsMainClaimPastHour(t *testing.T) {
 	}
 	if got != s.nowUnix() {
 		t.Fatalf("waiting did not renew main: %d", got)
+	}
+}
+
+func TestWorkerHeartbeatDistinguishesDatabaseFailureFromVerifiedCustodyLoss(t *testing.T) {
+	s, db := newTestStore(t)
+	ctx := context.Background()
+	if err := s.WorkerHeartbeat(ctx, "agent-a", "missing", "native", 1, true, true); !errors.Is(err, ErrWorkerFenceRejected) {
+		t.Fatalf("missing dispatch not classified: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := s.WorkerHeartbeat(ctx, "agent-a", "missing", "native", 1, true, true)
+	if err == nil || errors.Is(err, ErrWorkerFenceRejected) {
+		t.Fatalf("database outage invented custody loss: %v", err)
+	}
+}
+
+func TestWorkerHeartbeatStrictPrimaryRejectsReleasedAndRecoveringCustody(t *testing.T) {
+	s, db := newTestStore(t)
+	ctx := context.Background()
+	start := s.nowUnix()
+	_, err := db.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,canonical_item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id) VALUES('repo-test','D-1','BUG-1','test#1','dispatcher',?,?,?,'dispatched',1,'session-1')`, start, start, start+3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.WorkerHeartbeat(ctx, "agent-a", "D-1", "session-1", 1, true); err != nil {
+		t.Fatalf("legacy fence-only check changed: %v", err)
+	}
+	if err = s.WorkerHeartbeat(ctx, "agent-a", "D-1", "session-1", 1, true, true); !errors.Is(err, ErrWorkerFenceRejected) {
+		t.Fatalf("missing primary accepted: %v", err)
+	}
+	if err = s.Claim(ctx, "BUG-1", "agent-a", "", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.WorkerHeartbeat(ctx, "agent-a", "D-1", "session-1", 1, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE claims SET state='recovering' WHERE item_id='BUG-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.WorkerHeartbeat(ctx, "agent-a", "D-1", "session-1", 1, false, true); !errors.Is(err, ErrWorkerFenceRejected) {
+		t.Fatalf("recovering primary accepted: %v", err)
 	}
 }

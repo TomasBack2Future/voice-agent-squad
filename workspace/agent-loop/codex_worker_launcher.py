@@ -15,7 +15,8 @@ import uuid
 from codex_rpc import RPC
 from validate_context_package import ROOT, ValidationError, validate_file
 from worker_preflight import check_profile, check_worktree, git, repository_name
-from claude_worker_launcher import IDENTITY_ENV, binding, check_heartbeat_runtime, heartbeat
+from claude_worker_launcher import IDENTITY_ENV, binding, check_heartbeat_runtime
+from codex_heartbeat import heartbeat, require_execution_fence
 from delivery_readiness import selected_readiness, verify_admission
 from human_authorization import authorization, prompt_context
 
@@ -163,6 +164,10 @@ def check_launch(assignment, config_path):
         raise ValidationError('exact native reservation binding required before Codex resume')
     verify_admission(assignment, c, env, delivery)
     check_heartbeat_runtime(c, env)
+    capability = subprocess.run([c['coordination_executable'], 'heartbeat', '--help'],
+                                cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+    if capability.returncode or '--json' not in capability.stdout or '--require-primary' not in capability.stdout:
+        raise ValidationError('Structured exact-primary heartbeat runtime unavailable; reviewed install required')
     check_delivery_runtime(c, env)
     result = subprocess.run([c['coordination_executable'], 'claim-inspect', assignment['item']],
                             cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
@@ -188,6 +193,7 @@ def check_launch(assignment, config_path):
         protected = json.loads(result.stdout)['env_claim']
         if not protected or protected.get('holder') != c['agent_id'] or protected.get('state') != 'held':
             raise ValidationError('auto-deploy merge requires current protected environment ownership')
+    require_execution_fence(c)
     binary = check_qualification(c)
     owner = server_identity(c)
     with RPC(c['endpoint']) as rpc:

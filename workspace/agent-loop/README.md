@@ -382,8 +382,10 @@ already-attempted tuples reconcile instead of sampling again. See the
 
 ## Qualified Codex control plane
 
-Assigned Codex Workers use `codex_worker_launcher.py`, not the standalone
-provider-selection helper. `schemas/codex-launch.schema.json` is a separate
+The maintained Codex Worker adapter is `codex_worker_launcher.py`, not the
+standalone provider-selection helper. Current Worker adoption remains unavailable
+at the claim-loss execution-fence boundary below.
+`schemas/codex-launch.schema.json` is a separate
 launch config: exact native UUID, actor and Dispatcher, absolute executables,
 selected model/provider/effort, approval policy **and** approval reviewer,
 sandbox, ledger, prompt, private state directory, and an explicit owning local
@@ -436,9 +438,25 @@ new operations or permission to overwrite unrelated edits.
 
 The launcher supervises only its selected CLI and bounded receiver/heartbeat.
 A transient heartbeat timeout/transport failure retries on the existing 30-second
-client interval, each command bounded to ten seconds. A rejected ownership fence
-stops renewal and requires reconciliation before protected writes. Neither case
-kills the native client or reacquires claims.
+client interval, each command bounded to ten seconds. Plain CLI nonzero/ValueError
+failures also remain retryable; stderr cannot
+classify custody loss. Only a matching `squad.worker-heartbeat.v1` atomic negative
+receipt confirms rejection, including released/recovering primary claims.
+
+**Worker adoption is currently blocked before client or receiver creation:**
+Codex 0.159.2 has no qualified persistent claim-loss execution fence in this
+adapter. A warning, stopping renewal or interrupting one turn cannot prevent
+future protected writes after confirmed or long-lived unknown custody.
+`thread/unsubscribe` detaches a subscriber; `increment_elicitation` pauses timeout
+accounting and leaves direct input enabled, not execution. A new empty read-only
+isolated probe verified that counter behavior without a model/tool call. No
+permission downgrade, process kill or timer fallback establishes this capability.
+The Codex runtime/adapter owner must qualify a supported execution suspension
+that preserves external operations and exact policy, blocks future writes until
+normal custody revalidation, and has an explicit fenced recovery. Until then
+preflight, direct supervisor start and Worker receiver attach all fail closed.
+This boundary does not stop existing installed clients or change their policy;
+source capability, reviewed installation and safe adoption remain distinct.
 `codex_receiver.py` also supports a Dispatcher-role config owned by that selected
 native client's PID, with the same qualified binary/selection/endpoint, live
 worktree identity, server incarnation, fresh receiver incarnation and bounded

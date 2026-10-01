@@ -350,6 +350,16 @@ are excluded. The launcher checks command availability before reporting ready,
 and verifies the bound fence before starting the client. A stale fence fails;
 it is not retried as contention. MCP exposes the same operation as `squad_heartbeat`.
 
+For machine custody decisions use `--json --require-primary`. The
+`squad.worker-heartbeat.v1` receipt binds agent/reservation/generation/native
+and distinguishes `renewed`/`verified`, a verified atomic `custody-rejected`,
+and `unavailable`. Database/CLI transport failures are unavailable, never
+inferred ownership rejection from stderr. Exact-primary mode requires the
+canonical claim to remain held, excluding missing/released/recovering custody.
+Legacy fence-only behavior is unchanged. MCP `squad_heartbeat` accepts matching
+`json` and `require_primary` options; structured outcomes must be inspected,
+including negative/unavailable outcomes, rather than treated as approval.
+
 ### `squad tick`
 
 Renew held claims for the acting agent, show new messages since last tick and advance the read cursor. Diagnostic-only in normal operation — chat is delivered continuously via the `Stop` listen + post-tool-flush + user-prompt-tick hooks. Reach for `squad tick` when you suspect a hook miss or want to advance the cursor explicitly.
