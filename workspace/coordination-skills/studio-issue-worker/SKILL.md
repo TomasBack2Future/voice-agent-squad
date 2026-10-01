@@ -43,6 +43,10 @@ callback into cmux terminal input. Without a safe wakeup channel, record pending
 reconciliation; ledger messages alone do not wake its task. Never treat callback
 delivery as acceptance or proven Worker termination.
 
+For flow audits, startup skill binding, user pauses and release-repair routing,
+read [role-bound flow repair](../squad-dispatcher/references/flow-retrospective.md). Preserve the assigned role;
+process optimization does not assign product implementation.
+
 ## Design handoff
 
 For new Dispatcher assignments, read the canonical Issue's design section and
