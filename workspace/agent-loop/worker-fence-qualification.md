@@ -129,6 +129,23 @@ it, rejects partial/malformed/oversized data and never approves host tools.
 A transport failure retains the original child handle and marks uncertainty.
 It does not terminate a host, join provider work or admit a new sample.
 
+Startup acquisition also binds the exact child to its adapter under that lock.
+If pipe setup, initialize or initialized-notification fails after acquisition,
+`OwnedStdioStartupError` carries the original adapter as `error.owner`. Original
+`KeyboardInterrupt` and `SystemExit` propagate unchanged with that same `owner`
+attribute, including interruption immediately after lease publication. Rejection
+before acquisition provides no authority to close another wrapper's child.
+
+A failed adapter forbids **all** protocol IO/readiness/handshake retry. Retain
+`error.owner` for original-parent/IO-thread bounded `close(timeout=...)` at the
+permitted cleanup boundary. Pure custody metadata remains usable. Close verifies
+its original pipe handles; it never closes substituted descriptors. Timeout or
+interrupted cleanup retains this same handle and lease for another bounded join,
+without killing, reinitializing or creating a wrapper. Only actual child wait and
+local pipe cleanup release the registry; this does not prove provider termination.
+The caller still owns its original `Popen` before acquisition, even when config
+or ownership admission rejects the adapter.
+
 `check_owned_stdio(config, rpc, rpc.identity(), worktree)` rechecks the historical
 contract, live child identity, **already loaded** native, cwd, current model,
 effort and effective policy/Fast tier without selection overrides. It never

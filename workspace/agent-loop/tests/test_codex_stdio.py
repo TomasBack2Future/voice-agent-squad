@@ -155,7 +155,7 @@ class OwnedPipeTests(unittest.TestCase):
                 except subprocess.TimeoutExpired:p.terminate();p.wait(timeout=2)
             for pipe in (p.stdin,p.stdout,p.stderr):
                 if not pipe.closed:pipe.close()
-            OwnedStdioRPC._owners.discard(p)
+            OwnedStdioRPC._owners.pop(p,None)
         self.addCleanup(cleanup);return p
     def test_loaded_selection_acceptance_idempotent_journal_and_actual_child_join(self):
         p=self.child();rpc=OwnedStdioRPC(p,self.c);owner=rpc.identity()
@@ -225,7 +225,7 @@ class OwnedPipeTests(unittest.TestCase):
         self.assertFalse(rpc.queue_uncertain);self.assertEqual(json.loads(path.read_text())['transient']['state'],'accepted');rpc.close()
     def test_owner_registration_is_atomic_before_any_pipe_io(self):
         gate=threading.Event();lock=threading.Lock()
-        class PausingSet(set):
+        class PausingSet(dict):
             checks=0
             def __contains__(self,value):
                 present=super().__contains__(value)
@@ -245,6 +245,120 @@ class OwnedPipeTests(unittest.TestCase):
             for t in threads:t.join(2)
             self.assertFalse(any(t.is_alive() for t in threads))
             self.assertEqual(len(objects),1);self.assertEqual(errors,[True])
+    def test_initialize_failure_retains_public_original_owner_for_bounded_join(self):
+        script=HOST.replace("if m=='initialize':r={}", "if m=='initialize':\n  print(json.dumps({'id':q['id'],'error':{'message':'synthetic initialize failure'}}),flush=True);continue")
+        child=self.child(script)
+        with self.assertRaises(ValidationError) as failed:OwnedStdioRPC(child,self.c)
+        owner=getattr(failed.exception,'owner',None)
+        self.assertIsNotNone(owner,'failed acquisition must retain public original join custody')
+        self.assertIs(owner.child,child)
+        self.assertIn(child,OwnedStdioRPC._owners)
+        with self.assertRaises(ValidationError):OwnedStdioRPC(child,self.c)
+        with self.assertRaises(ValidationError):owner.call('thread/loaded/list',{})
+        self.assertEqual(owner.close()['joined_exit'],0)
+        self.assertNotIn(child,OwnedStdioRPC._owners)
+
+    def test_rejection_before_acquisition_exposes_no_foreign_cleanup_authority(self):
+        for invalid in (None,[],{},object()):
+            with self.subTest(child_type=type(invalid).__name__):
+                with self.assertRaises(ValidationError) as failed:OwnedStdioRPC(invalid,self.c)
+                self.assertFalse(hasattr(failed.exception,'owner'))
+        child=self.child();owner=OwnedStdioRPC(child,self.c)
+        with self.assertRaises(ValidationError) as duplicate:OwnedStdioRPC(child,self.c)
+        self.assertFalse(hasattr(duplicate.exception,'owner'))
+        self.assertIs(OwnedStdioRPC._owners.get(child),owner)
+        self.assertEqual(owner.close()['joined_exit'],0)
+
+    def test_all_post_acquisition_startup_failures_retain_join_only_owner(self):
+        original_call=OwnedStdioRPC.call;original_send=OwnedStdioRPC.send
+        def short_call(rpc,method,params,**kwargs):
+            return original_call(rpc,method,params,timeout=.03,**kwargs)
+        def fail_initialized(rpc,value):
+            if value.get('method')=='initialized':raise OSError('private startup detail')
+            return original_send(rpc,value)
+        scripts={
+            'malformed':HOST.replace("if m=='initialize':r={}", "if m=='initialize':\n  sys.stdout.write('{bad\\n');sys.stdout.flush();continue"),
+            'truncated':HOST.replace("if m=='initialize':r={}", "if m=='initialize':\n  sys.stdout.write('{');sys.stdout.flush();continue"),
+            'timeout':HOST.replace("if m=='initialize':r={}", "if m=='initialize':continue")}
+        for failure in ('malformed','truncated','timeout','set-blocking','initialized'):
+            with self.subTest(failure=failure):
+                child=self.child(scripts.get(failure,HOST))
+                from contextlib import ExitStack
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(OwnedStdioRPC,'call',short_call))
+                    if failure=='set-blocking':stack.enter_context(patch('codex_rpc.os.set_blocking',side_effect=OSError('private startup detail')))
+                    if failure=='initialized':stack.enter_context(patch.object(OwnedStdioRPC,'send',fail_initialized))
+                    with self.assertRaises(ValidationError) as failed:OwnedStdioRPC(child,self.c)
+                owner=failed.exception.owner
+                self.assertIs(OwnedStdioRPC._owners.get(child),owner)
+                self.assertTrue(owner.startup_failed);self.assertNotIn('private',str(failed.exception))
+                for method,params in [('initialize',{}),('thread/loaded/list',{}),
+                        ('thread/resume',{'threadId':self.c['native_session_id'],'excludeTurns':True}),
+                        ('thread/queue/add',{'threadId':self.c['native_session_id']})]:
+                    with self.assertRaises(ValidationError):owner.call(method,params)
+                with self.assertRaises(ValidationError):owner.send({'method':'initialized'})
+                with self.assertRaises(ValidationError):launcher.check_owned_stdio(self.c,owner,owner.identity(),self.root)
+                self.assertEqual(owner.close()['joined_exit'],0)
+                self.assertNotIn(child,OwnedStdioRPC._owners)
+
+    def test_interrupt_at_atomic_lease_publication_preserves_original_exception_and_owner(self):
+        for interruption in (KeyboardInterrupt(),SystemExit(5)):
+            with self.subTest(interruption=type(interruption).__name__):
+                class InterruptedRegistry(dict):
+                    def __setitem__(self,key,value):
+                        super().__setitem__(key,value)
+                        raise interruption
+                registry=InterruptedRegistry();child=self.child()
+                with patch.object(OwnedStdioRPC,'_owners',registry):
+                    with self.assertRaises(type(interruption)) as failed:OwnedStdioRPC(child,self.c)
+                    self.assertIs(failed.exception,interruption)
+                    owner=failed.exception.owner;self.assertIs(registry.get(child),owner)
+                    self.assertTrue(owner.startup_failed)
+                    self.assertEqual(owner.close()['joined_exit'],0);self.assertNotIn(child,registry)
+
+    def test_failed_startup_join_timeout_interruption_wrong_owner_and_pipes_retain_custody(self):
+        child=self.child()
+        with patch('codex_rpc.os.set_blocking',side_effect=OSError('synthetic setup failure')):
+            with self.assertRaises(ValidationError) as failed:OwnedStdioRPC(child,self.c)
+        owner=failed.exception.owner
+        with patch('codex_rpc.os.getpid',return_value=owner.owner_pid+1):
+            with self.assertRaises(ValidationError):owner.close()
+        failures=[]
+        def wrong_thread():
+            try:owner.close()
+            except ValidationError:failures.append(True)
+        thread=threading.Thread(target=wrong_thread);thread.start();thread.join();self.assertEqual(failures,[True])
+        with self.assertRaises(ValidationError) as rejected:OwnedStdioRPC(child,self.c)
+        self.assertFalse(hasattr(rejected.exception,'owner'))
+        original=child.stdin;foreign=self.root/'foreign-pipe'
+        with foreign.open('wb') as unrelated:
+            child.stdin=unrelated
+            with self.assertRaisesRegex(ValidationError,'pipes changed'):owner.close()
+            self.assertFalse(unrelated.closed);child.stdin=original
+        for outcome in (subprocess.TimeoutExpired(child.args,.01),KeyboardInterrupt()):
+            with patch.object(child,'wait',side_effect=outcome),patch.object(child,'terminate') as terminate,patch.object(child,'kill') as kill:
+                with self.assertRaises(type(outcome) if isinstance(outcome,KeyboardInterrupt) else ValidationError):owner.close(timeout=.01)
+                terminate.assert_not_called();kill.assert_not_called()
+                self.assertIs(OwnedStdioRPC._owners.get(child),owner);self.assertFalse(owner.closed)
+        self.assertEqual(owner.close()['joined_exit'],0)
+        self.assertTrue(all(pipe.closed for pipe in owner._pipes));self.assertNotIn(child,OwnedStdioRPC._owners)
+
+    def test_failed_startup_cleanup_rejects_reused_descriptor_before_closing_pipes(self):
+        import os
+        child=self.child()
+        with patch('codex_rpc.os.set_blocking',side_effect=OSError('synthetic setup failure')):
+            with self.assertRaises(ValidationError) as failed:OwnedStdioRPC(child,self.c)
+        owner=failed.exception.owner;descriptor=child.stderr.fileno();original=os.dup(descriptor)
+        try:
+            with (self.root/'unrelated').open('wb') as unrelated:
+                os.dup2(unrelated.fileno(),descriptor)
+                with self.assertRaisesRegex(ValidationError,'pipes changed'):owner.close()
+                self.assertFalse(child.stdin.closed)
+                self.assertIs(OwnedStdioRPC._owners.get(child),owner)
+        finally:
+            os.dup2(original,descriptor);os.close(original)
+        self.assertEqual(owner.close()['joined_exit'],0)
+
     def test_join_timeout_retains_original_handle_and_owner_without_kill(self):
         p=self.child();rpc=OwnedStdioRPC(p,self.c)
         with patch.object(p,'wait',side_effect=subprocess.TimeoutExpired(p.args,.01)), \

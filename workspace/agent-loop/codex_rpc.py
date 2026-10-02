@@ -158,9 +158,16 @@ class RPC:
         raise ValidationError('native RPC deadline expired; delivery uncertain')
 
 
+class OwnedStdioStartupError(ValidationError):
+    """Sanitized failure with the acquired original adapter's cleanup custody."""
+    def __init__(self, owner):
+        super().__init__('owned stdio startup failed; retain original owner for bounded join')
+        self.owner = owner
+
+
 class OwnedStdioRPC(RPC):
     """Single parent/thread owns this child and all JSONL pipe IO; never attaches."""
-    _owners = set()
+    _owners = {}
     _owners_lock = threading.Lock()
 
     def __init__(self, child, config):
@@ -169,41 +176,57 @@ class OwnedStdioRPC(RPC):
         import uuid
         from codex_worker_launcher import check_qualification
         check_qualification(config)  # Historical contract does not admit a live native.
-        with self._owners_lock:
-            if (not isinstance(child, subprocess.Popen) or child.poll() is not None
-                    or child.stdin is None or child.stdout is None or child.stderr is None
-                    or child in self._owners):
-                raise ValidationError('exclusive live owned stdio child required')
-            argv = child.args
-            if (not isinstance(argv, list) or not argv or argv[0] != config['client_executable']
-                    or argv[-3:] != ['app-server', '--listen', 'stdio://']):
-                raise ValidationError('stdio child executable/transport owner mismatch')
-            self.child = child
-            self.owner_pid = os.getpid()
-            self.owner_thread = threading.get_ident()
-            self.incarnation = str(uuid.uuid4())
-            self.pipe_identity = [os.fstat(pipe.fileno()) for pipe in (child.stdin, child.stdout, child.stderr)]
-            self.pipe_identity = [(info.st_dev, info.st_ino) for info in self.pipe_identity]
-            self.config = dict(config)
-            self.sequence = 0
-            self.notifications = []
-            self.buffer = b''
-            self.stderr_open = True
-            self.reply_bytes = 0
-            self.stderr_bytes = 0
-            self.stderr_sha = hashlib.sha256()
-            self.uncertain = False
-            self.closed = False
-            self.native_ready = False
-            self.queue_uncertain = False
-            self.pending_queue = None
-            self._owners.add(child)
-        for pipe in (child.stdin, child.stdout, child.stderr):
-            os.set_blocking(pipe.fileno(), False)
-        # Only this exclusive owner initializes and reads this connection.
-        self.call('initialize', {'clientInfo': {'name': 'squad_owned_stdio', 'version': '1'},
-                                'capabilities': {'experimentalApi': True}})
-        self.send({'method': 'initialized'})
+        try:
+            with self._owners_lock:
+                if (not isinstance(child, subprocess.Popen) or child.poll() is not None
+                        or child.stdin is None or child.stdout is None or child.stderr is None
+                        or child in self._owners):
+                    raise ValidationError('exclusive live owned stdio child required')
+                argv = child.args
+                if (not isinstance(argv, list) or not argv or argv[0] != config['client_executable']
+                        or argv[-3:] != ['app-server', '--listen', 'stdio://']):
+                    raise ValidationError('stdio child executable/transport owner mismatch')
+                self.child = child
+                self.owner_pid = os.getpid()
+                self.owner_thread = threading.get_ident()
+                self.incarnation = str(uuid.uuid4())
+                self._pipes = (child.stdin, child.stdout, child.stderr)
+                self.pipe_identity = [os.fstat(pipe.fileno()) for pipe in self._pipes]
+                self.pipe_identity = [(info.st_dev, info.st_ino) for info in self.pipe_identity]
+                self.config = dict(config)
+                self.sequence = 0
+                self.notifications = []
+                self.buffer = b''
+                self.stderr_open = True
+                self.reply_bytes = 0
+                self.stderr_bytes = 0
+                self.stderr_sha = hashlib.sha256()
+                self.uncertain = False
+                self.closed = False
+                self.native_ready = False
+                self.queue_uncertain = False
+                self.pending_queue = None
+                self.startup_failed = False
+                self._owners[child] = self
+            for pipe in (child.stdin, child.stdout, child.stderr):
+                os.set_blocking(pipe.fileno(), False)
+            # Only this exclusive owner initializes and reads this connection.
+            self.call('initialize', {'clientInfo': {'name': 'squad_owned_stdio', 'version': '1'},
+                                    'capabilities': {'experimentalApi': True}})
+            self.send({'method': 'initialized'})
+        except BaseException as error:
+            # Check the actual atomic publication, including an interruption
+            # immediately after it. Never borrow a different wrapper's lease.
+            with self._owners_lock:
+                acquired = isinstance(child, subprocess.Popen) and self._owners.get(child) is self
+            if not acquired:
+                raise
+            self.startup_failed = True
+            self.uncertain = True
+            if isinstance(error, Exception):
+                raise OwnedStdioStartupError(self) from None
+            error.owner = self  # Preserve KeyboardInterrupt/SystemExit semantics.
+            raise
 
     def identity(self):
         return {'parent_pid': self.owner_pid, 'child_pid': self.child.pid,
@@ -211,8 +234,8 @@ class OwnedStdioRPC(RPC):
 
     def check_owner(self, identity=None):
         import threading
-        if (self.closed or os.getpid() != self.owner_pid or threading.get_ident() != self.owner_thread
-                or self.child not in self._owners or self.child.poll() is not None):
+        if (self.startup_failed or self.closed or os.getpid() != self.owner_pid or threading.get_ident() != self.owner_thread
+                or self._owners.get(self.child) is not self or self.child.poll() is not None):
             raise ValidationError('owned stdio child lifetime/IO owner changed')
         pipes = [(os.fstat(p.fileno()).st_dev, os.fstat(p.fileno()).st_ino)
                  for p in (self.child.stdin, self.child.stdout, self.child.stderr)]
@@ -347,6 +370,20 @@ class OwnedStdioRPC(RPC):
         import threading
         if os.getpid() != self.owner_pid or threading.get_ident() != self.owner_thread:
             raise ValidationError('only original stdio parent may join child')
+        if not self.closed and self._owners.get(self.child) is not self:
+            raise ValidationError('original stdio cleanup lease unavailable')
+        if any(current is not original for current, original in zip(
+                (self.child.stdin, self.child.stdout, self.child.stderr), self._pipes)):
+            raise ValidationError('original stdio cleanup pipes changed; retain custody')
+        for pipe, expected in zip(self._pipes, self.pipe_identity):
+            if pipe.closed:
+                continue
+            try:
+                info = os.fstat(pipe.fileno())
+            except (OSError, ValueError):
+                raise ValidationError('original stdio cleanup pipes changed; retain custody') from None
+            if (info.st_dev, info.st_ino) != expected:
+                raise ValidationError('original stdio cleanup pipes changed; retain custody')
         if not self.child.stdin.closed:
             self.child.stdin.close()
         import subprocess
@@ -358,7 +395,8 @@ class OwnedStdioRPC(RPC):
             pipe.close()
         self.closed = True
         with self._owners_lock:
-            self._owners.discard(self.child)
+            if self._owners.get(self.child) is self:
+                self._owners.pop(self.child)
         return {'child_pid': self.child.pid, 'incarnation': self.incarnation,
                 'joined_exit': exit_code, 'observed_stderr_bytes': self.stderr_bytes,
                 'observed_stderr_sha256': self.stderr_sha.hexdigest(),
