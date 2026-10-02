@@ -274,3 +274,30 @@ func TestSamplingCustodyFailurePreventsAnyPublication(t *testing.T) {
 		t.Fatal("publication before joined-sampling checkpoint", github.published)
 	}
 }
+
+func TestCompletedVerdictSealedBeforeBodyMutation(t *testing.T) {
+	a := openTestAdmission(t, t.TempDir(), "", admissionSettings())
+	snapshot := PullRequestSnapshot{Repository: "owner/repo", Number: 9, BaseRef: "main", BaseSHA: "base", HeadSHA: "head", Title: "fix", Description: "frozen body\n", Diff: "+fixed"}
+	github := &fakePullRequestGateway{snapshot: snapshot, current: snapshot}
+	model := &fakeModelReviewer{result: approvedFindings(), afterReview: func() { github.snapshot.Description = "mutated body" }}
+	service, err := NewLocalReviewService(model, github, "core", "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetAdmission(a)
+	report, err := service.ReviewPullRequest(context.Background(), "token", "grok-review", "owner/repo", 9)
+	if err == nil || report.FailureStage != "identity" || model.calls != 1 || github.published != 0 {
+		t.Fatalf("stale publication escaped: %#v %v", report, err)
+	}
+	stored, err := a.load(context.Background(), a.AttemptID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.SamplingCompleted {
+		t.Fatal("validated completed sampling discarded before identity check")
+	}
+	var seals int
+	if err := a.db.QueryRow("SELECT count(*) FROM review_completion_seals WHERE attempt=?", a.AttemptID()).Scan(&seals); err != nil || seals != 1 {
+		t.Fatal("validated result not durably sealed", err)
+	}
+}

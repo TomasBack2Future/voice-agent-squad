@@ -20,35 +20,38 @@ import (
 )
 
 type config struct {
-	provider          string
-	repositoryHost    string
-	cloneLayout       string
-	worktree          string
-	baseSHA           string
-	descriptionFile   string
-	configPath        string
-	doctor            bool
-	reconcile         bool
-	recovery          bool
-	prospective       bool
-	recoveryFrom      string
-	admissionDir      string
-	repository        string
-	pullRequest       int
-	checkName         string
-	appID             int64
-	installationID    int64
-	appPrivateKey     string
-	grokBinary        string
-	githubBinary      string
-	grokHome          string
-	model             string
-	reasoningEffort   string
-	mode              string
-	statusDir         string
-	timeout           time.Duration
-	maxGitHubOutput   int
-	maxReviewerOutput int
+	provider               string
+	repositoryHost         string
+	cloneLayout            string
+	worktree               string
+	baseSHA                string
+	descriptionFile        string
+	configPath             string
+	doctor                 bool
+	reconcile              bool
+	recovery               bool
+	prospective            bool
+	completion             bool
+	completionCustodyPath  string
+	completionEvidencePath string
+	recoveryFrom           string
+	admissionDir           string
+	repository             string
+	pullRequest            int
+	checkName              string
+	appID                  int64
+	installationID         int64
+	appPrivateKey          string
+	grokBinary             string
+	githubBinary           string
+	grokHome               string
+	model                  string
+	reasoningEffort        string
+	mode                   string
+	statusDir              string
+	timeout                time.Duration
+	maxGitHubOutput        int
+	maxReviewerOutput      int
 }
 
 type localConfig struct {
@@ -168,6 +171,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if configuration.completion {
+		return runCompletion(ctx, configuration, stdout, stderr)
+	}
 	if configuration.reconcile {
 		settings := grokreview.ReviewSettings{Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
 		admission, openErr := grokreview.OpenAdmission(configuration.admissionDir, settings, configuration.recoveryFrom, nil)
@@ -280,6 +286,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				_, _ = fmt.Fprintln(stderr, err)
 				return 1
 			}
+		}
+		if configuration.completionCustodyPath != "" {
+			custody, err := loadCompletionCustody(configuration.completionCustodyPath)
+			if err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			owner, err := currentReviewOwner()
+			if err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			admission.BindCompletionCustody(custody, func(ctx context.Context, c grokreview.CompletionCustody) error {
+				return grokreview.VerifyCompletionCustody(ctx, c, owner)
+			})
 		}
 		if statusWriter != nil {
 			if err = statusWriter.BindAttempt(admission.AttemptID()); err != nil {
@@ -414,6 +435,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		configuration.recovery = true
 		configuration.prospective = true
 		args = args[1:]
+	} else if len(args) > 0 && args[0] == "complete" {
+		configuration.completion = true
+		args = args[1:]
 	} else if len(args) > 0 && args[0] == "reconcile" {
 		configuration.reconcile = true
 		args = args[1:]
@@ -450,6 +474,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.DurationVar(&configuration.timeout, "timeout", 20*time.Minute, "Grok review timeout")
 	flags.IntVar(&configuration.maxGitHubOutput, "max-github-output", 8<<20, "maximum GitHub CLI response bytes")
 	flags.IntVar(&configuration.maxReviewerOutput, "max-reviewer-output", 1<<20, "maximum Grok CLI response bytes")
+	flags.StringVar(&configuration.completionCustodyPath, "completion-custody", "", "absolute original native/claim/reservation/disclosure binding")
+	flags.StringVar(&configuration.completionEvidencePath, "completion-evidence", "", "absolute authentic original envelope or wrapper-report/native proof; never reconstruct")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -546,6 +572,15 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if !filepath.IsAbs(configuration.admissionDir) {
 		return config{}, fmt.Errorf("--admission-dir must be absolute")
 	}
+	if configuration.completion && (configuration.provider != "github" || !validCompletionAttempt(configuration.recoveryFrom) || !filepath.IsAbs(configuration.completionCustodyPath)) {
+		return config{}, fmt.Errorf("complete requires original attempt ID, GitHub provider and absolute completion custody")
+	}
+	if configuration.completionEvidencePath != "" && (!configuration.completion || !filepath.IsAbs(configuration.completionEvidencePath)) {
+		return config{}, fmt.Errorf("original completion evidence requires explicit complete operation")
+	}
+	if configuration.completionCustodyPath != "" && (configuration.provider != "github" || configuration.recovery || configuration.reconcile || configuration.prospective || !filepath.IsAbs(configuration.completionCustodyPath)) {
+		return config{}, fmt.Errorf("completion custody requires normal GitHub sampling or explicit complete and an absolute path")
+	}
 	if configuration.recovery && (configuration.recoveryFrom == "" || configuration.provider != "github") {
 		return config{}, fmt.Errorf("recover requires --from and GitHub provider; original mode must be preserved")
 	}
@@ -555,7 +590,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if configuration.reconcile && (configuration.recoveryFrom == "" || configuration.provider != "github") {
 		return config{}, fmt.Errorf("reconcile requires --from and GitHub provider; original mode must be preserved")
 	}
-	if !configuration.recovery && !configuration.reconcile && configuration.recoveryFrom != "" {
+	if !configuration.recovery && !configuration.reconcile && !configuration.completion && configuration.recoveryFrom != "" {
 		return config{}, fmt.Errorf("--from requires recover")
 	}
 	if configuration.timeout <= 0 || configuration.maxGitHubOutput <= 0 || configuration.maxReviewerOutput <= 0 {
@@ -717,4 +752,105 @@ func prepareGitHubReadback(ctx context.Context, c config) (*grokreview.GitHubCLI
 	}
 	token, err := github.MintInstallationToken(ctx, jwt, c.installationID)
 	return github, token, err
+}
+
+func validCompletionAttempt(id string) bool {
+	if len(id) != 16 {
+		return false
+	}
+	for _, c := range id {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+func loadCompletionCustody(path string) (grokreview.CompletionCustody, error) {
+	var c grokreview.CompletionCustody
+	info, err := os.Lstat(path)
+	if err != nil {
+		return c, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 64<<10 || info.Mode().Perm()&0077 != 0 {
+		return c, fmt.Errorf("completion custody must be bounded private regular file")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return c, err
+	}
+	d := json.NewDecoder(strings.NewReader(string(raw)))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&c); err != nil {
+		return c, err
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF {
+		return c, fmt.Errorf("completion custody trailing JSON")
+	}
+	return c, nil
+}
+func runCompletion(ctx context.Context, c config, stdout, stderr io.Writer) int {
+	// Authenticate local original custody before resolving GitHub; never resolve Grok.
+	owner, err := currentReviewOwner()
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	custody, err := loadCompletionCustody(c.completionCustodyPath)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if custody.Disclosure.Identity.Repository != c.repository || custody.Disclosure.Identity.PR != c.pullRequest {
+		_, _ = fmt.Fprintln(stderr, "completion target differs from original disclosure")
+		return 1
+	}
+	if err := grokreview.VerifyCompletionCustody(ctx, custody, owner); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	settings := grokreview.ReviewSettings{Mode: c.mode, Model: c.model, Effort: c.reasoningEffort, TimeoutMS: c.timeout.Milliseconds(), MaxGitHubOutput: c.maxGitHubOutput, MaxReviewerOutput: c.maxReviewerOutput, AppID: c.appID, InstallationID: c.installationID}
+	a, err := grokreview.OpenAdmission(c.admissionDir, settings, "", nil)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() { _ = a.Close() }()
+	a.BindCompletionCustody(custody, func(ctx context.Context, q grokreview.CompletionCustody) error {
+		return grokreview.VerifyCompletionCustody(ctx, q, owner)
+	})
+	if c.completionEvidencePath != "" {
+		if err := a.AuthenticateLegacyCompletion(ctx, c.recoveryFrom, custody, c.completionEvidencePath); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	github, token, err := prepareGitHubReadback(ctx, c)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	a.SetPublicationLookup(func(ctx context.Context, r grokreview.AttemptReceipt) (grokreview.Publication, error) {
+		return github.FindAttemptPublication(ctx, token, c.appID, r)
+	})
+	a.SetCompletionCheck(func(ctx context.Context, r grokreview.AttemptReceipt) error {
+		return github.VerifyRecoveryCheck(ctx, token, c.appID, grokreview.AttemptReceipt{Identity: r.Identity, Settings: r.Settings})
+	})
+	bundle, err := reviewer.Load()
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	result, err := a.Complete(ctx, c.recoveryFrom, custody, github, token, c.checkName, bundle.Core.SHA256, bundle.Policy.SHA256)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := encodeJSON(stdout, stderr, result); err != 0 {
+		return err
+	}
+	if result.Verdict == grokreview.VerdictBlocking {
+		return 2
+	}
+	return 0
 }

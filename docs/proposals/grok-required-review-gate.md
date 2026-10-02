@@ -377,6 +377,86 @@ no-verdict timeout restores the one-use recovery prerequisite; ambiguous, live,
 wrong-input or wrong-verdict evidence fails closed. Original terminal artifacts
 and every actual review/CI gate remain intact; no approval is synthesized.
 
+### Complete one authenticated original execution
+
+A validated completed result is now sealed in the private admission database
+**before** fetching the live publication identity. The seal retains the exact
+frozen input bytes, findings, safe CLI audit and original attempt custody; its
+SHA-256 binds the complete payload. It retains no CLI envelope or hidden
+reasoning. Title/body/diff or tuple drift still holds publication. `reconcile`
+continues to join/read back only: separately decoded pointer-bearing terminal
+and renderer receipts compare by their complete typed values, including during
+post-readback CAS. A real nested mutation remains a conflict.
+
+An owner may opt into recoverable publication by supplying
+`--completion-custody /absolute/private/custody.json` on normal GitHub review.
+The custody object uses `squad.review-completion.custody.v1` and contains the
+original `owner` (`actor`, `native`), `ledger_repo`, canonical `item`,
+`reservation`, reservation `generation`, `claim_generation`, current
+`decision_revision`, and the original granted `disclosure` from supported
+authorization readback. The read-only live ledger must independently match the
+held claim, dispatched reservation, exact native and current proceed decision.
+The granted provider/content/operation/tuple/mode remain bound to the seal;
+only the current decision revision may advance under the same custody.
+
+After the original execution is joined and its exact input is restored, use:
+
+```sh
+squad-grok-review complete --from ORIGINAL_ATTEMPT_ID \
+  --repo OWNER/REPO --pr NUMBER --mode ORIGINAL_MODE \
+  --model ORIGINAL_MODEL --reasoning-effort ORIGINAL_EFFORT \
+  --timeout ORIGINAL_TIMEOUT --admission-dir ORIGINAL_ADMISSION_DIR \
+  --completion-custody /absolute/private/custody.json
+```
+
+Retain the original App/installation, output bounds and reviewer contract settings
+through the selected configuration. This explicit operation initializes no Grok
+process or provider request. It proves the original durable join, full sealed
+input byte hash, exact live title/body/diff/base/head, current core/policy hashes,
+result/usage/session attribution and original mode/App/Check. It reserves the
+original attempt atomically under the existing PR singleflight and current-attempt
+CAS, preserving consumed recovery roots and all original history. It appends
+publication-transition evidence; it does not rewrite a legacy stale receipt,
+create a sampling attempt, refund a root, or transfer approval to another input.
+
+Publication intent is durably distinguished from a reservation that has not
+started a remote write. A joined interrupted pre-write reservation can resume
+under the same custody. Once a POST may have started, only the existing
+exact-attempt App lookup can resolve it: absence or an uncertain response does
+not authorize another Check/comment. Already published completion is idempotent.
+A concurrent foreign flight, live publisher, changed custody/input or ambiguous
+Check blocks completion without releasing another operation.
+
+For historical identity-stale executions, add
+`--completion-evidence /absolute/private/original-proof.json`. Its schema is
+`squad.review-completion.original.v1`, with the existing `attempt`, exact retained
+`bundle_path` and original `native_join` host-record proof. Supply **one** of:
+
+- `envelope_path`: original complete raw Grok CLI bytes whose count/hash match
+  the untouched canonical terminal receipt, independently parsed and validated.
+- `wrapper_report`: `report_path`, `capture_call`, `capture_sha256` and
+  `capture_output_sha256`. The complete private report copy must match the actual
+  original native capture, after its authenticated launch/write_stdin/wait join.
+  The capture must read the same log path as the original launch. The original
+  managed wrapper binary must still match the pinned reviewed historical
+  validation contract; an unknown or changed binary is unavailable, not trusted.
+
+The historical wrapper validates the complete CLI envelope and model findings
+before emitting its structured report. The report path alone, a copied summary,
+a Dispatcher receipt or a caller-supplied digest cannot authorize import. Require
+the complete original JSON and terminal trailer, exact native tool-record hashes,
+original installed binary, full input, owner/grant/settings/result/accounting and
+unchanged canonical receipt. Cache counters absent from that wrapper JSON remain
+the untouched canonical counters, not invented report fields. The original owner
+prepares any private extraction; the command does not alter foreign file modes.
+Missing, truncated, rewritten, ambiguous or unbound evidence fails closed.
+
+A timeout without a validated original terminal verdict cannot use completion.
+Local progress events do not prove provider completion, remote cancellation or a
+supported result-retrieval contract. Any missing upstream terminal capability
+remains with the existing CLI/provider adapter maintainer and installer; this
+operation grants no polling, new sampling or root budget.
+
 ### Safe terminal diagnostics
 
 New sampling receipts, local status files and command JSON include an optional

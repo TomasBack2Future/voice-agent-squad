@@ -344,3 +344,56 @@ func TestAuthorizationReadbackUsesOnlyExactLocalReceipt(t *testing.T) {
 		t.Fatal("mismatched native accepted")
 	}
 }
+
+func TestParseExplicitSameExecutionCompletion(t *testing.T) {
+	base := []string{"--repo", "owner/repo", "--pr", "9", "--app-id", "1", "--installation-id", "2", "--app-private-key", "/key", "--grok-bin", "/never-grok", "--gh-bin", "/never-gh"}
+	valid := append([]string{"complete", "--from", "0123456789abcdef", "--completion-custody", "/private/custody.json"}, base...)
+	var out bytes.Buffer
+	c, err := parseConfig(valid, &out)
+	if err != nil || !c.completion || c.recovery || c.reconcile {
+		t.Fatal("explicit complete invalid", err)
+	}
+	for _, prefix := range [][]string{{"complete"}, {"complete", "--from", "invalid", "--completion-custody", "/proof"}, {"complete", "--from", "0123456789abcdef", "--completion-custody", "relative"}, {"--completion-evidence", "/proof"}, {"reconcile", "--from", "0123456789abcdef", "--completion-custody", "/proof"}} {
+		if _, err := parseConfig(append(prefix, base...), &out); err == nil {
+			t.Fatal("incomplete/ambiguous operation accepted", prefix)
+		}
+	}
+}
+
+func TestCompletionNativeAndTargetRejectBeforeAnyProvider(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SQUAD_AGENT", "worker")
+	t.Setenv("SQUAD_SESSION_ID", "codex:native")
+	t.Setenv("CODEX_THREAD_ID", "native")
+	for _, name := range []string{"native", "target", "missing-ledger", "public-proof"} {
+		t.Run(name, func(t *testing.T) {
+			c := grokreview.CompletionCustody{SchemaVersion: "squad.review-completion.custody.v1", Owner: grokreview.ReviewOwner{Actor: "worker", Native: "native"}}
+			c.Disclosure.Identity.Repository = "owner/repo"
+			c.Disclosure.Identity.PR = 9
+			if name == "native" {
+				c.Owner.Native = "foreign"
+			}
+			if name == "target" {
+				c.Disclosure.Identity.PR = 10
+			}
+			raw, _ := json.Marshal(c)
+			path := filepath.Join(dir, name+".json")
+			mode := os.FileMode(0600)
+			if name == "public-proof" {
+				mode = 0644
+			}
+			if err := os.WriteFile(path, raw, mode); err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			cfg := config{repository: "owner/repo", pullRequest: 9, completionCustodyPath: path, grokBinary: "/must-not-execute", githubBinary: "/must-not-execute", admissionDir: filepath.Join(dir, "must-not-create")}
+			if code := runCompletion(context.Background(), cfg, &out, &stderr); code != 1 || out.Len() != 0 || strings.Contains(stderr.String(), "must-not-execute") {
+				t.Fatal("provider reached before provenance", code, stderr.String())
+			}
+			if _, err := os.Stat(cfg.admissionDir); !os.IsNotExist(err) {
+				t.Fatal("unqualified completion opened admission store", err)
+			}
+		})
+	}
+}

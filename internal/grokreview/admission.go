@@ -76,16 +76,20 @@ type AttemptReceipt struct {
 type RecoveryCheck func(context.Context, AttemptReceipt) error
 
 type Admission struct {
-	db                *sql.DB
-	dir               string
-	processAbsent     func(int) error
-	settings          ReviewSettings
-	from              string
-	check             RecoveryCheck
-	publicationLookup func(context.Context, AttemptReceipt) (Publication, error)
-	receipt           AttemptReceipt
-	legacy            *AttemptReceipt
-	prospective       *ProspectiveReadmission
+	db                        *sql.DB
+	dir                       string
+	processAbsent             func(int) error
+	settings                  ReviewSettings
+	from                      string
+	check                     RecoveryCheck
+	publicationLookup         func(context.Context, AttemptReceipt) (Publication, error)
+	receipt                   AttemptReceipt
+	legacy                    *AttemptReceipt
+	prospective               *ProspectiveReadmission
+	frozenBundle              []byte
+	completionCustody         *CompletionCustody
+	completionGuard           func(context.Context, CompletionCustody) error
+	completionWrapperVerifier func(string) error
 }
 
 // OpenAdmission never opens or migrates the Squad work ledger. All invocations
@@ -119,7 +123,8 @@ func OpenAdmission(dir string, settings ReviewSettings, from string, check Recov
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS review_attempts(id TEXT PRIMARY KEY, identity TEXT NOT NULL, receipt TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS review_flights(repository TEXT NOT NULL, pr INTEGER NOT NULL, attempt TEXT NOT NULL UNIQUE, PRIMARY KEY(repository,pr));
  CREATE TABLE IF NOT EXISTS review_recoveries(parent TEXT PRIMARY KEY, child TEXT NOT NULL UNIQUE, identity TEXT NOT NULL UNIQUE);
- CREATE TABLE IF NOT EXISTS review_recovery_roots(tuple TEXT PRIMARY KEY, parent TEXT NOT NULL UNIQUE, child TEXT NOT NULL UNIQUE);`)
+ CREATE TABLE IF NOT EXISTS review_recovery_roots(tuple TEXT PRIMARY KEY, parent TEXT NOT NULL UNIQUE, child TEXT NOT NULL UNIQUE);
+ CREATE TABLE IF NOT EXISTS review_completion_seals(attempt TEXT PRIMARY KEY, digest TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL, publisher_pid INTEGER NOT NULL DEFAULT 0, publication TEXT NOT NULL DEFAULT '{}');`)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -167,6 +172,13 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 	}
 	id := a.receipt.ID
 	candidate := AttemptReceipt{ID: id, Identity: identity, Settings: a.settings, WrapperPID: os.Getpid(), LaunchStage: "admitted"}
+	if a.completionCustody != nil {
+		if err := a.validateCompletionCustody(ctx, *a.completionCustody, identity); err != nil {
+			return err
+		}
+		candidate.OwnerActor = a.completionCustody.Owner.Actor
+		candidate.OwnerNative = a.completionCustody.Owner.Native
+	}
 	var prior AttemptReceipt
 	if a.from != "" {
 		if a.legacy != nil {
@@ -307,6 +319,7 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 	})
 	if err == nil {
 		a.receipt = candidate
+		a.frozenBundle = append([]byte(nil), bundle...)
 	}
 	return err
 }
@@ -382,19 +395,32 @@ func (a *Admission) Checkpoint(ctx context.Context, report ReviewReport) error {
 	if err != nil {
 		return err
 	}
-	result, err := a.db.ExecContext(ctx, `UPDATE review_attempts SET receipt=? WHERE id=? AND EXISTS(SELECT 1 FROM review_flights WHERE attempt=?)`, string(raw), r.ID, r.ID)
-	if err != nil {
-		return err
+	err = store.WithTxRetry(ctx, a.db, func(tx *sql.Tx) error {
+		if err := a.compareReceiptTx(ctx, tx, a.receipt); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE review_attempts SET receipt=? WHERE id=? AND EXISTS(SELECT 1 FROM review_flights WHERE attempt=?)`, string(raw), r.ID, r.ID)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("sampling checkpoint custody rejected")
+		}
+		if ValidateModelFindings(report.Result) == nil {
+			if err := a.sealReportTx(ctx, tx, r, report); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		a.receipt = r
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return fmt.Errorf("sampling checkpoint custody rejected")
-	}
-	a.receipt = r
-	return nil
+	return err
 }
 func (a *Admission) SetPublicationLookup(lookup func(context.Context, AttemptReceipt) (Publication, error)) {
 	a.publicationLookup = lookup
