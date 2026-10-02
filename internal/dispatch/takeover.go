@@ -62,6 +62,8 @@ func (s *Store) Takeover(ctx context.Context, actor string, q TakeoverRequest) (
 	now := s.now().Unix()
 	out := &TakeoverResult{PendingEvents: []string{}}
 	err := store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
+		// Retry output must describe only the transaction that commits.
+		*out = TakeoverResult{PendingEvents: []string{}}
 		// This legacy per-reservation migration cannot transfer or recreate the
 		// controller/native epoch. Require the complete-cohort handoff protocol
 		// once a ledger has entered that protocol, including retired actors.
