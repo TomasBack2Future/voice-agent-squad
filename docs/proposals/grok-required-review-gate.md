@@ -229,8 +229,15 @@ The original native delivery owner supplies a bounded absolute
   substitute for the owning native's launch/join/terminal chain in this lane.
 - `diff_sha256`, `body_sha256`, and an absolute retained `content_evidence_path`
   with its raw-file `content_evidence_sha256`. That JSON must contain the original
-  `diff_sha256` and `pr_body_sha256`; retain the genuine original artifact, never
-  invent or backdate its contents. These hashes prove content, not old full input.
+  `diff_sha256` and `pr_body_sha256`. The maintained unversioned historical
+  admission layout may instead use `complete_diff_sha256` and `body_sha256`;
+  its repository, PR, base/head and original mode must match the original attempt.
+  Unknown historical fields/layouts, duplicate fields, malformed or empty hashes
+  and conflicting canonical/alias values reject. Coexisting values must agree.
+  The raw-file SHA remains mandatory: retain the genuine original artifact,
+  never rewrite, invent or backdate it. These hashes prove content, not old full
+  input; current disclosure, native custody, fresh complete-input freeze and
+  atomic one-use gates remain independent requirements.
 - `owner`: exact `actor` and `native`; the caller's `SQUAD_AGENT` and
   `CODEX_THREAD_ID` / `SQUAD_SESSION_ID=codex:<native>` must agree. These are trusted
   local operator bindings, not authority to impersonate another Worker.
@@ -244,6 +251,31 @@ squad-grok-review readmit --from /absolute/prospective-receipt.json \
   --repo owner/repo --pr 9 --mode shadow \
   --model grok-4.7 --reasoning-effort high --timeout 20m
 ```
+
+When authentic complete retained diff bytes and the current gateway diff differ
+only in descriptive hunk context, the prospective receipt may add
+`renderer_equivalence` (`PatchRendererEvidence` in `internal/grokreview/renderer.go`).
+It contains schema `squad.review-renderer-equivalence.v1`, the exact original
+`identity` with unknown bundle hash empty, and absolute `original_patch_path` /
+`current_patch_path` with their respective raw `*_patch_sha256` hashes. The
+original raw SHA must equal the retained `diff_sha256`; never replace that hash
+or regenerate missing historical bytes. Both nonempty regular streams are
+bounded to 8 MiB. Qualification parses complete Git patches and valid hunk
+ranges/counts, with isolated Git parse-only validation of metadata/binary data.
+Only the descriptive suffix after a valid closing `@@` may differ. All file
+headers, metadata, ranges, source whitespace, newline markers and order stay
+byte-identical; malformed/truncated/ambiguous input rejects. The streams are
+re-read before reservation and the current bytes must equal the frozen gateway
+patch. The child receipt and CLI output add `renderer_provenance` with both raw hashes, rule
+and evidence hash; authorization retains the complete proof paths/tuple. No
+normalized digest authorizes sampling. Body, disclosure, native custody,
+settings, failed Check and atomic one-use gates are unchanged. Missing authentic
+original bytes remains an explicit qualification failure.
+
+The embedded reviewer core also requires positive supplied scope or an actual
+supplied failing check for compile/undefined-symbol findings. An unchanged
+declaration omitted from a diff hunk cannot establish absence. Supported defects
+still block; this contract never changes a prior verdict or approves an attempt.
 
 Both `recover` and `readmit` preserve the **original** shadow or required mode,
 model, effort, timeout, App and output limits. A shadow result never fulfills the

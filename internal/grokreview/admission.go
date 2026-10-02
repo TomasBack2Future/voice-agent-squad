@@ -39,35 +39,36 @@ type ReviewIdentity struct {
 // AttemptReceipt is authoritative only in the private admission store. No diff,
 // prompt, findings prose, credentials or raw model output is persisted here.
 type AttemptReceipt struct {
-	InputProvenance        string         `json:"input_provenance,omitempty"`
-	InputRecordedAt        int64          `json:"input_recorded_at,omitempty"`
-	AuthorizationSHA256    string         `json:"authorization_sha256,omitempty"`
-	AuthorizationReference string         `json:"authorization_reference,omitempty"`
-	OwnerActor             string         `json:"owner_actor,omitempty"`
-	OwnerNative            string         `json:"owner_native,omitempty"`
-	LaunchStage            string         `json:"launch_stage,omitempty"`
-	SamplingFailureStage   string         `json:"sampling_failure_stage,omitempty"`
-	SamplingCompleted      bool           `json:"sampling_completed"`
-	WrapperPID             int            `json:"wrapper_pid,omitempty"`
-	ReviewerPID            int            `json:"reviewer_pid,omitempty"`
-	CostKnown              bool           `json:"cost_known"`
-	RequestID              string         `json:"request_id,omitempty"`
-	SessionID              string         `json:"session_id,omitempty"`
-	ResolvedModel          string         `json:"resolved_model,omitempty"`
-	DurationMS             int64          `json:"duration_ms"`
-	ID                     string         `json:"id"`
-	Parent                 string         `json:"parent,omitempty"`
-	Identity               ReviewIdentity `json:"identity"`
-	Settings               ReviewSettings `json:"settings"`
-	Joined                 bool           `json:"joined"`
-	Verdict                Verdict        `json:"verdict"`
-	FailureStage           string         `json:"failure_stage"`
-	FailureKind            CLIFailureKind `json:"failure_kind"`
-	Publication            Publication    `json:"publication"`
-	Usage                  TokenUsage     `json:"usage"`
-	UsageKnown             bool           `json:"usage_known"`
-	CostUSD                float64        `json:"cost_usd"`
-	CompletedAt            int64          `json:"completed_at"`
+	RendererProvenance     *PatchRendererProvenance `json:"renderer_provenance,omitempty"`
+	InputProvenance        string                   `json:"input_provenance,omitempty"`
+	InputRecordedAt        int64                    `json:"input_recorded_at,omitempty"`
+	AuthorizationSHA256    string                   `json:"authorization_sha256,omitempty"`
+	AuthorizationReference string                   `json:"authorization_reference,omitempty"`
+	OwnerActor             string                   `json:"owner_actor,omitempty"`
+	OwnerNative            string                   `json:"owner_native,omitempty"`
+	LaunchStage            string                   `json:"launch_stage,omitempty"`
+	SamplingFailureStage   string                   `json:"sampling_failure_stage,omitempty"`
+	SamplingCompleted      bool                     `json:"sampling_completed"`
+	WrapperPID             int                      `json:"wrapper_pid,omitempty"`
+	ReviewerPID            int                      `json:"reviewer_pid,omitempty"`
+	CostKnown              bool                     `json:"cost_known"`
+	RequestID              string                   `json:"request_id,omitempty"`
+	SessionID              string                   `json:"session_id,omitempty"`
+	ResolvedModel          string                   `json:"resolved_model,omitempty"`
+	DurationMS             int64                    `json:"duration_ms"`
+	ID                     string                   `json:"id"`
+	Parent                 string                   `json:"parent,omitempty"`
+	Identity               ReviewIdentity           `json:"identity"`
+	Settings               ReviewSettings           `json:"settings"`
+	Joined                 bool                     `json:"joined"`
+	Verdict                Verdict                  `json:"verdict"`
+	FailureStage           string                   `json:"failure_stage"`
+	FailureKind            CLIFailureKind           `json:"failure_kind"`
+	Publication            Publication              `json:"publication"`
+	Usage                  TokenUsage               `json:"usage"`
+	UsageKnown             bool                     `json:"usage_known"`
+	CostUSD                float64                  `json:"cost_usd"`
+	CompletedAt            int64                    `json:"completed_at"`
 }
 
 type RecoveryCheck func(context.Context, AttemptReceipt) error
@@ -183,6 +184,16 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 		if a.prospective != nil {
 			if err := a.verifyProspectiveBundle(bundle, identity); err != nil {
 				return err
+			}
+			if a.prospective.RendererEquivalence != nil {
+				var frozen FrozenReviewBundle
+				if err := json.Unmarshal(bundle, &frozen); err != nil {
+					return err
+				}
+				candidate.RendererProvenance, err = a.prospective.verifyRenderer([]byte(frozen.Diff))
+				if err != nil {
+					return err
+				}
 			}
 			candidate.InputProvenance = "prospective-legacy-new-input"
 			candidate.InputRecordedAt = time.Now().Unix()

@@ -96,38 +96,39 @@ type doctorOutput struct {
 }
 
 type commandOutput struct {
-	ParentAttempt   string                    `json:"parent_attempt,omitempty"`
-	InputProvenance string                    `json:"input_provenance,omitempty"`
-	AttemptID       string                    `json:"attempt_id,omitempty"`
-	Provider        string                    `json:"provider,omitempty"`
-	RepositoryHost  string                    `json:"repository_host,omitempty"`
-	DiffSHA256      string                    `json:"diff_sha256,omitempty"`
-	ContractSHA256  string                    `json:"contract_sha256,omitempty"`
-	Repository      string                    `json:"repository"`
-	PullRequest     int                       `json:"pull_request"`
-	BaseSHA         string                    `json:"base_sha"`
-	HeadSHA         string                    `json:"head_sha"`
-	Verdict         grokreview.Verdict        `json:"verdict"`
-	Summary         string                    `json:"summary"`
-	Findings        []grokreview.Finding      `json:"findings"`
-	RequestID       string                    `json:"request_id,omitempty"`
-	SessionID       string                    `json:"session_id,omitempty"`
-	RequestedModel  string                    `json:"requested_model,omitempty"`
-	ReasoningEffort string                    `json:"reasoning_effort,omitempty"`
-	InputTokens     int64                     `json:"input_tokens,omitempty"`
-	OutputTokens    int64                     `json:"output_tokens,omitempty"`
-	ReasoningTokens int64                     `json:"reasoning_tokens,omitempty"`
-	FailureStage    string                    `json:"failure_stage,omitempty"`
-	ResolvedModel   string                    `json:"resolved_model,omitempty"`
-	TotalTokens     int64                     `json:"total_tokens,omitempty"`
-	CostUSD         float64                   `json:"cost_usd,omitempty"`
-	DurationMillis  int64                     `json:"duration_ms,omitempty"`
-	FailureKind     grokreview.CLIFailureKind `json:"failure_kind,omitempty"`
-	CommentID       int64                     `json:"comment_id,omitempty"`
-	CommentURL      string                    `json:"comment_url,omitempty"`
-	CheckRunID      int64                     `json:"check_run_id,omitempty"`
-	CheckURL        string                    `json:"check_url,omitempty"`
-	CheckConclusion string                    `json:"check_conclusion,omitempty"`
+	RendererProvenance *grokreview.PatchRendererProvenance `json:"renderer_provenance,omitempty"`
+	ParentAttempt      string                              `json:"parent_attempt,omitempty"`
+	InputProvenance    string                              `json:"input_provenance,omitempty"`
+	AttemptID          string                              `json:"attempt_id,omitempty"`
+	Provider           string                              `json:"provider,omitempty"`
+	RepositoryHost     string                              `json:"repository_host,omitempty"`
+	DiffSHA256         string                              `json:"diff_sha256,omitempty"`
+	ContractSHA256     string                              `json:"contract_sha256,omitempty"`
+	Repository         string                              `json:"repository"`
+	PullRequest        int                                 `json:"pull_request"`
+	BaseSHA            string                              `json:"base_sha"`
+	HeadSHA            string                              `json:"head_sha"`
+	Verdict            grokreview.Verdict                  `json:"verdict"`
+	Summary            string                              `json:"summary"`
+	Findings           []grokreview.Finding                `json:"findings"`
+	RequestID          string                              `json:"request_id,omitempty"`
+	SessionID          string                              `json:"session_id,omitempty"`
+	RequestedModel     string                              `json:"requested_model,omitempty"`
+	ReasoningEffort    string                              `json:"reasoning_effort,omitempty"`
+	InputTokens        int64                               `json:"input_tokens,omitempty"`
+	OutputTokens       int64                               `json:"output_tokens,omitempty"`
+	ReasoningTokens    int64                               `json:"reasoning_tokens,omitempty"`
+	FailureStage       string                              `json:"failure_stage,omitempty"`
+	ResolvedModel      string                              `json:"resolved_model,omitempty"`
+	TotalTokens        int64                               `json:"total_tokens,omitempty"`
+	CostUSD            float64                             `json:"cost_usd,omitempty"`
+	DurationMillis     int64                               `json:"duration_ms,omitempty"`
+	FailureKind        grokreview.CLIFailureKind           `json:"failure_kind,omitempty"`
+	CommentID          int64                               `json:"comment_id,omitempty"`
+	CommentURL         string                              `json:"comment_url,omitempty"`
+	CheckRunID         int64                               `json:"check_run_id,omitempty"`
+	CheckURL           string                              `json:"check_url,omitempty"`
+	CheckConclusion    string                              `json:"check_conclusion,omitempty"`
 }
 
 func main() {
@@ -302,6 +303,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		output := newCommandOutput(report)
 		if admission != nil {
 			output.AttemptID = admission.AttemptID()
+			output.RendererProvenance = admission.Receipt().RendererProvenance
 			output.ParentAttempt = admission.Receipt().Parent
 			output.InputProvenance = admission.Receipt().InputProvenance
 		}
