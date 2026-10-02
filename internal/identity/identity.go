@@ -45,6 +45,8 @@ func readPersistedAgentID() string {
 		if data, err := os.ReadFile(sessionPath); err == nil {
 			return strings.TrimSpace(string(data))
 		}
+		// A missing or unreadable scoped identity never grants the legacy actor.
+		return ""
 	}
 	data, err := os.ReadFile(filepath.Join(home, "agent-id.txt"))
 	if err != nil {
