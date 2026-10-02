@@ -10,6 +10,7 @@ import socket
 import stat
 import struct
 import time
+import threading
 
 from validate_context_package import ValidationError
 
@@ -160,6 +161,7 @@ class RPC:
 class OwnedStdioRPC(RPC):
     """Single parent/thread owns this child and all JSONL pipe IO; never attaches."""
     _owners = set()
+    _owners_lock = threading.Lock()
 
     def __init__(self, child, config):
         import subprocess
@@ -167,32 +169,35 @@ class OwnedStdioRPC(RPC):
         import uuid
         from codex_worker_launcher import check_qualification
         check_qualification(config)  # Historical contract does not admit a live native.
-        if (not isinstance(child, subprocess.Popen) or child.poll() is not None
-                or child.stdin is None or child.stdout is None or child.stderr is None
-                or child in self._owners):
-            raise ValidationError('exclusive live owned stdio child required')
-        argv = child.args
-        if (not isinstance(argv, list) or not argv or argv[0] != config['client_executable']
-                or argv[-3:] != ['app-server', '--listen', 'stdio://']):
-            raise ValidationError('stdio child executable/transport owner mismatch')
-        self.child = child
-        self._owners.add(child)
-        self.owner_pid = os.getpid()
-        self.owner_thread = threading.get_ident()
-        self.incarnation = str(uuid.uuid4())
-        self.pipe_identity = [os.fstat(pipe.fileno()) for pipe in (child.stdin, child.stdout, child.stderr)]
-        self.pipe_identity = [(info.st_dev, info.st_ino) for info in self.pipe_identity]
-        self.config = dict(config)
-        self.sequence = 0
-        self.notifications = []
-        self.buffer = b''
-        self.stderr_open = True
-        self.reply_bytes = 0
-        self.stderr_bytes = 0
-        self.stderr_sha = hashlib.sha256()
-        self.uncertain = False
-        self.closed = False
-        self.native_ready = False
+        with self._owners_lock:
+            if (not isinstance(child, subprocess.Popen) or child.poll() is not None
+                    or child.stdin is None or child.stdout is None or child.stderr is None
+                    or child in self._owners):
+                raise ValidationError('exclusive live owned stdio child required')
+            argv = child.args
+            if (not isinstance(argv, list) or not argv or argv[0] != config['client_executable']
+                    or argv[-3:] != ['app-server', '--listen', 'stdio://']):
+                raise ValidationError('stdio child executable/transport owner mismatch')
+            self.child = child
+            self.owner_pid = os.getpid()
+            self.owner_thread = threading.get_ident()
+            self.incarnation = str(uuid.uuid4())
+            self.pipe_identity = [os.fstat(pipe.fileno()) for pipe in (child.stdin, child.stdout, child.stderr)]
+            self.pipe_identity = [(info.st_dev, info.st_ino) for info in self.pipe_identity]
+            self.config = dict(config)
+            self.sequence = 0
+            self.notifications = []
+            self.buffer = b''
+            self.stderr_open = True
+            self.reply_bytes = 0
+            self.stderr_bytes = 0
+            self.stderr_sha = hashlib.sha256()
+            self.uncertain = False
+            self.closed = False
+            self.native_ready = False
+            self.queue_uncertain = False
+            self.pending_queue = None
+            self._owners.add(child)
         for pipe in (child.stdin, child.stdout, child.stderr):
             os.set_blocking(pipe.fileno(), False)
         # Only this exclusive owner initializes and reads this connection.
@@ -277,27 +282,39 @@ class OwnedStdioRPC(RPC):
                         raise ValidationError('stdio ended with incomplete reply; delivery uncertain')
                     self.buffer += data
 
-    def call(self, method, params, timeout=10):
+    def call(self, method, params, timeout=10, before_send=None):
         self.check_owner()
         allowed = ('initialize', 'thread/loaded/list', 'thread/read', 'thread/resume', 'thread/queue/list', 'thread/queue/add')
         if method not in allowed:
             raise ValidationError('stdio method outside qualified transport contract')
         if method.startswith('thread/') and method != 'thread/loaded/list' and params.get('threadId') != self.config['native_session_id']:
             raise ValidationError('stdio request belongs to another native')
-        if method == 'thread/resume' and params != {'threadId': self.config['native_session_id'], 'excludeTurns': True}:
-            raise ValidationError('stdio selection overrides or unloaded resume unavailable')
+        if method == 'thread/resume':
+            if params != {'threadId': self.config['native_session_id'], 'excludeTurns': True}:
+                raise ValidationError('stdio selection overrides unavailable')
+            loaded = self.call('thread/loaded/list', {})
+            if self.config['native_session_id'] not in loaded.get('data', []):
+                raise ValidationError('stdio cannot resume an unloaded native')
         if method == 'thread/queue/add':
+            if self.queue_uncertain:
+                raise ValidationError('stdio original queue outcome uncertain; no new write')
             if not self.native_ready:
                 raise ValidationError('stdio queue requires fresh loaded-owner readiness')
             from codex_worker_launcher import live_target
             live_target(self, self.config, self.native_worktree)
             self.native_ready = False
-        if self.uncertain and method not in ('thread/read', 'thread/queue/list', 'thread/loaded/list'):
+        if self.uncertain and method not in ('thread/read', 'thread/queue/list', 'thread/loaded/list', 'thread/resume'):
             raise ValidationError('stdio uncertain; only exact readback allowed, no resubmission')
         self.reply_bytes = 0
         self.sequence += 1
         current = self.sequence
         try:
+            if method == 'thread/queue/add':
+                if before_send is not None:
+                    before_send()  # Durable intent AFTER all readiness/read-only gates.
+                import copy
+                self.pending_queue = copy.deepcopy(params)
+                self.queue_uncertain = True
             self.send({'id': current, 'method': method, 'params': params})
             deadline = time.monotonic() + timeout
             while True:
@@ -305,7 +322,16 @@ class OwnedStdioRPC(RPC):
                 if value.get('id') == current and 'method' not in value:
                     if 'error' in value or not isinstance(value.get('result'), dict):
                         raise ValidationError('stdio RPC rejected ' + method)
-                    return value['result']
+                    result = value['result']
+                    if method == 'thread/queue/add':
+                        accepted = result.get('queuedSubmission')
+                        if (not isinstance(accepted, dict) or not isinstance(accepted.get('id'), str)
+                                or not accepted['id'] or accepted.get('clientUserMessageId') != params.get('clientUserMessageId')
+                                or accepted.get('input') != params.get('input')):
+                            raise ValidationError('stdio exact queue acceptance malformed')
+                        self.queue_uncertain = False
+                        self.pending_queue = None
+                    return result
                 if 'id' in value and 'method' in value:
                     raise ValidationError('stdio host request requires original owner; no automatic approval')
                 if 'method' in value:
@@ -331,7 +357,8 @@ class OwnedStdioRPC(RPC):
         for pipe in (self.child.stdout, self.child.stderr):
             pipe.close()
         self.closed = True
-        self._owners.discard(self.child)
+        with self._owners_lock:
+            self._owners.discard(self.child)
         return {'child_pid': self.child.pid, 'incarnation': self.incarnation,
                 'joined_exit': exit_code, 'observed_stderr_bytes': self.stderr_bytes,
                 'observed_stderr_sha256': self.stderr_sha.hexdigest(),

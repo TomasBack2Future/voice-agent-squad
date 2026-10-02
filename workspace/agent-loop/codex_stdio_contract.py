@@ -1,6 +1,8 @@
 """Exact reviewed owned-stdio contract; no runtime discovery or allow-list fallback."""
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 from validate_context_package import ValidationError, ROOT, validate
 
@@ -27,6 +29,23 @@ def bounded(path):
 
 def file_sha(path):
     return hashlib.sha256(bounded(path)).hexdigest()
+
+
+def executable_identity(path):
+    """Fingerprint an opened regular executable without running caller code."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111 or info.st_size > 256 * 1024 * 1024:
+            raise ValidationError('stdio executable type or size is unqualified')
+        sha = hashlib.sha256()
+        size = 0
+        while block := stream.read(1024 * 1024):
+            size += len(block)
+            if size > 256 * 1024 * 1024:
+                raise ValidationError('stdio executable exceeds bound')
+            sha.update(block)
+    return {'version': VERSION, 'executable_sha256': sha.hexdigest()}
 
 
 def validate_contract(c, binary):
@@ -63,7 +82,11 @@ def validate_contract(c, binary):
     if inventory_sha != SCHEMA_SHA:
         raise ValidationError('stdio generated schema identity changed')
     associations = proof.get('immutable_associations', {})
-    if len(associations) != 8 or any(file_sha(path) != sha for path, sha in associations.items()):
+    names = [Path(path).name for path in associations]
+    if len(associations) != 8 or len(set(names)) != 8:
+        raise ValidationError('stdio original qualification evidence incomplete')
+    relocated = Path(c['evidence_directory']).resolve(strict=True) if c.get('evidence_directory') else None
+    if any(file_sha(relocated / Path(path).name if relocated else path) != sha for path, sha in associations.items()):
         raise ValidationError('stdio original qualification evidence changed')
     thread = proof.get('probe_thread')
     intent = proof.get('queue_intent', {})

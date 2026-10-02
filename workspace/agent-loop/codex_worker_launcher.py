@@ -140,6 +140,8 @@ def check_owned_stdio(c, rpc, owner, worktree):
     rpc.check_owner(owner)
     live_target(rpc, c, worktree)
     rpc.check_owner(owner)
+    if not rpc.queue_uncertain:
+        rpc.uncertain = False
     rpc.native_worktree = str(Path(worktree).resolve())
     rpc.native_ready = True
     return dict(binary, live_owner_verified=True, owner=owner)
@@ -243,12 +245,10 @@ def check_delivery_runtime(c, env):
 
 def check_qualification(c):
     if c.get('transport') == 'owned-stdio':
-        from codex_stdio_contract import validate_contract
-        result = subprocess.run([c['client_executable'], '--version'], capture_output=True, text=True, timeout=10)
-        if result.returncode:
-            raise ValidationError('stdio executable version unavailable')
-        return validate_contract(c, {'version': result.stdout.strip(),
-                                     'executable_sha256': digest(c['client_executable'])})
+        from codex_stdio_contract import validate_contract, executable_identity
+        # The reviewed digest identifies this exact version. Never execute an
+        # unpinned path, even for --version or with the parent's environment.
+        return validate_contract(c, executable_identity(c['client_executable']))
     if c.get('transport') not in (None, 'unix'):
         raise ValidationError('unregistered Codex transport; no fallback')
     binary = executable(c)

@@ -102,6 +102,14 @@ def native_contains(rpc, thread, text, client_id=None):
                     and item.get('content') == exact_input]
         if len(matches) > 1:
             raise ValidationError('stdio native association ambiguous; no resubmission')
+        if len(matches) == 1:
+            from codex_rpc import OwnedStdioRPC
+            expected = {'threadId': thread, 'clientUserMessageId': client_id, 'input': exact_input}
+            if isinstance(rpc, OwnedStdioRPC) and rpc.pending_queue == expected:
+                rpc.check_owner()
+                rpc.queue_uncertain = False
+                rpc.uncertain = False
+                rpc.pending_queue = None
         return len(matches) == 1
     return contains(pending.get('data', [])) or contains(inputs)
 
@@ -119,24 +127,35 @@ def deliver(rpc, event, c, journal_path):
         identity.update(transport='owned-stdio', contract_sha256=PROOF_SHA)
     if previous and previous['identity'] != identity:
         raise ValidationError('delivery journal identity changed; reconcile without resubmission')
-    if previous:
-        if previous['state'] == 'accepted':
-            return
-        if previous['state'] != 'intent' or not native_contains(rpc, c['native_session_id'], text, key if c.get('transport') == 'owned-stdio' else None):
+    stdio = c.get('transport') == 'owned-stdio'
+    if previous and previous['state'] == 'accepted':
+        return
+    if previous and previous['state'] == 'intent':
+        if not native_contains(rpc, c['native_session_id'], text, key if stdio else None):
             raise ValidationError('native submission uncertain; no duplicate or automatic retry')
+    elif previous and (not stdio or previous['state'] != 'prepared'):
+        raise ValidationError('delivery journal phase unavailable; no resubmission')
     else:
-        journal[key] = {'identity': identity, 'submitted_endpoint': c.get('endpoint', 'owned-stdio'), 'state': 'intent'}
-        save(journal_path, journal)
-        # Codex 0.159.2 does NOT dedupe clientUserMessageId. Persist intent first
-        # and never blindly retry a lost response, even after an incarnation change.
-        result = rpc.call('thread/queue/add', {'threadId': c['native_session_id'],
-                          'clientUserMessageId': key,
-                          'input': [{'type': 'text', 'text': text, 'text_elements': []}]})
+        if not previous:
+            journal[key] = {'identity': identity, 'submitted_endpoint': c.get('endpoint', 'owned-stdio'),
+                            'state': 'prepared' if stdio else 'intent'}
+            save(journal_path, journal)
+        params = {'threadId': c['native_session_id'], 'clientUserMessageId': key,
+                  'input': [{'type': 'text', 'text': text, 'text_elements': []}]}
+        if stdio:
+            def write_intent():
+                journal[key]['state'] = 'intent'
+                save(journal_path, journal)
+            # Readiness failures precede this durable boundary. Once it executes,
+            # interruption/lost reply remains uncertain and can only be read back.
+            result = rpc.call('thread/queue/add', params, before_send=write_intent)
+        else:
+            result = rpc.call('thread/queue/add', params)
         accepted = result.get('queuedSubmission', {})
         if (accepted.get('clientUserMessageId') != key or not accepted.get('id')
-                or (c.get('transport') == 'owned-stdio' and accepted.get('input') != [{'type': 'text', 'text': text, 'text_elements': []}])):
+                or (stdio and accepted.get('input') != params['input'])):
             raise ValidationError('native queue acceptance not confirmed')
-        if c.get('transport') == 'owned-stdio':
+        if stdio:
             journal[key]['native_acceptance'] = accepted
     journal[key]['state'] = 'accepted'
     save(journal_path, journal)

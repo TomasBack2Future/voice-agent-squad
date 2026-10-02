@@ -110,7 +110,9 @@ Its only supported selection is `gpt-6.1-sol` / OpenAI / medium / priority (Fast
 read-only with network disabled, approval never, reviewer user. Full Access is
 unqualified here: never downgrade an existing session to make it fit. Pin the
 reviewed qualification receipt and provide its unchanged associated evidence
-files and exact generated schema directory. The schema inventory hash is SHA256
+files and exact generated schema directory. Optional `evidence_directory` relocates
+the eight associated files by their unique original basenames; the proof bytes
+and all expected file hashes stay unchanged. The schema inventory hash is SHA256
 of UTF-8 `json.dumps([{path, sha256}, ...], sort_keys=True, separators=(',', ':'))`,
 with all relative JSON paths sorted. Evidence is bounded and rehashed; asserted
 completion booleans, altered files and old Unix receipts cannot qualify stdio.
@@ -119,7 +121,9 @@ At a separately authorized installer boundary, the original parent supplies its
 own already-created `subprocess.Popen` child with exclusive binary stdin/stdout/
 stderr pipes. `OwnedStdioRPC(child, config)` never spawns or discovers a host.
 The child command must end in `app-server --listen stdio://`. Only the original
-parent and IO thread may operate it; a second wrapper, process, thread or changed
+parent and IO thread may operate it; registration is locked before any pipe IO.
+Executable qualification hashes an opened regular file without executing it,
+even for version discovery. A second wrapper, process, thread or changed
 pipe/incarnation fails. The bounded JSONL reader drains stderr without exposing
 it, rejects partial/malformed/oversized data and never approves host tools.
 A transport failure retains the original child handle and marks uncertainty.
@@ -131,11 +135,16 @@ effort and effective policy/Fast tier without selection overrides. It never
 loads an absent native. A historical probe native is not the current target.
 `deliver_owned_stdio` must run in that same parent/IO thread; a standalone
 receiver cannot attach to these pipe descriptors. It preserves the existing
-durable event intent and journal, rechecks current selection before a queue
-write and verifies the exact returned acceptance ID/client ID/input. Delivery
+durable event journal with `prepared`, `intent` and `accepted` states. It rechecks
+current selection before a queue write, persists `intent` immediately before
+wire submission, and verifies the exact returned acceptance ID/client ID/input.
+A failed readiness check leaves `prepared` retryable after fresh qualification;
+a transport fault during readiness does not imply a queue was submitted. Delivery
 acceptance is not current Dispatcher handling or explicit ACK.
 
-On a lost response, the original intent remains. Only exact supported queue/
+On an actual queue write with a lost response, the original intent remains.
+The original pipe owner also retains the exact pending native/client ID/input;
+fresh readiness alone cannot clear this queue uncertainty. Only exact supported queue/
 retained user-input readback matching **both** client ID and immutable text may
 join it; ambiguous, missing or truncated history remains uncertain. Never send
 again merely because the client ID looks unique. Mock tests do not qualify real

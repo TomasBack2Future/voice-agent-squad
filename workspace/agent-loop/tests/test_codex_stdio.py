@@ -59,6 +59,7 @@ class QualifiedStdioTests(unittest.TestCase):
     def checked(self):
         with patch.object(launcher.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=VERSION)), \
              patch.object(launcher,'digest',return_value=BINARY), \
+             patch.object(contract,'executable_identity',return_value={'version':VERSION,'executable_sha256':BINARY}), \
              patch.object(contract,'PROOF_SHA',self.c['qualification_sha256']), \
              patch.object(contract,'SCHEMA_COUNT',1), \
              patch.object(contract,'SCHEMA_SHA',hashlib.sha256(json.dumps([{'path':'shape.json','sha256':hashlib.sha256(b'{}').hexdigest()}],sort_keys=True,separators=(',',':')).encode()).hexdigest()):
@@ -91,9 +92,25 @@ class QualifiedStdioTests(unittest.TestCase):
         self.proof=original;self.write_proof()
         (self.root/'receipt-0').write_text('rewritten')
         with self.assertRaises(ValidationError):self.checked()
+    def test_portable_evidence_relocation_keeps_original_proof_bytes(self):
+        moved=self.root/'moved';moved.mkdir()
+        original=Path(self.c['qualification_file']).read_bytes()
+        for path in self.refs:
+            f=Path(path);(moved/f.name).write_bytes(f.read_bytes());f.unlink()
+        self.c['evidence_directory']=str(moved)
+        self.assertEqual(self.checked()['version'],VERSION)
+        self.assertEqual(Path(self.c['qualification_file']).read_bytes(),original)
+        (moved/'receipt-0').write_text('rewritten')
+        with self.assertRaises(ValidationError):self.checked()
     def test_actual_protocol_mutation_rejects(self):
         (self.schemas/'shape.json').write_text('{"changed":true}')
         with self.assertRaises(ValidationError):self.checked()
+    def test_unpinned_binary_is_never_executed_even_for_version(self):
+        marker=self.root/'executed';binary=self.root/'unregistered'
+        binary.write_text('#!'+sys.executable+'\nfrom pathlib import Path\nPath('+repr(str(marker))+').write_text("executed")\nprint('+repr(VERSION)+')\n');binary.chmod(0o700)
+        self.c['client_executable']=str(binary)
+        with self.assertRaises(ValidationError):launcher.check_qualification(self.c)
+        self.assertFalse(marker.exists())
     def test_proof_hash_is_not_boolean_qualification(self):
         Path(self.c['qualification_file']).write_text('{"qualified":true}')
         with self.assertRaises(ValidationError):self.checked()
@@ -182,6 +199,52 @@ class OwnedPipeTests(unittest.TestCase):
         rpc=Mock();thread=self.c['native_session_id'];text='exact payload'
         rpc.call.side_effect=[{'data':[],'nextCursor':None},{'thread':{'turns':[{'items':[{'type':'userMessage','clientId':'other','content':[{'type':'text','text':text}]}]}]}}]
         self.assertFalse(receiver.native_contains(rpc,thread,text,'original-client'))
+    def test_readiness_drift_before_queue_bytes_is_retryable_prepared_intent(self):
+        p=self.child();rpc=OwnedStdioRPC(p,self.c);owner=rpc.identity()
+        event=dict(event_id='prewrite',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'journal';calls=[]
+        def readiness(*args):
+            calls.append(True)
+            if len(calls)==2:raise ValidationError('effective policy drift')
+            return {}
+        with patch.object(launcher,'live_target',side_effect=readiness):
+            with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertEqual(json.loads(path.read_text())['prewrite']['state'],'prepared')
+        receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertEqual(json.loads(path.read_text())['prewrite']['state'],'accepted');rpc.close()
+    def test_transient_prewrite_rpc_error_recovers_after_fresh_readiness(self):
+        script=HOST.replace("native='00000000-0000-0000-0000-000000000001'", "native='00000000-0000-0000-0000-000000000001'\nreads=0")
+        script=script.replace("m=q['method'];p=q['params']", "m=q['method'];p=q['params']\n if m=='thread/read':\n  reads+=1\n  if reads==2:\n   print(json.dumps({'id':q['id'],'error':{'message':'transient'}}),flush=True);continue")
+        p=self.child(script);rpc=OwnedStdioRPC(p,self.c);owner=rpc.identity()
+        event=dict(event_id='transient',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'journal'
+        with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertTrue(rpc.uncertain);self.assertFalse(rpc.queue_uncertain)
+        self.assertEqual(json.loads(path.read_text())['transient']['state'],'prepared')
+        receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertFalse(rpc.queue_uncertain);self.assertEqual(json.loads(path.read_text())['transient']['state'],'accepted');rpc.close()
+    def test_owner_registration_is_atomic_before_any_pipe_io(self):
+        gate=threading.Event();lock=threading.Lock()
+        class PausingSet(set):
+            checks=0
+            def __contains__(self,value):
+                present=super().__contains__(value)
+                with lock:self.checks+=1;number=self.checks
+                if not present:
+                    if number==1:gate.wait(.08)
+                    else:gate.set()
+                return present
+        registry=PausingSet();p=self.child();objects=[];errors=[]
+        def construct():
+            try:objects.append(OwnedStdioRPC(p,self.c))
+            except ValidationError:errors.append(True)
+        with patch.object(OwnedStdioRPC,'_owners',registry), \
+             patch.object(OwnedStdioRPC,'call',return_value={}), patch.object(OwnedStdioRPC,'send'):
+            threads=[threading.Thread(target=construct) for _ in range(2)]
+            for t in threads:t.start()
+            for t in threads:t.join(2)
+            self.assertFalse(any(t.is_alive() for t in threads))
+            self.assertEqual(len(objects),1);self.assertEqual(errors,[True])
     def test_join_timeout_retains_original_handle_and_owner_without_kill(self):
         p=self.child();rpc=OwnedStdioRPC(p,self.c)
         with patch.object(p,'wait',side_effect=subprocess.TimeoutExpired(p.args,.01)), \
@@ -191,7 +254,11 @@ class OwnedPipeTests(unittest.TestCase):
             self.assertFalse(rpc.closed);self.assertIn(p,OwnedStdioRPC._owners)
     def test_uncertain_intent_is_not_sent_again_without_exact_history(self):
         from unittest.mock import Mock
-        rpc=Mock();rpc.call.side_effect=TimeoutError('lost reply')
+        rpc=Mock()
+        def lost(method,params,**kwargs):
+            kwargs['before_send']()
+            raise TimeoutError('lost reply')
+        rpc.call.side_effect=lost
         c=dict(self.c,agent_id='dispatcher',role='dispatcher')
         e=dict(event_id='one',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
         path=self.root/'journal'
@@ -200,6 +267,20 @@ class OwnedPipeTests(unittest.TestCase):
         rpc.call.reset_mock();rpc.call.side_effect=[{'data':[],'nextCursor':None},{'thread':{'turns':[]}}]
         with self.assertRaises(ValidationError):receiver.deliver(rpc,e,c,path)
         self.assertEqual([v.args[0] for v in rpc.call.call_args_list],['thread/queue/list','thread/read'])
+    def test_malformed_queue_acceptance_retains_wire_intent_and_blocks_new_write(self):
+        script=HOST.replace("'id':'synthetic-accepted'", "'id':None")
+        p=self.child(script);rpc=OwnedStdioRPC(p,self.c);owner=rpc.identity()
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'journal'
+        event=dict(event_id='malformed',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        with self.assertRaisesRegex(ValidationError,'acceptance malformed'):
+            receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertEqual(json.loads(path.read_text())['malformed']['state'],'intent')
+        self.assertTrue(rpc.queue_uncertain)
+        launcher.check_owned_stdio(self.c,rpc,owner,self.root)
+        with self.assertRaisesRegex(ValidationError,'original queue outcome uncertain'):
+            rpc.call('thread/queue/add',rpc.pending_queue)
+        rpc.close()
+
     def test_notification_and_private_error_output_remain_bounded(self):
         script="import sys,json\nfor line in sys.stdin:\n q=json.loads(line)\n if 'id' not in q:continue\n if q['method']=='initialize':print(json.dumps({'id':q['id'],'result':{}}),flush=True)\n else:print(json.dumps({'id':q['id'],'error':{'message':'PRIVATE-SECRET'}}),flush=True)\n"
         p=self.child(script);rpc=OwnedStdioRPC(p,self.c)

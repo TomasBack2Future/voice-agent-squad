@@ -18,6 +18,7 @@
     "approvals_reviewer": {"const": "user"},
     "qualification_file": {"type": "string", "pattern": "^/"},
     "qualification_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "protocol_directory": {"type": "string", "pattern": "^/"}
+    "protocol_directory": {"type": "string", "pattern": "^/"},
+    "evidence_directory": {"type": "string", "pattern": "^/"}
   }
 }
