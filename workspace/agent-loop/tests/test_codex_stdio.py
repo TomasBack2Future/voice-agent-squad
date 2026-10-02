@@ -1,0 +1,212 @@
+"""Owned-stdio contract tests; synthetic host/proof, never native/provider calls."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import codex_worker_launcher as launcher
+import codex_stdio_contract as contract
+from validate_context_package import ValidationError
+
+VERSION = 'codex-cli 0.159.0-alpha.12.1'
+BINARY = '1180e2d56ea06ec583092acd933345685da3441cb1769a436d76dbf320613e75'
+ALL = '7243ba241962af92ca60581f1a81808ebda4212a800f8b205f54703bcfd508c5'
+V2 = 'e77b7d1436a78f431a74b2cb263a862e92ae40d70411bc63835b47ab2168827c'
+
+class QualifiedStdioTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.schemas=self.root/'schemas';self.schemas.mkdir();(self.schemas/'shape.json').write_text('{}')
+        self.refs={}
+        for n in range(8):
+            f=self.root/('receipt-'+str(n));f.write_text('synthetic exact record'+str(n));self.refs[str(f)]=hashlib.sha256(f.read_bytes()).hexdigest()
+        self.c = dict(transport='owned-stdio', client='cli', client_executable='/synthetic/codex',
+                      model='gpt-6.1-sol', provider='openai', effort='medium', service_tier='priority',
+                      sandbox='read-only', approval_policy='never', approvals_reviewer='user',
+                      qualification_file=str(self.root/'proof.json'),protocol_directory=str(self.schemas),native_session_id='00000000-0000-0000-0000-000000000001')
+        self.proof = dict(schema_version='squad.current-cli-transport-qualification.v1',
+            binary=dict(version=VERSION, sha256=BINARY),
+            protocol=dict(generated_schema_files=440, aggregate_schema_sha256=ALL, v2_schema_sha256=V2),
+            actual_selection=dict(model='gpt-6.1-sol', modelProvider='openai', reasoningEffort='medium',
+                serviceTier='priority', approvalPolicy='never', approvalsReviewer='user',
+                sandbox=dict(type='readOnly', networkAccess=False)),
+            probe_thread='isolated-thread', loaded_owner=dict(data=['isolated-thread'], nextCursor=None),
+            before_queue_idle=dict(type='idle'), after_queue_idle=dict(type='idle'),
+            queue_intent=dict(threadId='isolated-thread',clientUserMessageId='client-one',literal='exact synthetic input'),
+            queue_acceptance=dict(queuedSubmission=dict(id='accepted-one',clientUserMessageId='client-one',
+                input=[dict(type='text',text='exact synthetic input',text_elements=[])])),
+            source_turn=dict(turn_id='first',user_item=dict(type='userMessage',content=[dict(type='text',text='initial')]),assistant_items=[]),
+            queued_turn=dict(turn_id='second',user_item=dict(type='userMessage',clientId='client-one',
+                content=[dict(type='text',text='exact synthetic input',text_elements=[])]),assistant_items=[]),
+            actual_inference_turns=2, actual_queue_submissions=1, actual_turn_start_requests=1,
+            cleanup=dict(all_hosts_waited_exit0=True, all_readers_joined=True,both_native_turns_completed=True,
+                own_thread_archived=True,owned_process_groups_remaining=[],total_from_original_start_seconds=148),
+            server_incarnations=[dict(pid=1,start='synthetic',incarnation='owned',cleanup=dict(server_waited=True,server_exit=0,
+                stdout_reader_joined=True,stderr_reader_joined=True,terminal_turns_joined=[dict(id='first',status='completed'),dict(id='second',status='completed')]))],
+            immutable_associations=self.refs)
+        # Installer package pins the complete immutable proof; no unpinned booleans.
+        self.write_proof()
+    def write_proof(self):
+        raw=json.dumps(self.proof).encode(); Path(self.c['qualification_file']).write_bytes(raw)
+        self.c['qualification_sha256']=hashlib.sha256(raw).hexdigest()
+    def checked(self):
+        with patch.object(launcher.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=VERSION)), \
+             patch.object(launcher,'digest',return_value=BINARY), \
+             patch.object(contract,'PROOF_SHA',self.c['qualification_sha256']), \
+             patch.object(contract,'SCHEMA_COUNT',1), \
+             patch.object(contract,'SCHEMA_SHA',hashlib.sha256(json.dumps([{'path':'shape.json','sha256':hashlib.sha256(b'{}').hexdigest()}],sort_keys=True,separators=(',',':')).encode()).hexdigest()):
+            return launcher.check_qualification(self.c)
+    def test_actual_qualified_stdio_identity_traverses_transport_gate(self):
+        self.assertEqual(self.checked()['version'],VERSION)
+    def test_stdio_proof_cannot_qualify_unix_or_other_selection(self):
+        for key,value in [('transport','unix'),('client','app'),('sandbox','danger-full-access'),
+                          ('effort','high'),('service_tier','default'),('approval_policy','on-request')]:
+            with self.subTest(key=key):
+                old=self.c[key];self.c[key]=value
+                with self.assertRaises(ValidationError):self.checked()
+                self.c[key]=old
+
+    def test_concrete_evidence_tampering_rejects_even_repinned_fixture(self):
+        original=copy.deepcopy(self.proof)
+        for key,path,value in [('wrongSchema',['protocol','v2_schema_sha256'],'other'),
+            ('wrongSelection',['actual_selection','serviceTier'],'default'),
+            ('wrongClient',['queued_turn','user_item','clientId'],'other'),
+            ('wrongInput',['queue_acceptance','queuedSubmission','input'],[]),
+            ('missingJoin',['cleanup','all_readers_joined'],False),
+            ('wrongThread',['queue_intent','threadId'],'other'),
+            ('partialProof',['loaded_owner','data'],[]),
+            ('sameTurn',['queued_turn','turn_id'],'first')]:
+            with self.subTest(key=key):
+                self.proof=copy.deepcopy(original);obj=self.proof
+                for p in path[:-1]:obj=obj[p]
+                obj[path[-1]]=value;self.write_proof()
+                with self.assertRaises(ValidationError):self.checked()
+        self.proof=original;self.write_proof()
+        (self.root/'receipt-0').write_text('rewritten')
+        with self.assertRaises(ValidationError):self.checked()
+    def test_actual_protocol_mutation_rejects(self):
+        (self.schemas/'shape.json').write_text('{"changed":true}')
+        with self.assertRaises(ValidationError):self.checked()
+    def test_proof_hash_is_not_boolean_qualification(self):
+        Path(self.c['qualification_file']).write_text('{"qualified":true}')
+        with self.assertRaises(ValidationError):self.checked()
+
+
+# Actual local synthetic JSONL subprocess; no Codex/model/account/ledger involved.
+import subprocess
+import threading
+from codex_rpc import OwnedStdioRPC, LIMIT
+import codex_receiver as receiver
+
+HOST = r'''
+import sys,json
+native='00000000-0000-0000-0000-000000000001'
+for line in sys.stdin:
+ q=json.loads(line)
+ if 'id' not in q:continue
+ m=q['method'];p=q['params']
+ if m=='initialize':r={}
+ elif m=='thread/loaded/list':r={'data':[native]}
+ elif m=='thread/read':r={'thread':{'id':native,'cwd':sys.argv[1],'model':'gpt-6.1-sol','modelProvider':'openai','reasoningEffort':'medium','canAcceptDirectInput':True,'turns':[]}}
+ elif m=='thread/resume':r={'model':'gpt-6.1-sol','modelProvider':'openai','reasoningEffort':'medium','serviceTier':'priority','approvalPolicy':'never','approvalsReviewer':'user','sandbox':{'type':'readOnly','networkAccess':False}}
+ elif m=='thread/queue/add':r={'queuedSubmission':{'id':'synthetic-accepted','clientUserMessageId':p['clientUserMessageId'],'input':p['input']}}
+ elif m=='thread/queue/list':r={'data':[],'nextCursor':None}
+ else:r={}
+ print(json.dumps({'id':q['id'],'result':r}),flush=True)
+'''
+
+class OwnedPipeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name).resolve()
+        self.c=dict(client_executable=sys.executable,transport='owned-stdio',client='cli',native_session_id='00000000-0000-0000-0000-000000000001',
+            model='gpt-6.1-sol',provider='openai',effort='medium',service_tier='priority',sandbox='read-only',approval_policy='never',approvals_reviewer='user')
+        self.qualification=patch.object(launcher,'check_qualification',return_value={'transport':'owned-stdio'});self.qualification.start();self.addCleanup(self.qualification.stop)
+    def child(self, script=HOST):
+        p=subprocess.Popen([sys.executable,'-u','-c',script,str(self.root),'app-server','--listen','stdio://'],
+            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        def cleanup():
+            if p.poll() is None:
+                p.stdin.close()
+                try:p.wait(timeout=2)
+                except subprocess.TimeoutExpired:p.terminate();p.wait(timeout=2)
+            for pipe in (p.stdin,p.stdout,p.stderr):
+                if not pipe.closed:pipe.close()
+            OwnedStdioRPC._owners.discard(p)
+        self.addCleanup(cleanup);return p
+    def test_loaded_selection_acceptance_idempotent_journal_and_actual_child_join(self):
+        p=self.child();rpc=OwnedStdioRPC(p,self.c);owner=rpc.identity()
+        with self.assertRaisesRegex(ValidationError,'fresh'):rpc.call('thread/queue/add',{'threadId':self.c['native_session_id']})
+        ready=launcher.check_owned_stdio(self.c,rpc,owner,self.root);self.assertTrue(ready['live_owner_verified'])
+        event=dict(event_id='synthetic-event',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        cfg=dict(self.c,agent_id='dispatcher',role='dispatcher')
+        path=self.root/'journal'
+        receiver.deliver_owned_stdio(rpc,event,cfg,owner,self.root,path)
+        stored=json.loads(path.read_text());self.assertEqual(stored['synthetic-event']['native_acceptance']['id'],'synthetic-accepted')
+        sequence=rpc.sequence
+        receiver.deliver(rpc,event,cfg,path);self.assertEqual(rpc.sequence,sequence)
+        self.assertEqual(rpc.close()['joined_exit'],0)
+        self.assertIsNotNone(p.poll())
+        with self.assertRaises(ValidationError):rpc.call('thread/read',{})
+    def test_no_shared_reader_wrong_owner_native_or_policy_override(self):
+        p=self.child();rpc=OwnedStdioRPC(p,self.c)
+        with self.assertRaises(ValidationError):OwnedStdioRPC(p,self.c)
+        bad=dict(rpc.identity(),incarnation='different')
+        with self.assertRaises(ValidationError):launcher.check_owned_stdio(self.c,rpc,bad,self.root)
+        for method,params in [('thread/read',{'threadId':'other'}),('thread/resume',{'threadId':self.c['native_session_id'],'sandbox':'danger-full-access'}),('turn/start',{})]:
+            with self.assertRaises(ValidationError):rpc.call(method,params)
+        errors=[]
+        def other():
+            try:rpc.call('thread/loaded/list',{})
+            except ValidationError:errors.append(True)
+        t=threading.Thread(target=other);t.start();t.join();self.assertEqual(errors,[True]);rpc.close()
+    def test_stdio_fullaccess_app_tier_mismatch_never_live_ready(self):
+        for key,value in [('approvalPolicy','on-request'),('serviceTier','default'),('sandbox',{'type':'dangerFullAccess'})]:
+            effective=copy.deepcopy(contract.SELECTION);effective[key]=value
+            with self.assertRaises(ValidationError):launcher.check_effective(effective,self.c)
+    def test_malformed_partial_overlimit_and_lost_reply_are_uncertain(self):
+        for code in ["sys.stdout.write('{bad\\n');sys.stdout.flush()", "sys.stdout.write('{');sys.stdout.flush()", "sys.stdout.write('x'*(2*1024*1024+1));sys.stdout.flush()"]:
+            script="import sys,json,time\nfor line in sys.stdin:\n q=json.loads(line)\n if 'id' not in q:continue\n if q['method']=='initialize':print(json.dumps({'id':q['id'],'result':{}}),flush=True)\n else:\n  "+code+"\n  time.sleep(.2)\n"
+            p=self.child(script);rpc=OwnedStdioRPC(p,self.c)
+            with self.assertRaises(ValidationError):rpc.call('thread/read',{'threadId':self.c['native_session_id']},timeout=.05)
+            self.assertTrue(rpc.uncertain)
+            with self.assertRaises(ValidationError):rpc.call('thread/queue/add',{'threadId':self.c['native_session_id']})
+    def test_uncertain_readback_requires_exact_client_input_not_prose(self):
+        from unittest.mock import Mock
+        rpc=Mock();thread=self.c['native_session_id'];text='exact payload'
+        rpc.call.side_effect=[{'data':[],'nextCursor':None},{'thread':{'turns':[{'items':[{'type':'userMessage','clientId':'other','content':[{'type':'text','text':text}]}]}]}}]
+        self.assertFalse(receiver.native_contains(rpc,thread,text,'original-client'))
+    def test_join_timeout_retains_original_handle_and_owner_without_kill(self):
+        p=self.child();rpc=OwnedStdioRPC(p,self.c)
+        with patch.object(p,'wait',side_effect=subprocess.TimeoutExpired(p.args,.01)), \
+             patch.object(p,'terminate') as terminate, patch.object(p,'kill') as kill:
+            with self.assertRaisesRegex(ValidationError,'retain original custody'):rpc.close(timeout=.01)
+            terminate.assert_not_called();kill.assert_not_called()
+            self.assertFalse(rpc.closed);self.assertIn(p,OwnedStdioRPC._owners)
+    def test_uncertain_intent_is_not_sent_again_without_exact_history(self):
+        from unittest.mock import Mock
+        rpc=Mock();rpc.call.side_effect=TimeoutError('lost reply')
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher')
+        e=dict(event_id='one',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        path=self.root/'journal'
+        with self.assertRaises(TimeoutError):receiver.deliver(rpc,e,c,path)
+        self.assertEqual(json.loads(path.read_text())['one']['state'],'intent')
+        rpc.call.reset_mock();rpc.call.side_effect=[{'data':[],'nextCursor':None},{'thread':{'turns':[]}}]
+        with self.assertRaises(ValidationError):receiver.deliver(rpc,e,c,path)
+        self.assertEqual([v.args[0] for v in rpc.call.call_args_list],['thread/queue/list','thread/read'])
+    def test_notification_and_private_error_output_remain_bounded(self):
+        script="import sys,json\nfor line in sys.stdin:\n q=json.loads(line)\n if 'id' not in q:continue\n if q['method']=='initialize':print(json.dumps({'id':q['id'],'result':{}}),flush=True)\n else:print(json.dumps({'id':q['id'],'error':{'message':'PRIVATE-SECRET'}}),flush=True)\n"
+        p=self.child(script);rpc=OwnedStdioRPC(p,self.c)
+        with self.assertRaises(ValidationError) as e:rpc.call('thread/read',{'threadId':self.c['native_session_id']})
+        self.assertNotIn('SECRET',str(e.exception));self.assertTrue(rpc.uncertain)
+    def test_standalone_stdio_receiver_rejects_before_any_spawn(self):
+        path=self.root/'config';path.write_text(json.dumps({'transport':'owned-stdio'}))
+        with self.assertRaises(ValidationError):receiver.run(path)
+
+if __name__=='__main__':unittest.main()

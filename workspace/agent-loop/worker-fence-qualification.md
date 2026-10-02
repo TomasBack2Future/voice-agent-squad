@@ -95,3 +95,65 @@ rollback needs the normal expected-epoch/full-inventory CAS by its legal owner;
 restoring a file or old actor name is not controller authority. Never remove the
 private review admission database, occupied flights or consumed recovery roots
 when rolling back binaries; an old binary must not be used to evade their gates.
+
+## Exact owned-stdio transport compatibility
+
+The separately selected `owned-stdio` contract is transport preparation only.
+It registers CLI `0.159.0-alpha.12.1` with the exact reviewed executable SHA,
+440-file experimental protocol identity and immutable installer qualification
+receipt in `codex_stdio_contract.py`. There is no general alpha allow-list,
+Unix fallback or App attachment. The existing Unix `0.159.2` route and Worker
+persistent-fence guard stay closed wherever their original proof is unavailable.
+
+Validate a transport-only config against `schemas/codex-owned-stdio.schema.json`.
+Its only supported selection is `gpt-6.1-sol` / OpenAI / medium / priority (Fast),
+read-only with network disabled, approval never, reviewer user. Full Access is
+unqualified here: never downgrade an existing session to make it fit. Pin the
+reviewed qualification receipt and provide its unchanged associated evidence
+files and exact generated schema directory. The schema inventory hash is SHA256
+of UTF-8 `json.dumps([{path, sha256}, ...], sort_keys=True, separators=(',', ':'))`,
+with all relative JSON paths sorted. Evidence is bounded and rehashed; asserted
+completion booleans, altered files and old Unix receipts cannot qualify stdio.
+
+At a separately authorized installer boundary, the original parent supplies its
+own already-created `subprocess.Popen` child with exclusive binary stdin/stdout/
+stderr pipes. `OwnedStdioRPC(child, config)` never spawns or discovers a host.
+The child command must end in `app-server --listen stdio://`. Only the original
+parent and IO thread may operate it; a second wrapper, process, thread or changed
+pipe/incarnation fails. The bounded JSONL reader drains stderr without exposing
+it, rejects partial/malformed/oversized data and never approves host tools.
+A transport failure retains the original child handle and marks uncertainty.
+It does not terminate a host, join provider work or admit a new sample.
+
+`check_owned_stdio(config, rpc, rpc.identity(), worktree)` rechecks the historical
+contract, live child identity, **already loaded** native, cwd, current model,
+effort and effective policy/Fast tier without selection overrides. It never
+loads an absent native. A historical probe native is not the current target.
+`deliver_owned_stdio` must run in that same parent/IO thread; a standalone
+receiver cannot attach to these pipe descriptors. It preserves the existing
+durable event intent and journal, rechecks current selection before a queue
+write and verifies the exact returned acceptance ID/client ID/input. Delivery
+acceptance is not current Dispatcher handling or explicit ACK.
+
+On a lost response, the original intent remains. Only exact supported queue/
+retained user-input readback matching **both** client ID and immutable text may
+join it; ambiguous, missing or truncated history remains uncertain. Never send
+again merely because the client ID looks unique. Mock tests do not qualify real
+duplicate, stale or lost-response semantics. Child cleanup closes only the
+owned stdin and joins only that child; a join timeout retains custody and no
+server/client is killed. The returned host join is not remote cancellation.
+
+Run the portable synthetic protocol/negative tests (no Codex/provider invoked):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s workspace/agent-loop/tests -p test_codex_stdio.py -v
+```
+
+The registered original isolated transport proof demonstrates one initial and
+one queued turn with actual acceptance, retained input/turn association, idle
+wake and joined hosts. It proves neither current Worker adoption nor App host
+entitlement, Unix remote transport, persistent all-writer custody, business
+handling/ACK or Issue acceptance. Those retain independent platform contracts
+and installer qualification gates. This compatibility API does not install,
+resume, migrate or activate any existing native session.

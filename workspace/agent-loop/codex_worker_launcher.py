@@ -129,7 +129,27 @@ def live_target(rpc, c, worktree):
     return effective
 
 
+def check_owned_stdio(c, rpc, owner, worktree):
+    """Installer's already-owned child only; never spawn/resume an unloaded native."""
+    from codex_rpc import OwnedStdioRPC
+    if c.get('transport') != 'owned-stdio' or not isinstance(rpc, OwnedStdioRPC):
+        raise ValidationError('explicit owned stdio transport required')
+    binary = check_qualification(c)
+    if rpc.config != c:
+        raise ValidationError('stdio owner config changed')
+    rpc.check_owner(owner)
+    live_target(rpc, c, worktree)
+    rpc.check_owner(owner)
+    rpc.native_worktree = str(Path(worktree).resolve())
+    rpc.native_ready = True
+    return dict(binary, live_owner_verified=True, owner=owner)
+
+
 def check_effective(effective, c):
+    if c.get('transport') == 'owned-stdio':
+        from codex_stdio_contract import SELECTION
+        if any(effective.get(k) != v for k, v in SELECTION.items()):
+            raise ValidationError('stdio effective selection or Fast tier mismatch')
     sandbox = {'read-only': 'readOnly', 'workspace-write': 'workspaceWrite',
                'danger-full-access': 'dangerFullAccess'}[c['sandbox']]
     if (effective.get('model') != c['model'] or effective.get('reasoningEffort') != c['effort']
@@ -222,6 +242,15 @@ def check_delivery_runtime(c, env):
 
 
 def check_qualification(c):
+    if c.get('transport') == 'owned-stdio':
+        from codex_stdio_contract import validate_contract
+        result = subprocess.run([c['client_executable'], '--version'], capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            raise ValidationError('stdio executable version unavailable')
+        return validate_contract(c, {'version': result.stdout.strip(),
+                                     'executable_sha256': digest(c['client_executable'])})
+    if c.get('transport') not in (None, 'unix'):
+        raise ValidationError('unregistered Codex transport; no fallback')
     binary = executable(c)
     proof = json.loads(Path(c['qualification_file']).read_text())
     if (proof.get('schema_version') != 'codex.control-plane-qualification.v1'
