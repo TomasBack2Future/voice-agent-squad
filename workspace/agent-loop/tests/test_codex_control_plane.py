@@ -296,6 +296,23 @@ class CodexControlPlaneTests(unittest.TestCase):
                 receiver.run(self.write_receiver(self.rc))
             popen.assert_not_called();rpc.assert_not_called()
 
+    def test_unqualified_fence_preserves_full_access_policy_and_custody(self):
+        # Qualification must not pretend that a permission downgrade, a new
+        # client, or a process kill establishes a persistent native fence.
+        c = dict(self.c, sandbox='danger-full-access', approval_policy='never', approvals_reviewer='user')
+        rc = dict(self.rc, sandbox='danger-full-access', approval_policy='never', approvals_reviewer='user')
+        before = copy.deepcopy((self.a, c, rc))
+        path = self.write_receiver(rc)
+        with patch.object(receiver.subprocess, 'Popen') as popen, patch.object(receiver, 'RPC') as rpc, \
+             patch.object(receiver, 'controller_receiver') as controller, patch.object(receiver, 'writer_intent') as writer:
+            with self.assertRaisesRegex(ValidationError, 'execution fence unavailable'):
+                receiver.supervise(['client'], self.a, c, {}, self.path, [1,2,3,4,5])
+            with self.assertRaisesRegex(ValidationError, 'execution fence unavailable'):
+                receiver.run(path)
+            popen.assert_not_called(); rpc.assert_not_called()
+            controller.assert_not_called(); writer.assert_not_called()
+        self.assertEqual((self.a, c, rc), before)
+
     def test_receiver_never_uses_paused_or_old_target_timer_fallback(self):
         c = dict(self.rc,endpoint='unix:///missing-old-target')
         receipt=dict(type='worker-terminal-delivery-v1',recipient='worker',delivery_session='one',events=[self.event])

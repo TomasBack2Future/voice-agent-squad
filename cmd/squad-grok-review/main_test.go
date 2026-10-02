@@ -281,11 +281,65 @@ func TestParseConfigRejectsRecoveryModeBypass(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"recover", "--from", "original", "--repo", "owner/repo", "--pr", "9", "--mode", "shadow"},
+		{"recover", "--from", "original", "--repo", "owner/repo", "--pr", "9", "--mode", "unknown"},
 		{"--from", "original", "--repo", "owner/repo", "--pr", "9", "--mode", "required"},
 	} {
 		if _, err := parseConfig(append(args, "--config", path), io.Discard); err == nil {
 			t.Fatal("unsupported recovery bypass accepted")
 		}
+	}
+}
+
+func TestParseConfigShadowAndProspectivePreserveOriginalMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.json")
+	if err := os.WriteFile(path, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, suffix := range []string{"recover", "reconcile", "doctor"} {
+		if _, err := parseConfig([]string{"readmit", suffix, "--from", "/absolute/prospective.json", "--config", path, "--repo", "owner/repo", "--pr", "9", "--mode", "shadow"}, io.Discard); err == nil {
+			t.Fatal("combined operation admitted", suffix)
+		}
+	}
+	for _, operation := range []string{"recover", "reconcile", "readmit"} {
+		from := "original"
+		if operation == "readmit" {
+			from = filepath.Join(t.TempDir(), "prospective.json")
+		}
+		configuration, err := parseConfig([]string{operation, "--from", from, "--config", path, "--repo", "owner/repo", "--pr", "9", "--mode", "shadow"}, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if configuration.mode != "shadow" {
+			t.Fatal("mode changed")
+		}
+	}
+	if _, err := parseConfig([]string{"readmit", "--from", "original", "--config", path, "--repo", "owner/repo", "--pr", "9", "--mode", "shadow"}, io.Discard); err == nil {
+		t.Fatal("readmit accepted attempt ID instead of explicit new-input receipt")
+	}
+}
+
+func TestAuthorizationReadbackUsesOnlyExactLocalReceipt(t *testing.T) {
+	t.Setenv("SQUAD_AGENT", "worker")
+	t.Setenv("CODEX_THREAD_ID", "native")
+	t.Setenv("SQUAD_SESSION_ID", "codex:native")
+	t.Setenv("SQUAD_GROK_REVIEW_CONFIG", "/nonexistent/no-provider-config")
+	scope := grokreview.ReviewDisclosure{SchemaVersion: grokreview.ReviewDisclosureSchema, Owner: grokreview.ReviewOwner{Actor: "worker", Native: "native"}, Identity: grokreview.ReviewIdentity{Repository: "owner/repo", PR: 92, BaseRef: "main", BaseSHA: "base", HeadSHA: "head"}, Mode: "required", Operation: "managed_review", Provider: "grok", Content: "source_diff_and_review_contract"}
+	raw, _ := json.Marshal(scope)
+	path := filepath.Join(t.TempDir(), "scope.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"authorization-readback", "--request", path}, &stdout, &stderr); code != 0 {
+		t.Fatalf("readback initialized provider: %d %s", code, stderr.String())
+	}
+	var result grokreview.DisclosureReadback
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || result.Status != "unavailable" || result.Sampled || result.Published {
+		t.Fatalf("invented permission: %#v %v", result, err)
+	}
+	t.Setenv("SQUAD_SESSION_ID", "codex:foreign")
+	if code := run(context.Background(), []string{"authorization-readback", "--request", path}, &stdout, &stderr); code == 0 {
+		t.Fatal("mismatched native accepted")
 	}
 }

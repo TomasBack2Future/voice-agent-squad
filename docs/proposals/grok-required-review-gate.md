@@ -166,7 +166,7 @@ from the Squad ledger. Receipts store input hashes and selected settings, never
 source diffs, prompts, credentials or raw model output. Normal invocation also rejects an existing managed Check on that head; it cannot sidestep recovery by omitting `recover`.
 
 A normal invocation prints `attempt_id`. Only a joined sampling timeout with no
-valid verdict and its failed published required Check is eligible for one
+valid verdict and its failed published original-mode Check is eligible for one
 explicit recovery:
 
 ```sh
@@ -178,7 +178,7 @@ squad-grok-review recover --from ORIGINAL_ATTEMPT_ID \
 Use the original configuration and output limits. The operation rejects changes
 to repository/PR/base/head, title/body, complete diff, reviewer core/policy,
 model/effort/timeout, mode, App identity or output bounds. It verifies all
-current-head required Checks from the configured App, rejects valid verdicts and
+current-head shadow and required Checks from the configured App, rejects valid verdicts and
 unresolved Checks, and requires the original failed Check. It reserves the
 one-use slot atomically before invoking the existing bounded managed reviewer.
 The synchronous child invocation and publication must return before the flight
@@ -215,6 +215,81 @@ valid attempts on the relevant exact tuple; valid different-head history is reta
 blocks import; a failure comment is insufficient. Existing receipt/slot custody
 cannot be overwritten by reimporting legacy JSON. Preserve old receipts read-only.
 
+
+### Prospective re-admission when original full input is unavailable
+
+`readmit` is explicitly a **new-input** operation, not legacy replay. The original
+failed receipt keeps its complete-input hash empty and unknown usage/cost intact.
+The original native delivery owner supplies a bounded absolute
+`squad.review-readmission.prospective.v1` receipt (`ProspectiveReadmission` in
+`internal/grokreview/prospective.go`). It contains:
+
+- `original`: the legacy terminal status/settings/failed Check and genuine
+  `native_join` above, with no original input receipt/hash. PID assertions cannot
+  substitute for the owning native's launch/join/terminal chain in this lane.
+- `diff_sha256`, `body_sha256`, and an absolute retained `content_evidence_path`
+  with its raw-file `content_evidence_sha256`. That JSON must contain the original
+  `diff_sha256` and `pr_body_sha256`; retain the genuine original artifact, never
+  invent or backdate its contents. These hashes prove content, not old full input.
+- `owner`: exact `actor` and `native`; the caller's `SQUAD_AGENT` and
+  `CODEX_THREAD_ID` / `SQUAD_SESSION_ID=codex:<native>` must agree. These are trusted
+  local operator bindings, not authority to impersonate another Worker.
+- `disclosure`: the real scope receipt below, with operation
+  `prospective_legacy_readmission`, exact original tuple and mode, and an empty
+  original `bundle_sha256`. A prior ordinary-review permission alone is not this
+  new-input authorization.
+
+```sh
+squad-grok-review readmit --from /absolute/prospective-receipt.json \
+  --repo owner/repo --pr 9 --mode shadow \
+  --model grok-4.7 --reasoning-effort high --timeout 20m
+```
+
+Both `recover` and `readmit` preserve the **original** shadow or required mode,
+model, effort, timeout, App and output limits. A shadow result never fulfills the
+required gate. `readmit` verifies current base/head/diff/body against the retained
+original identity, then freezes the complete new current bundle (including
+current core/policy/description), its SHA-256, timestamp, owner and authorization
+hash in the private store **before** model invocation. The child receipt and CLI
+output label it `prospective-legacy-new-input` and retain `parent_attempt`.
+Never describe that child as equivalent to the missing old prompt.
+
+All import/recover/readmit lanes share an atomic one-use root keyed by the
+original failed attempt **and** repository/PR/base-ref/base/head, across modes and
+complete-input hashes. Existing consumed recovery history is backfilled on store
+open. A used or interrupted root cannot be refunded or bypassed by ordinary
+sampling, mode/core/policy changes, alternate stores/exporters or a new PR. A
+valid current-tuple verdict in either mode or any live managed Check blocks
+recovery; different-head terminal history remains valid and does not block it.
+A second terminal failure ends this path; the original owner records the actual
+failure and uses the normal decision route without further sampling.
+
+### Exact disclosure scope readback
+
+`authorization-readback` reads existing local operator-authored receipts without
+initializing Grok, provider credentials, GitHub or the admission store:
+
+```sh
+squad-grok-review authorization-readback \
+  --request /absolute/current-scope.json \
+  --receipt /absolute/existing-disclosure.json
+```
+
+Both files use `squad.review-disclosure.v1`, with `owner`, exact `identity`
+(`repository`, `pr`, `base_ref`, `base_sha`, `head_sha`, `bundle_sha256`), `mode`,
+`operation` (`managed_review` or `prospective_legacy_readmission`),
+`provider: grok`, and `content: source_diff_and_review_contract`. The real receipt
+also has `reference` pointing to retained human authorization and `disposition`
+(`granted`, `pending`, `denied`). A request describes scope; it grants nothing.
+Use an empty complete-input hash only for explicitly unknown original prospective
+identity. The operation reports `unavailable` for no receipt, preserves exact
+pending/denied status, or returns `scope-mismatch` plus the retained reference and
+receipt disposition. It never propagates a grant to another PR/head/native/mode
+or operation and never samples/publishes. An operator must derive the receipt
+from actual human evidence: this local trust contract does not authenticate or
+manufacture that evidence. Keep one existing pending question when authority is
+absent; Full Access and source implementation permission are not disclosure grants.
+
 This is source capability, not installation or authorization to invoke another
 Worker's review. The installation owner controls adoption. The existing Worker
 owns the failed invocation and any eligible recovery after reviewed installation;
@@ -224,7 +299,7 @@ source preparation never invokes a foreign Worker’s recovery.
 ### Joining an interrupted or failed durable join
 
 `reconcile --from ATTEMPT_ID` is a local custody operation, not review sampling.
-Use the original selected `--repo`, `--pr`, required mode, model/effort/timeout,
+Use the original selected `--repo`, `--pr`, original mode, model/effort/timeout,
 App identity and canonical admission directory. The runner records actual wrapper
 and reviewer PIDs; terminal completion journals a private safe receipt before the
 SQLite join. Reconcile requires verified original process absence and restores a

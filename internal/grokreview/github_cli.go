@@ -492,14 +492,23 @@ func (g *GitHubCLI) VerifyRecoveryCheck(ctx context.Context, token string, appID
 			if prior.Settings.Mode == "shadow" {
 				checkName = "grok-review-shadow"
 			}
-			if c.Name != checkName || c.App.ID != appID {
+			if c.App.ID != appID || c.HeadSHA != prior.Identity.HeadSHA {
+				continue
+			}
+			if c.Name != checkName {
+				// Recovery cannot evade an existing verdict or live invocation by
+				// preserving the other mode. Ordinary shadow/required admission
+				// remains independent until a recovery slot is consumed.
+				if prior.ID != "" && (c.Name == "grok-review" || c.Name == "grok-review-shadow") && (c.Status != "completed" || c.Conclusion != "failure" || c.Output.Title != "Grok review error") {
+					return fmt.Errorf("current managed review Check has a verdict or unresolved invocation")
+				}
 				continue
 			}
 			if prior.ID == "" {
 				return fmt.Errorf("current input already has a managed review Check; reconcile its original receipt")
 			}
 			if c.HeadSHA != prior.Identity.HeadSHA || c.Status != "completed" || c.Conclusion != "failure" || c.Output.Title != "Grok review error" {
-				return fmt.Errorf("current required review Check has a verdict or unresolved invocation")
+				return fmt.Errorf("current original-mode review Check has a verdict or unresolved invocation")
 			}
 			if c.ID == prior.Publication.CheckRunID {
 				found = true
@@ -507,7 +516,7 @@ func (g *GitHubCLI) VerifyRecoveryCheck(ctx context.Context, token string, appID
 		}
 		if page*100 >= response.Total {
 			if !found && prior.ID != "" {
-				return fmt.Errorf("original failed required Check not found on current head")
+				return fmt.Errorf("original failed original-mode Check not found on current head")
 			}
 			return nil
 		}

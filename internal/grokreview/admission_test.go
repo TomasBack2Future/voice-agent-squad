@@ -71,6 +71,35 @@ func TestAdmissionRecoveryOneUseAndUnknownUsage(t *testing.T) {
 		t.Fatal("normal command bypassed one use")
 	}
 }
+
+func TestAdmissionShadowRecoveryPreservesModeAndOneUse(t *testing.T) {
+	dir := t.TempDir()
+	settings := admissionSettings()
+	settings.Mode = "shadow"
+	parent := openTestAdmission(t, dir, "", settings)
+	if err := parent.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Finish(context.Background(), timeoutReport()); err != nil {
+		t.Fatal(err)
+	}
+	child := openTestAdmission(t, dir, parent.AttemptID(), settings)
+	if err := child.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
+	}
+	if child.receipt.Settings.Mode != "shadow" {
+		t.Fatal("original mode changed")
+	}
+	if err := child.Finish(context.Background(), timeoutReport()); err != nil {
+		t.Fatal(err)
+	}
+	if err := openTestAdmission(t, dir, parent.AttemptID(), settings).Start(context.Background(), admissionBundle()); err == nil {
+		t.Fatal("shadow slot replayed")
+	}
+	if err := openTestAdmission(t, dir, parent.AttemptID(), admissionSettings()).Start(context.Background(), admissionBundle()); err == nil {
+		t.Fatal("mode switch admitted")
+	}
+}
 func TestAdmissionRejectsChangedInputAndSettings(t *testing.T) {
 	dir := t.TempDir()
 	id := seedTimeout(t, dir)

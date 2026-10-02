@@ -95,9 +95,13 @@ func (a *Admission) ImportLegacy(path string) error {
 	if _, err := readBoundedJSON(path, &legacy); err != nil {
 		return err
 	}
+	return a.verifyLegacyReceipt(legacy, true, verifyNativeJoin)
+}
+
+func (a *Admission) verifyLegacyReceipt(legacy LegacyRecoveryReceipt, requireInput bool, verify func(NativeJoinProof, AttemptReceipt) error) error {
 	r := legacy.Attempt
-	if legacy.SchemaVersion != "squad.review-recovery.legacy.v1" || !recoverable(r) || r.Settings.Mode != "required" {
-		return fmt.Errorf("legacy receipt is not a recoverable required timeout")
+	if legacy.SchemaVersion != "squad.review-recovery.legacy.v1" || !recoverable(r) || (r.Settings.Mode != "required" && r.Settings.Mode != "shadow") {
+		return fmt.Errorf("legacy receipt is not a recoverable original-mode timeout")
 	}
 	var status ReviewStatus
 	raw, err := readBoundedJSON(legacy.StatusPath, &status)
@@ -107,19 +111,21 @@ func (a *Admission) ImportLegacy(path string) error {
 	if receiptHash(raw) != legacy.StatusSHA256 || status.SchemaVersion != ReviewStatusSchemaVersion || status.Attempt != r.ID || status.Repository != r.Identity.Repository || status.PullRequest != r.Identity.PR || status.BaseRef != r.Identity.BaseRef || status.BaseSHA != r.Identity.BaseSHA || status.HeadSHA != r.Identity.HeadSHA || status.Mode != r.Settings.Mode || status.State != ReviewStateError || status.Verdict != VerdictError || status.FindingCount != 0 || status.FailureStage != "sampling" || status.FailureKind != CLIFailureTimeout || status.CompletedAt != r.CompletedAt {
 		return fmt.Errorf("legacy terminal timeout status does not match custody")
 	}
-	var input LegacyInputReceipt
-	inputRaw, err := readBoundedJSON(legacy.InputReceiptPath, &input)
-	if err != nil {
-		return fmt.Errorf("original complete frozen input provenance unavailable: %w", err)
-	}
-	if receiptHash(inputRaw) != legacy.InputReceiptSHA256 || input.SchemaVersion != "squad.review-input.v1" || input.Identity != r.Identity || input.Settings != r.Settings || input.RecordedAt <= 0 || input.RecordedAt > status.StartedAt || len(input.Identity.BundleSHA256) != 64 {
-		return fmt.Errorf("original pre-sampling frozen input evidence mismatched")
+	if requireInput {
+		var input LegacyInputReceipt
+		inputRaw, err := readBoundedJSON(legacy.InputReceiptPath, &input)
+		if err != nil {
+			return fmt.Errorf("original complete frozen input provenance unavailable: %w", err)
+		}
+		if receiptHash(inputRaw) != legacy.InputReceiptSHA256 || input.SchemaVersion != "squad.review-input.v1" || input.Identity != r.Identity || input.Settings != r.Settings || input.RecordedAt <= 0 || input.RecordedAt > status.StartedAt || len(input.Identity.BundleSHA256) != 64 {
+			return fmt.Errorf("original pre-sampling frozen input evidence mismatched")
+		}
 	}
 	if legacy.NativeJoin != nil {
 		if legacy.WrapperPID != 0 || legacy.ReviewerPID != 0 || legacy.JoinReceiptPath != "" {
 			return fmt.Errorf("ambiguous legacy join provenance")
 		}
-		if err = verifyNativeJoin(*legacy.NativeJoin, r); err != nil {
+		if err = verify(*legacy.NativeJoin, r); err != nil {
 			return err
 		}
 	} else {
@@ -160,7 +166,7 @@ func (a *Admission) ImportLegacy(path string) error {
 				return fmt.Errorf("legacy review custody has an unresolved invocation")
 			}
 			sameTuple := other.HeadSHA == r.Identity.HeadSHA && other.BaseSHA == r.Identity.BaseSHA && other.BaseRef == r.Identity.BaseRef
-			if sameTuple && other.Mode == r.Settings.Mode && (other.Verdict == VerdictApproved || other.Verdict == VerdictBlocking) {
+			if sameTuple && (!requireInput || other.Mode == r.Settings.Mode) && (other.Verdict == VerdictApproved || other.Verdict == VerdictBlocking) {
 				return fmt.Errorf("legacy review custody has a valid exact-tuple verdict")
 			}
 		}

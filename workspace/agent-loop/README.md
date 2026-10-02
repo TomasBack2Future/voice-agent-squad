@@ -455,6 +455,8 @@ The Codex runtime/adapter owner must qualify a supported execution suspension
 that preserves external operations and exact policy, blocks future writes until
 normal custody revalidation, and has an explicit fenced recovery. Until then
 preflight, direct supervisor start and Worker receiver attach all fail closed.
+Runnable negative checks, positive native proof requirements and installer rollback inputs are in
+[Worker fence qualification](worker-fence-qualification.md).
 This boundary does not stop existing installed clients or change their policy;
 source capability, reviewed installation and safe adoption remain distinct.
 `codex_receiver.py` also supports a Dispatcher-role config owned by that selected
