@@ -204,6 +204,48 @@ class CodexControlPlaneTests(unittest.TestCase):
         self.path.write_text(json.dumps(c))
         with self.assertRaises(ValidationError): launcher.config_file(self.path)
 
+    def test_accepted_unacknowledged_replays_keep_receiver_for_next_event(self):
+        c = dict(self.rc, role='dispatcher', controller_epoch=2)
+        event = dict(self.event, kind='handoff-complete',
+                     event_id=self.event['event_id'].replace('decision-resolved', 'handoff-complete'))
+        later = dict(event, outcome_id=2, source_message_id=2,
+                     event_id=event['event_id'].rsplit('/', 1)[0] + '/2')
+        def packet(item):
+            return dict(type='worker-terminal-delivery-v1', recipient=c['agent_id'],
+                        delivery_session=c['incarnation'], events=[item])
+        path = self.write_receiver(c)
+        with patch.object(receiver, 'check_qualification'), patch.object(receiver, 'controller_receiver'), \
+             patch.object(receiver, 'alive', return_value=True), patch.object(receiver, 'server_identity', return_value=[1,2,3,4,5]), \
+             patch.object(receiver, 'RPC', return_value=self.rpc), \
+             patch.object(receiver, 'listen', side_effect=[packet(event)] * 4 + [packet(later), None]), \
+             patch.object(receiver.subprocess, 'run', return_value=Mock(returncode=0)):
+            self.assertEqual(receiver.run(path), 0)
+        self.assertEqual(sum(method == 'thread/queue/add' for method, _ in self.rpc.calls), 2)
+        journal = json.loads((self.root / (NATIVE + '.delivery.json')).read_text())
+        self.assertEqual(journal[event['event_id']]['state'], 'accepted')
+        self.assertEqual(journal[later['event_id']]['state'], 'accepted')
+
+    def test_uncertain_replay_still_stops_without_another_native_submission(self):
+        c = dict(self.rc, role='dispatcher', controller_epoch=2)
+        event = dict(self.event, kind='handoff-complete',
+                     event_id=self.event['event_id'].replace('decision-resolved', 'handoff-complete'))
+        receipt = dict(type='worker-terminal-delivery-v1', recipient=c['agent_id'],
+                       delivery_session=c['incarnation'], events=[event])
+        path = self.write_receiver(c)
+        self.rpc.fail = True
+        with patch.object(receiver, 'check_qualification'), patch.object(receiver, 'controller_receiver'), \
+             patch.object(receiver, 'alive', return_value=True), patch.object(receiver, 'server_identity', return_value=[1,2,3,4,5]), \
+             patch.object(receiver, 'RPC', return_value=self.rpc), \
+             patch.object(receiver, 'listen', return_value=receipt) as listen, \
+             patch.object(receiver.subprocess, 'run') as delivered:
+            with self.assertRaisesRegex(TimeoutError, 'lost reply'):
+                receiver.run(path)
+            listen.assert_called_once()
+            delivered.assert_not_called()
+        self.assertEqual(sum(method == 'thread/queue/add' for method, _ in self.rpc.calls), 1)
+        journal = json.loads((self.root / (NATIVE + '.delivery.json')).read_text())
+        self.assertEqual(journal[event['event_id']]['state'], 'intent')
+
     def test_duplicate_and_restart_do_not_resubmit_native_queue(self):
         receiver.deliver(self.rpc, self.event, self.rc, self.journal)
         receiver.deliver(self.rpc, self.event, dict(self.rc,incarnation='restart'), self.journal)
