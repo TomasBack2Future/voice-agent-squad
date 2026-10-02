@@ -455,6 +455,33 @@ The Codex runtime/adapter owner must qualify a supported execution suspension
 that preserves external operations and exact policy, blocks future writes until
 normal custody revalidation, and has an explicit fenced recovery. Until then
 preflight, direct supervisor start and Worker receiver attach all fail closed.
+Native input acceptance and handling acknowledgement are separate. The ledger may
+return accepted-but-unacknowledged events again while a Dispatcher handles a long
+operation. The receiver uses its durable accepted-input journal to avoid another
+native submission, records transport acceptance again, and keeps listening for
+new events within the existing client/lifetime bound. Accepted replays never
+consume a transport retry allowance or terminate the receiver merely because the
+handling ack is delayed. An uncertain submission, identity mismatch or rejected
+custody still stops without resubmitting or acknowledging handling.
+
+An absent old helper does not prove its terminal join or permit a replacement
+controller. The installation owner retains original launcher/helper exit
+and external-operation custody evidence. Directly attaching a new helper to an
+old supervisor is unsupported: that supervisor cannot join the replacement
+helper before releasing its global receiver lease. Keep the current client and
+lease intact until the existing owner establishes the normal safe joined
+boundary for its owned CLI and helper, with original operations retained.
+Then use the reviewed `codex_dispatcher_adoption.py --config
+/absolute/retained.resume.json` for the same controller native/actor/epoch,
+with actual inactive-writer join evidence and the same state directory.
+The fresh supervised client/receiver incarnation is admitted only after the old
+writer journal records actual joins; the global receiver bind, local locks,
+selected server incarnation and unchanged runtime policy still apply. Never
+fabricate dead PIDs, rewrite locale-sensitive historical process-start evidence,
+clear an unresolved lease, stop a shared App backend or retarget a timer.
+Source changes do not perform this controlled installation/resume. Worker-role
+attach remains closed under the unqualified persistent execution fence.
+
 Runnable negative checks, positive native proof requirements and installer rollback inputs are in
 [Worker fence qualification](worker-fence-qualification.md).
 This boundary does not stop existing installed clients or change their policy;

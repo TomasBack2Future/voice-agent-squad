@@ -187,7 +187,6 @@ def run(path):
                 live_target(rpc, c, c['worktree'])
         controller_receiver(c)
         deadline = time.monotonic() + c['max_seconds']
-        retries = {}
         while alive(c, path) and time.monotonic() < deadline:
             receipt = listen(c, path, max(1, int(deadline - time.monotonic())))
             if receipt is None or not alive(c, path):
@@ -200,9 +199,9 @@ def run(path):
                 for event in events:
                     if not alive(c, path):
                         return 0
-                    retries[event['event_id']] = retries.get(event['event_id'], 0) + 1
-                    if retries[event['event_id']] > 3:
-                        raise ValidationError('bounded delivery retry exhausted; handling still pending')
+                    # Pending includes accepted input awaiting the owner's ack.
+                    # Durable delivery custody prevents another submission; a
+                    # slow handler must not exhaust a transport retry budget.
                     deliver(rpc, event, c, state / (c['native_session_id'] + '.delivery.json'))
                     if not alive(c, path):
                         return 0
