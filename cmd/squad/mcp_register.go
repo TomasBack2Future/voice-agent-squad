@@ -209,6 +209,25 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 	registerDispatchControllerTools(srv, db, repoID, repoRoot)
 
 	srv.Register(mcp.Tool{
+		Name: "squad_dispatch_takeover", Description: "Operator recovery of verified stopped sessions with exact custody fences; ENV requires separate recover.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"reservation":{"type":"string"},"expected_dispatcher":{"type":"string"},"dispatcher_session":{"type":"string"},"expected_worker_session":{"type":"string"},"expected_generation":{"type":"integer","minimum":1},"new_dispatcher":{"type":"string"},"new_worker_session":{"type":"string"},"expected_holder":{"type":"string"},"expected_claim_generation":{"type":"integer","minimum":1},"new_holder":{"type":"string"},"confirm_dispatcher_stopped":{"type":"boolean"},"confirm_worker_stopped":{"type":"boolean"},"reason":{"type":"string"},"evidence":{"type":"string"}},"required":["reservation","expected_dispatcher","dispatcher_session","expected_worker_session","expected_generation","new_dispatcher","confirm_dispatcher_stopped","reason","evidence"],"additionalProperties":false}`),
+		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+			q, err := decodeTakeover(raw)
+			if err != nil {
+				return nil, err
+			}
+			if err = requireRepo(repoRoot, repoID); err != nil {
+				return nil, err
+			}
+			actor, err := identity.AgentID()
+			if err != nil {
+				return nil, err
+			}
+			return dispatch.New(db, repoID, nil).Takeover(ctx, actor, q)
+		},
+	})
+
+	srv.Register(mcp.Tool{
 		Name: "squad_dispatch_continue", Description: "Dispatcher-owned fenced continuation for the same Worker; old item released/done, new item held by same actor.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"reservation":{"type":"string"},"from_item":{"type":"string"},"item":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1}},"required":["reservation","from_item","item","worker_session","generation"],"additionalProperties":false}`),
 		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {

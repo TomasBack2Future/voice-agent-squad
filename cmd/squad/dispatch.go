@@ -13,7 +13,7 @@ import (
 func newDispatchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "dispatch", Short: "Manage durable Dispatcher-to-Worker reservations"}
 	cmd.AddCommand(dispatchControllerCommands()...)
-	cmd.AddCommand(newDispatchReserveCmd(), newDispatchAttachCmd(), newDispatchBindCmd(), newDispatchCloseCmd(), newDispatchListCmd(), newDispatchContinueCmd())
+	cmd.AddCommand(newDispatchTakeoverCmd(), newDispatchReserveCmd(), newDispatchAttachCmd(), newDispatchBindCmd(), newDispatchCloseCmd(), newDispatchListCmd(), newDispatchContinueCmd())
 	return cmd
 }
 

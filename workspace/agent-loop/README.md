@@ -399,6 +399,62 @@ CI/ENV waits. Only verified complete-diff admissions can enter it; in-flight or
 already-attempted tuples reconcile instead of sampling again. See the
 [review lane contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md#independent-review-lane).
 
+### Muse lifecycle qualification and execution boundary
+
+`muse_session_host.py` is a bounded MSP lifecycle probe, **not an admitted
+unattended task executor**. The previous renewal-only host has been disabled:
+stopping heartbeats does not prevent a native tool or descendant from continuing
+to write after losing ownership. Neither `turn/interrupt` nor
+`session/setApprovalMode` is a persistent Squad-generation execution fence.
+Worker and Dispatcher task starts fail before spawning a server or receiver;
+Deployer, Reviewer and Investigator execution has no adapter here. This does not
+exclude Muse from interactive roles under their ordinary operation authority.
+
+Probe configuration requires absolute client/coordination/ledger/workspace/state
+and prompt paths, a native UUID, `agent_id`, `role: "probe"`,
+`model: "muse-spark-1.3-contributor"`, `provider: "meta"`,
+`permission_mode: "yolo"`, and an explicit catalog-supported `reasoning_effort`.
+No defaults, alternative models, legacy approval/sandbox config or task prompt
+are accepted for execution. `environment` permits only PATH, GH_CONFIG_DIR and
+SQUAD_HOME routing paths. Do not put secrets in config or evidence.
+
+The pinned adapter checks Muse `1.4.2-R4684.1` and its exported stable schema
+fingerprint. MSP `serve` explicitly receives `--provider meta --model
+muse-spark-1.3-contributor --disable-sandbox --trust-workspace`; it has no
+`--yolo` option. `session/start` explicitly selects model/provider/`allowAll`.
+The host reads back exact session/workspace/model/provider/approval and catalog
+effort. Sandbox posture is fixed by the host's process arguments, not a fabricated
+wire field. Resume first reads the retained session and rejects a mismatched or
+non-idle selection before loading, then verifies the resumed reply. It never
+silently repairs permissions or switches models. Unknown versions, schemas,
+models and permission states fail closed.
+
+`--prepare` creates one no-turn probe session; `--check` verifies its no-turn
+resume. Normal invocation rejects managed execution; there is no arbitrary
+`/rpc`, user prompt or event-turn escape. Evidence says `lifecycle-verified` and
+`task_execution: blocked`, never unattended-ready. Native duplicate-session
+admission is separate from, and does not prove, claim-loss write exclusion.
+
+Opt-in native tests use temporary workspaces with no Squad claim/controller:
+
+```sh
+MUSE_NATIVE_EXECUTABLE=/absolute/path/to/muse \
+MUSE_NATIVE_EVIDENCE=/absolute/private/evidence \
+python3 -m unittest discover -s workspace/agent-loop/tests -p test_muse_native.py
+```
+
+They verify explicit 1.3/YOLO readback, a bounded text-only provider response,
+same-native resume, wrong permission/model rejection and duplicate native
+loading rejection. Ordinary CI skips these account-dependent tests. Recorded
+permissions and model catalog alone are not successful provider execution.
+
+The remaining native adapter requirement is a persistent per-tool execution gate
+bound atomically to current controller actor/native/epoch and Worker/claim
+generation, including descendant and in-flight operation custody. Until that
+capability is implemented and independently qualified, keep managed execution
+blocked and preserve the original owners, external operations and receipts.
+Source tests do not authorize installing the adapter or migrating live sessions.
+
 ## Qualified Codex control plane
 
 The maintained Codex Worker adapter is `codex_worker_launcher.py`, not the
