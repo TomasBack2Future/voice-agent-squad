@@ -9,6 +9,10 @@ Deliver one canonical assignment without importing the Dispatcher conversation.
 The assignment identifies the work; the project profile supplies repository
 capabilities; the canonical Issue owns requirements.
 
+For flow audits, startup skill binding, user pauses and release-repair routing,
+read [role-bound flow repair](../../../coordination-skills/squad-dispatcher/references/flow-retrospective.md). Preserve the assigned role;
+process optimization does not assign product implementation.
+
 ## Cold start
 
 Read, in order:
