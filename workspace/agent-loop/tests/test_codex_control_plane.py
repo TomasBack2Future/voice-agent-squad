@@ -310,3 +310,66 @@ class CodexControlPlaneTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+class ControllerLifetimeTests(unittest.TestCase):
+    def test_supervisor_releases_only_after_client_and_helper_join(self):
+        for helper_status in (None, 2):
+            with self.subTest(helper_status=helper_status), tempfile.TemporaryDirectory() as state:
+                c=dict(role='dispatcher', agent_id='dispatcher', controller_epoch=1, native_session_id=NATIVE,
+                       state_directory=state, worktree=state)
+                child=Mock(pid=os.getpid())
+                child.__enter__=Mock(return_value=child);child.__exit__=Mock(return_value=False)
+                helper=Mock(pid=os.getpid())
+                helper.__enter__=Mock(return_value=helper);helper.__exit__=Mock(return_value=False)
+                helper.poll.return_value=helper_status
+                helper.wait.return_value=helper_status or 0
+                joined=[]
+                def wait(timeout):
+                    self.assertFalse(any(call.kwargs.get('release') for call in custody.call_args_list))
+                    if not joined:
+                        joined.append('interval')
+                        raise subprocess.TimeoutExpired('client',timeout)
+                    joined.append('client')
+                    return 0
+                child.wait.side_effect=wait
+                def lease(config, release=False):
+                    if release:
+                        self.assertEqual(joined,['interval','client'])
+                        helper.wait.assert_called_once_with(timeout=10)
+                        self.assertEqual(json.loads((Path(state)/(NATIVE+'.writer.json')).read_text())['state'],'joined')
+                    else:
+                        popen.assert_not_called()
+                with patch.object(receiver,'controller_receiver',side_effect=lease) as custody, \
+                     patch.object(receiver.subprocess,'Popen',side_effect=[child,helper]) as popen, \
+                     patch.object(receiver,'process_start',return_value='start'):
+                    self.assertEqual(receiver.supervise(['client'],None,c,{},Path(state)/'launch',[1,2,3,4,5]),0)
+                self.assertEqual(custody.call_count,2)
+                self.assertEqual(custody.call_args_list[0].args,custody.call_args_list[1].args)
+                child.terminate.assert_not_called();child.kill.assert_not_called()
+                if helper_status is None:helper.terminate.assert_called_once()
+                else:helper.terminate.assert_not_called()
+
+    def test_unbound_continuity_cannot_spawn_controller(self):
+        c={'role':'dispatcher'}
+        with patch.object(receiver.subprocess,'run') as run:
+            with self.assertRaises(ValidationError):receiver.controller_receiver(c)
+            run.assert_not_called()
+
+    def test_dispatcher_ack_command_names_its_own_native(self):
+        event=dict(event_id='worker-terminal-v1/D-1/1/worker-native/blocked/9',item_id='TASK-1',kind='blocked',outcome_id=9,source_message_id=9)
+        text=receiver.message(event,{'role':'dispatcher','native_session_id':NATIVE})
+        self.assertIn('--native-session '+NATIVE,text)
+        self.assertNotIn('--native-session worker-native',text)
+
+    def test_helper_failure_retains_lease_while_original_client_is_live(self):
+        c=dict(role='dispatcher',client='cli',controller_epoch=2,server_identity=[1,2,3,4,5],max_seconds=60,
+               native_session_id=NATIVE,state_directory='/fixture',endpoint='unix:///fixture',worktree='/fixture')
+        rpc=Mock();rpc.__enter__=Mock(return_value=rpc);rpc.__exit__=Mock(return_value=False)
+        with tempfile.TemporaryDirectory() as state:
+            c['state_directory']=state
+            for failure in (None,ValidationError('transport temporarily unavailable')):
+                with self.subTest(failure=failure),patch.object(receiver,'validate_file',return_value=c),patch.object(receiver,'check_qualification'),patch.object(receiver,'RPC',return_value=rpc),patch.object(receiver,'live_target'),patch.object(receiver,'controller_receiver') as custody,patch.object(receiver,'alive',return_value=True),patch.object(receiver,'listen',side_effect=failure,return_value=None):
+                    if failure:
+                        with self.assertRaises(ValidationError):receiver.run(Path(state)/'config.json')
+                    else:self.assertEqual(receiver.run(Path(state)/'config.json'),0)
+                    self.assertEqual(custody.call_args_list,[unittest.mock.call(c)])

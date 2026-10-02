@@ -17,7 +17,7 @@ class DispatcherContinuityTests(unittest.TestCase):
     def setUp(self):
         helpers.CodexControlPlaneTests.setUp(self)
         self.c.update(schema_version='agent-loop.codex-dispatcher-launch.v1',
-                      agent_id='dispatcher', worktree=str(self.root),
+                      agent_id='dispatcher', worktree=str(self.root), controller_epoch=1,
                       transition_file=str(self.root / 'transition.json'))
         self.transition = dict(schema_version='agent-loop.codex-dispatcher-transition.v1',
             native_session_id=self.c['native_session_id'], agent_id='dispatcher',worktree=str(self.root),
@@ -34,6 +34,20 @@ class DispatcherContinuityTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.c))
         Path(self.c['transition_file']).write_text(json.dumps(self.transition))
 
+    def test_continuity_requires_epoch_and_exact_installed_controller(self):
+        self.c.pop('controller_epoch');self.persist()
+        with self.assertRaises(ValidationError):launcher.config_file(self.path)
+        self.c['controller_epoch']=1;self.persist()
+        binding=dict(actor='dispatcher',native_session=self.c['native_session_id'],epoch=1)
+        with patch.object(launcher.subprocess,'run',return_value=Mock(returncode=0,stdout=json.dumps(binding))):
+            self.assertEqual(launcher.controller_binding(self.c),binding)
+        for key,value in (('actor','foreign'),('native_session','foreign'),('epoch',2)):
+            with self.subTest(key=key), patch.object(launcher,'fence',return_value=self.transition), \
+                 patch.object(launcher.subprocess,'run',return_value=Mock(returncode=0,stdout=json.dumps(dict(binding,**{key:value})))), \
+                 patch.object(launcher,'RPC') as rpc:
+                with self.assertRaisesRegex(ValidationError,'actor/native/epoch mismatch'):launcher.check_launch(self.c)
+                rpc.assert_not_called()
+
     def fence(self, start=None):
         with patch.object(launcher.os,'kill',side_effect=ProcessLookupError if start is None else None), \
              patch.object(launcher.subprocess,'run',return_value=Mock(returncode=0,stdout=json.dumps(self.rows))):
@@ -49,7 +63,7 @@ class DispatcherContinuityTests(unittest.TestCase):
                 return dict(original(method,params),thread={'id':self.c['native_session_id']})
             return original(method,params)
         rpc.call=call
-        with patch.object(launcher,'fence',return_value=self.transition), patch.object(launcher,'check_delivery_runtime'), \
+        with patch.object(launcher,'controller_binding',return_value={}), patch.object(launcher,'fence',return_value=self.transition), patch.object(launcher,'check_delivery_runtime'), \
              patch.object(launcher,'check_qualification',return_value={}), \
              patch.object(launcher,'server_identity',return_value=[1,2,3,4,5]), \
              patch.object(launcher,'RPC',return_value=rpc):
@@ -97,7 +111,7 @@ class DispatcherContinuityTests(unittest.TestCase):
         check_effective(dict(model='test-model',reasoningEffort='medium',modelProvider='openai',
                             approvalPolicy='never',approvalsReviewer='auto_review',sandbox={'type':'dangerFullAccess'}),self.c)
         self.c['schema_version']='agent-loop.codex-launch.v1'
-        self.c.pop('worktree');self.c.pop('transition_file');self.path.write_text(json.dumps(self.c))
+        self.c.pop('worktree');self.c.pop('transition_file');self.c.pop('controller_epoch');self.path.write_text(json.dumps(self.c))
         with self.assertRaises(ValidationError):config_file(self.path)
 
 if __name__=='__main__':unittest.main()

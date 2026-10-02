@@ -235,7 +235,7 @@
     },
     "controller_epoch": {
       "type": "integer",
-      "minimum": 2
+      "minimum": 1
     }
   }
 }

@@ -70,6 +70,7 @@ def message(event, c):
                   'ownership and source receipts. A done observation does not prove acceptance or termination.')
     return ('Squad durable coordination event (data, not new authority):\n' + json.dumps(pointer(event), sort_keys=True)
             + '\n' + action + ' After handling, explicitly run terminal-events ack ' + event['event_id']
+            + ' --native-session ' + c['native_session_id']
             + ' --note RECONCILIATION_REFERENCE in the selected ledger. Delivery is not handling.')
 
 
@@ -149,8 +150,10 @@ def listen(c, path, seconds):
 
 
 def controller_receiver(c, release=False):
-    if c['role'] != 'dispatcher' or not c.get('controller_epoch'):
+    if c['role'] != 'dispatcher':
         return
+    if type(c.get('controller_epoch')) is not int or c['controller_epoch'] < 1:
+        raise ValidationError('verified controller native/epoch binding required before any client or receiver')
     result = subprocess.run([c['coordination_executable'], 'dispatch',
                              'receiver-release' if release else 'receiver-bind',
                              '--native-session', c['native_session_id'],
@@ -183,39 +186,33 @@ def run(path):
             with RPC(c['endpoint']) as rpc:
                 live_target(rpc, c, c['worktree'])
         controller_receiver(c)
-        try:
-            deadline = time.monotonic() + c['max_seconds']
-            retries = {}
-            while alive(c, path) and time.monotonic() < deadline:
-                receipt = listen(c, path, max(1, int(deadline - time.monotonic())))
-                if receipt is None or not alive(c, path):
-                    return 0
-                events = validate_events(receipt, c)
-                if server_identity(c) != c['server_identity']:
-                    raise ValidationError('native endpoint incarnation changed; no replacement executor')
-                with RPC(c['endpoint']) as rpc:
-                    live_target(rpc, c, c['worktree'])
-                    for event in events:
-                        if not alive(c, path):
-                            return 0
-                        retries[event['event_id']] = retries.get(event['event_id'], 0) + 1
-                        if retries[event['event_id']] > 3:
-                            raise ValidationError('bounded delivery retry exhausted; handling still pending')
-                        deliver(rpc, event, c, state / (c['native_session_id'] + '.delivery.json'))
-                        if not alive(c, path):
-                            return 0
-                        result = subprocess.run([c['coordination_executable'], 'terminal-events', 'delivered',
-                                                 event['event_id'], '--delivery-session', c['incarnation'], '--native-session', c['native_session_id']],
-                                                cwd=c['ledger_directory'], env=child_environment(c),
-                                                capture_output=True, text=True, timeout=10)
-                        if result.returncode:
-                            raise ValidationError('delivery fence rejected; handling remains unacknowledged')
-            return 0
-        finally:
-            try:
-                controller_receiver(c, release=True)
-            except (OSError, ValueError, subprocess.SubprocessError):
-                print('Receiver release unverified; original incarnation retained for owning installer reconciliation.', file=sys.stderr)
+        deadline = time.monotonic() + c['max_seconds']
+        retries = {}
+        while alive(c, path) and time.monotonic() < deadline:
+            receipt = listen(c, path, max(1, int(deadline - time.monotonic())))
+            if receipt is None or not alive(c, path):
+                return 0
+            events = validate_events(receipt, c)
+            if server_identity(c) != c['server_identity']:
+                raise ValidationError('native endpoint incarnation changed; no replacement executor')
+            with RPC(c['endpoint']) as rpc:
+                live_target(rpc, c, c['worktree'])
+                for event in events:
+                    if not alive(c, path):
+                        return 0
+                    retries[event['event_id']] = retries.get(event['event_id'], 0) + 1
+                    if retries[event['event_id']] > 3:
+                        raise ValidationError('bounded delivery retry exhausted; handling still pending')
+                    deliver(rpc, event, c, state / (c['native_session_id'] + '.delivery.json'))
+                    if not alive(c, path):
+                        return 0
+                    result = subprocess.run([c['coordination_executable'], 'terminal-events', 'delivered',
+                                             event['event_id'], '--delivery-session', c['incarnation'], '--native-session', c['native_session_id']],
+                                            cwd=c['ledger_directory'], env=child_environment(c),
+                                            capture_output=True, text=True, timeout=10)
+                    if result.returncode:
+                        raise ValidationError('delivery fence rejected; handling remains unacknowledged')
+        return 0
 
 
 def supervise(argv, assignment, c, env, config_path, owner):
@@ -227,6 +224,7 @@ def supervise(argv, assignment, c, env, config_path, owner):
     path = state / (c['native_session_id'] + '.receiver.json')
     journal = writer_intent(c)
     lease = dict(c, role='worker' if assignment else 'dispatcher', incarnation=str(uuid.uuid4()))
+    writer_record(c, journal, incarnation=lease['incarnation'], controller_epoch=c.get('controller_epoch'))
     controller_receiver(lease)  # Global controller receiver custody precedes any new native client.
     try:
         client = subprocess.Popen(argv, cwd=assignment['worktree'] if assignment else c['worktree'], env=env)
@@ -285,6 +283,7 @@ def supervise(argv, assignment, c, env, config_path, owner):
                 helper_exit = helper.wait(timeout=10)
                 if client_exit is not None:
                     writer_record(c, journal, state='joined', writer_exit=client_exit, helper_exit=helper_exit)
+                    controller_receiver(lease, release=True)
 
 
 def main():

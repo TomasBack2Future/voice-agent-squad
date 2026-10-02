@@ -28,6 +28,7 @@ def fixture_popen(argv,**kwargs):
  if argv[0]=='ps':return child
  pids.append(child.pid);temporary=Path(c['state_directory'],'pids.tmp');temporary.write_text(json.dumps(pids));temporary.replace(Path(c['state_directory'],'pids.json'));return child
 receiver.subprocess.Popen=fixture_popen
+receiver.controller_receiver=lambda *args,**kwargs:None # Isolated non-ledger writer crash fixture.
 receiver.supervise([sys.executable,'-c','import time;time.sleep(60)'],None,c,{},Path(c['state_directory'],'config.json'),[1,2,3,4,5])
 '''
             launcher=subprocess.Popen([sys.executable,'-c',script,str(ROOT),json.dumps(c)])

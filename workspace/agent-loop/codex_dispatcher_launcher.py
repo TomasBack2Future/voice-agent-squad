@@ -68,9 +68,23 @@ def fence(c):
     return receipt
 
 
+def controller_binding(c):
+    result = subprocess.run([c['coordination_executable'], 'dispatch', 'controller-status'],
+                            cwd=c['ledger_directory'], env=child_environment(c),
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise ValidationError('installed native/epoch controller binding unavailable')
+    binding = json.loads(result.stdout)
+    if (binding.get('actor') != c['agent_id'] or binding.get('native_session') != c['native_session_id']
+            or binding.get('epoch') != c['controller_epoch']):
+        raise ValidationError('continuity controller actor/native/epoch mismatch')
+    return binding
+
+
 def check_launch(c):
     check_writer_fence(c)
     receipt = fence(c)
+    controller_binding(c)
     check_delivery_runtime(c, child_environment(c))
     binary = check_qualification(c)
     owner = server_identity(c)

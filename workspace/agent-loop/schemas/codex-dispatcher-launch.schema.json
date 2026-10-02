@@ -24,7 +24,8 @@
     "qualification_file",
     "state_directory",
     "worktree",
-    "transition_file"
+    "transition_file",
+    "controller_epoch"
   ],
   "properties": {
     "schema_version": {
@@ -120,6 +121,10 @@
     "transition_file": {
       "type": "string",
       "pattern": "^/"
+    },
+    "controller_epoch": {
+      "type": "integer",
+      "minimum": 1
     }
   }
 }

@@ -603,11 +603,14 @@ This does not assert an operating-system fence over arbitrary unrelated tools.
 Keep the old controller inactive under its authorized role; never use direct SQL
 or actor impersonation to defeat the installed protocol.
 
-The new session-owned receiver claims its exact native/epoch/incarnation in the
-ledger, in addition to its local lock. Another incarnation is rejected. Normal
-helper exit releases only that exact receiver; a crash/unknown release leaves it
-occupied until the owning installer verifies the original helper/client join and
-uses the exact release route. No lease expiry, timer or background controller is
+Every Codex Dispatcher, including continuity at epoch 1, requires its verified
+controller binding. Its supervisor claims the exact native/epoch/incarnation in
+the ledger before starting the client, in addition to the local lock. Another
+incarnation is rejected even when it uses a different state directory. Helper
+exit or transport failure retains the lease while the client remains alive.
+The supervisor releases only after both client and helper have actually joined;
+a crash/unknown release leaves it occupied until the owning installer verifies
+those joins and uses the exact release route. No lease expiry, timer or background controller is
 introduced. Controller listen/delivered/ack uses `--native-session`; the native
 binding is distinct from delivery incarnation. Acceptance still requires a real
 persisted event delivered, handled and followed by authorized downstream work.
