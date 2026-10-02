@@ -189,6 +189,14 @@ upgrade, multi-item atomic acquisition or shared read-lock protocol is provided.
 
 ## Replacing stopped clients
 
+This legacy operation is rejected atomically once the repository has any
+controller binding or retirement record. It must not bypass the current
+controller actor/native/epoch or move one reservation out of a bound cohort.
+Use the existing complete-inventory controller handoff for Dispatcher custody;
+that operation deliberately preserves Worker claims and sessions. A new native
+Worker replacement under that protocol still needs its own qualified execution
+fence and supported transition. Do not use a legacy takeover as a fallback.
+
 `dispatch takeover --request handoff.json` is an operator recovery operation,
 not ordinary scheduling. The JSON supplies `reservation`, `expected_dispatcher`,
 `dispatcher_session`, `expected_worker_session`, `expected_generation`,

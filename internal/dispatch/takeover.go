@@ -62,6 +62,18 @@ func (s *Store) Takeover(ctx context.Context, actor string, q TakeoverRequest) (
 	now := s.now().Unix()
 	out := &TakeoverResult{PendingEvents: []string{}}
 	err := store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
+		// This legacy per-reservation migration cannot transfer or recreate the
+		// controller/native epoch. Require the complete-cohort handoff protocol
+		// once a ledger has entered that protocol, including retired actors.
+		var controllers int
+		if err := tx.QueryRowContext(ctx, `SELECT
+            (SELECT count(*) FROM dispatch_controller_bindings WHERE repo_id=?) +
+            (SELECT count(*) FROM dispatch_retired_controllers WHERE repo_id=?)`, s.repoID, s.repoID).Scan(&controllers); err != nil {
+			return err
+		}
+		if controllers != 0 {
+			return fmt.Errorf("legacy takeover unavailable for controller-bound ledger; use controller handoff, preserve Worker custody")
+		}
 		r, e := scanReservation(tx.QueryRowContext(ctx, reservationSelect+` WHERE repo_id=? AND item_id=?`, s.repoID, q.Reservation))
 		if e != nil {
 			return e

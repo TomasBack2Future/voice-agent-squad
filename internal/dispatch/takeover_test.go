@@ -66,6 +66,8 @@ func TestTakeoverRejectsWithoutPartialWrites(t *testing.T) {
 		{"not stopped", func(q *TakeoverRequest) { q.ConfirmWorkerStopped = false }, ""},
 		{"no evidence", func(q *TakeoverRequest) { q.Evidence = "" }, ""},
 		{"recent renewal", nil, "UPDATE claims SET last_touch=9999"},
+		{"bound controller", nil, "INSERT INTO dispatch_controller_bindings(repo_id,actor,native_session,epoch) VALUES('repo-test','old-dispatcher','old-dispatcher-session',1)"},
+		{"retired controller", nil, "INSERT INTO dispatch_retired_controllers(repo_id,actor,retired_at,successor) VALUES('repo-test','old-dispatcher',1,'successor')"},
 		{"protected lock", nil, "INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo-test','ENV-1','old-worker',2,2)"},
 		{"pinned execution", nil, "INSERT INTO execution_authorizations(repo_id,id,item_id,holder,generation,binding,state,created_at,updated_at) VALUES('repo-test','pin','T','old-worker',1,'{}','active',1,1)"},
 		{"fresh agent", nil, "INSERT INTO agents(id,repo_id,display_name,started_at,last_tick_at,status) VALUES('old-dispatcher','repo-test','D',1,9999,'active')"},
