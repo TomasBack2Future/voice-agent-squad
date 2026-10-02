@@ -129,8 +129,14 @@ env -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u SQUAD_SESSION_ID -u SQUAD_AGENT \
 `--check` performs one read-only coordination query with the same child identity
 used at launch. A valid reserved/unbound entry passes with `binding: pending`;
 that is preparation, not ownership or permission to execute work. It never
-starts a model, claims, binds or mutates an environment. Preflight without
-`--launch-config` explicitly reports `launcher.status: not_checked`.
+starts a model, claims, binds or mutates an environment. Execution preflight
+requires a checked launch config for both Claude and Codex. Use `--context-only`
+explicitly for portable input checks without a launcher; the receipt reports
+`status: context-checked` and `launcher.status: not_checked`, never `ready`.
+Do not use that receipt to admit a session. Muse supports this context check via
+its shared `.agents/skills` discovery path, but execution preflight fails with an
+explicit unavailable-adapter error until a reviewed Muse launcher is integrated.
+Unknown runtimes are rejected by both the CLI and the importable Python API.
 
 Use the same command without `--check` as the new cmux workspace command, then
 bind the returned native id to the reservation. Only a successful, well-formed
@@ -224,13 +230,14 @@ new MCP coordination surface.
 
 ## Worker startup probe
 
-From an installed or reviewed package, before creating the session:
+From an installed or reviewed package, prepare portable inputs before execution
+preflight (this command does not authorize creating the session):
 
 ```bash
 python3 worker_preflight.py --assignment /absolute/assignment.json \
   --profile /absolute/selected/profile.json --runtime claude \
   --skill /absolute/workspace/.claude/skills/agent-loop-worker/SKILL.md \
-  --tool squad --tool squad-grok-review
+  --tool squad --tool squad-grok-review --context-only
 ```
 
 Supply each required client-visible skill with another `--skill`. Relative
