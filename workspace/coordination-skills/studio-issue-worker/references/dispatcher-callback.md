@@ -53,9 +53,12 @@ generated on each attempt.
 
 1. Inspect the owned item's callback records for that event id. If already sent,
    do not resend. Record `callback-intent` with the event id and exact recipient.
-2. Use a verified message transport once. For `codex-app`, call
-   `send_message_to_thread` with the recorded thread/host and compact prompt;
-   preserve model/effort. For a cmux-hosted agent, the durable Squad event is
+2. Use a verified message transport once. For `codex-app`, use
+   `send_message_to_thread` only when it is actually available and authorized in
+   the sending client's context, with the recorded thread/host and compact prompt;
+   preserve model/effort. A CLI Worker cannot assume access to App-only tools.
+   The receiver must be qualified separately; a successful CLI queue probe or
+   an App thread id does not establish App wakeup. For a cmux-hosted agent, the durable Squad event is
    the delivery record. Wake the receiver only through an already configured,
    verified message API or mailbox that does not touch terminal input. cmux
    workspace/surface ids alone do not provide such a transport. Never use

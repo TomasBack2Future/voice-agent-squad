@@ -10,7 +10,12 @@ paths:
 disable-model-invocation: true
 ---
 
-You are starting (or resuming) work on a squad-managed repo. Run the orchestrator:
+Use this auto-pick entry only for an explicitly authorized general work session.
+A dedicated Dispatcher, assigned Worker, Deployer, Reviewer or Investigator must
+follow its own assignment and ownership contract; do not run this command merely
+because Squad is installed. The rule is the same for Muse, Claude and Codex.
+
+For an authorized general work session, run the orchestrator:
 
 ```bash
 squad go

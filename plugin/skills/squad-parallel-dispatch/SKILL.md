@@ -20,7 +20,7 @@ Invoke this skill whenever you are about to start a second item in a session, or
 - Three unrelated bugs in three different subsystems.
 - A research task plus an unrelated code task.
 - Building a UI component plus writing the API endpoint behind it — but only if the contract is already in the item file. Otherwise the API contract IS the dependency, and you must sequence the API first.
-- Code review of N completed items: dispatch one `superpowers:code-reviewer` per item concurrently.
+- Code review of N completed items: use one repository-approved independent reviewer per item, respecting review single-flight and runtime capability.
 
 ## When parallel is wrong
 
@@ -44,7 +44,7 @@ Violating either side causes real problems:
 ## How to apply
 
 1. Tick first. Subagents cannot see chat — bake whatever you just heard into the briefing.
-2. Use `superpowers:dispatching-parallel-agents` to construct the dispatch.
+2. Use the selected runtime's supported subagent mechanism and the briefing below. The `superpowers:dispatching-parallel-agents` helper is optional; do not require a Claude-specific tool name or launch a duplicate controller.
 3. For each child, paste the standing constraints (commit conventions, no-PM-traces, comment discipline, TDD, scope-limited tests, return format) into the briefing. Do not paraphrase from memory.
 4. Each child gets: context, files to look at (priority order), the specific task in one sentence, the item file path, the output format, and the constraints (read-only vs write code, no scope creep, no new docs).
 5. Tell each child: "your test scope is your package; do NOT run the full suite."

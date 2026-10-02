@@ -4,6 +4,10 @@ Read when admitting a long-running assignment, amending its scope, diagnosing
 verified execution drift or coordinating an authorized takeover. This is a
 role protocol, not new CLI functionality or permission to replace active tasks.
 
+Apply [runtime-independent roles](../../../agent-loop/runtime-compatibility.md)
+for Muse, Claude and Codex. The following role boundaries apply independently
+of the selected runtime; the Worker envelope does not cover every role.
+
 ## Assignment and responsibility
 
 Keep the assignment stable and short: requested outcome, exclusions, role,
@@ -20,6 +24,7 @@ The owning role defines its checkpoint format; the ledger owns actual custody.
 | Deployer/integration owner | One release's current state, execution, acceptance and operational closure under its own skill and authority |
 | Repair Worker, when assigned | Bounded source fix and delivery evidence; does not acquire the Deployer's production authority |
 | Reviewer | Bounded verdict under the actual review contract; does not own the release |
+| Investigator | Bounded evidence collection and diagnosis under assigned access; no implied implementation, ENV or release authority |
 | Existing monitor | Read-only observation and deduplicated meaningful notifications; no routine progress messages to the executor |
 
 A discovered source defect needs an explicit repair owner and integration owner.

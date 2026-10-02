@@ -27,6 +27,20 @@ Every session — yours, every coworker's, every parallel agent's — follows th
 
 Invoke this skill when starting a session, resuming after a pause, or any time you find yourself about to "just start coding" without going through the loop. If you are unsure whether you are in the loop, you are not — read this skill and start at step 1.
 
+## Role and runtime boundary
+
+This auto-pick loop is for an explicitly authorized general work session.
+A Dispatcher, assigned Worker, Deployer, Reviewer or Investigator follows its
+role contract instead; do not run `squad go`, acquire unrelated claims or select
+another item from this skill. Muse, Claude and Codex are all eligible for these
+roles when the selected execution surface supports the required operations.
+
+The frontmatter hooks are Claude plugin integration, not a portable guarantee.
+Without verified hooks, explicitly check the addressed mailbox/current decisions
+at startup or resume, before consequential transitions and before closure. A
+manual tick is not idle wake support or claim renewal; use a verified receiver
+and supervisor when those are required. Never treat silent hook absence as success.
+
 ## The eight steps
 
 1. **Run `squad go`.** It registers a session-stable id, claims the top ready item, prints AC, and flushes any unread chat. Idempotent — re-run to resume the same claim. If `squad go` says `no ready items`, fall through to step 2.
@@ -35,8 +49,8 @@ Invoke this skill when starting a session, resuming after a pause, or any time y
 4. **Work the item.** Read the item end-to-end. Verify every `file:line` reference against current code. If the acceptance criteria name concrete failures, write RED tests FIRST (see `squad-premise-validation`). TDD is the default, not a suggestion.
 5. **Checkpoint at every meaningful chunk.** New file, new test, new abstraction, ~30–60 min of focused work — pause and re-read the AC. Has scope crept? Is the diff still the smallest possible? File any new BUG/DEBT discoveries now while they are fresh.
 6. **Test before claiming done.** Scoped tests during iteration; full suite once before commit. Paste the actual output (see `squad-evidence-requirement`). Bare assertions are worth zero.
-7. **Code review, every item.** Even one-line fixes. Spawn `superpowers:code-reviewer` with the diff and the item file. Verify each finding — do not perform-agree. See `squad-code-review-mandatory`.
-8. **Commit, mark done, move on.** `squad done <ID> --summary "one-line outcome"`. Move the item file to `.squad/done/`. Update the status board if you were on it. Pick the next item. (Chat is delivered continuously by hooks — no manual tick needed before commit.)
+7. **Code review, every item.** Even one-line fixes. Use the independent reviewer required by the repository with the diff and the item file. Verify each finding — do not perform-agree. See `squad-code-review-mandatory`.
+8. **Commit, mark done, move on.** `squad done <ID> --summary "one-line outcome"`. Move the item file to `.squad/done/`. Update the status board if you were on it. Pick the next item. (Verify current messages before commit; only a qualified hook may supply this check.)
 
 ## Why this works
 

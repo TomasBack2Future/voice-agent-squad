@@ -5,6 +5,10 @@ description: Execute exactly one assigned engineering work item from a bounded a
 
 # Worker
 
+Apply [runtime-independent roles](../../runtime-compatibility.md) at startup and
+resume. Muse, Claude and Codex share this Worker contract; qualify the selected
+execution surface and preserve the exact assignment.
+
 Deliver one canonical assignment without importing the Dispatcher conversation.
 The assignment identifies the work; the project profile supplies repository
 capabilities; the canonical Issue owns requirements.
