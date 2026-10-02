@@ -1,10 +1,13 @@
 package grokreview
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 func backfillRecoveryRoots(ctx context.Context, db *sql.DB) error {
@@ -95,22 +98,114 @@ func (a *Admission) importProspective(receipt ProspectiveReadmission, owner Revi
 	if disclosure.Disposition != "granted" || !disclosureMatches(disclosure, request) {
 		return fmt.Errorf("explicit current-tuple prospective disclosure authorization absent, denied or mismatched; preserve the pending user request")
 	}
-	if len(receipt.DiffSHA256) != 64 || len(receipt.BodySHA256) != 64 {
+	if !contentHashValid(receipt.DiffSHA256) || !contentHashValid(receipt.BodySHA256) {
 		return fmt.Errorf("original content identity unavailable")
 	}
-	var content map[string]json.RawMessage
+	var content retainedContent
 	raw, err := readBoundedJSON(receipt.ContentEvidencePath, &content)
 	if err != nil || receiptHash(raw) != receipt.ContentEvidenceSHA256 {
 		return fmt.Errorf("original retained content evidence missing or changed")
 	}
-	var diffHash, bodyHash string
-	if json.Unmarshal(content["diff_sha256"], &diffHash) != nil || json.Unmarshal(content["pr_body_sha256"], &bodyHash) != nil || diffHash != receipt.DiffSHA256 || bodyHash != receipt.BodySHA256 {
+	diffHash, diffErr := content.hash("diff_sha256", "complete_diff_sha256")
+	bodyHash, bodyErr := content.hash("pr_body_sha256", "body_sha256")
+	if diffErr != nil || bodyErr != nil || diffHash != receipt.DiffSHA256 || bodyHash != receipt.BodySHA256 {
 		return fmt.Errorf("original content hashes do not match retained evidence")
+	}
+	if _, diffAlias := content["complete_diff_sha256"]; diffAlias || content["body_sha256"] != nil {
+		if err := content.verifyHistoricalAdmission(raw, r); err != nil {
+			return err
+		}
 	}
 	if err = a.verifyLegacyReceipt(original, false, verify); err != nil {
 		return err
 	}
 	a.prospective = &receipt
+	return nil
+}
+
+// Only the original admission's two maintained aliases are supported. Preserve
+// the raw artifact: resolving an alias never reconstructs the old full input.
+type retainedContent map[string]json.RawMessage
+
+func (c *retainedContent) UnmarshalJSON(raw []byte) error {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	token, err := d.Token()
+	if err != nil || token != json.Delim('{') {
+		return fmt.Errorf("content evidence must be one JSON object")
+	}
+	*c = make(retainedContent)
+	for d.More() {
+		key, err := d.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := key.(string)
+		if !ok {
+			return fmt.Errorf("content evidence field is not a name")
+		}
+		if _, exists := (*c)[name]; exists {
+			return fmt.Errorf("duplicate content evidence field")
+		}
+		var value json.RawMessage
+		if err := d.Decode(&value); err != nil {
+			return err
+		}
+		(*c)[name] = value
+	}
+	_, err = d.Token()
+	return err
+}
+
+func contentHashValid(value string) bool {
+	_, err := hex.DecodeString(value)
+	return len(value) == 64 && err == nil
+}
+
+func (c retainedContent) hash(canonical, alias string) (string, error) {
+	var resolved string
+	for _, name := range []string{canonical, alias} {
+		raw, exists := c[name]
+		if !exists {
+			continue
+		}
+		var value string
+		if json.Unmarshal(raw, &value) != nil || !contentHashValid(value) || (resolved != "" && resolved != value) {
+			return "", fmt.Errorf("invalid or conflicting content hash")
+		}
+		resolved = value
+	}
+	if resolved == "" {
+		return "", fmt.Errorf("content hash missing")
+	}
+	return resolved, nil
+}
+
+func (c retainedContent) verifyHistoricalAdmission(raw []byte, original AttemptReceipt) error {
+	// This is the unversioned historical admission layout, not arbitrary JSON
+	// with two hashes. Unknown layouts need a separately maintained adapter.
+	allowed := strings.Fields("repository pr base_sha head_sha complete_diff_sha256 body_sha256 diff_sha256 pr_body_sha256 remote_body_verified clean_worktree remote_head_verified stable_at_admission review_ready_at review_started_at review_process_session review_invocations_for_companion review_invocations_for_this_exact_tuple prior_failure verified_correction_admission superseded_inputs post_freeze_mutations_while_in_flight mode reasoning_effort timeout doctor fast_gates companion_audit known_independent_hold ci_run")
+	for name := range c {
+		known := false
+		for _, field := range allowed {
+			if name == field {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("unsupported historical content evidence field")
+		}
+	}
+	var admission struct {
+		Repository string `json:"repository"`
+		PR         int    `json:"pr"`
+		BaseSHA    string `json:"base_sha"`
+		HeadSHA    string `json:"head_sha"`
+		Mode       string `json:"mode"`
+	}
+	if json.Unmarshal(raw, &admission) != nil || admission.Repository != original.Identity.Repository || admission.PR != original.Identity.PR || admission.BaseSHA != original.Identity.BaseSHA || admission.HeadSHA != original.Identity.HeadSHA || admission.Mode != original.Settings.Mode {
+		return fmt.Errorf("historical content admission tuple or mode mismatched")
+	}
 	return nil
 }
 

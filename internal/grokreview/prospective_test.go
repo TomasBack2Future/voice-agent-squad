@@ -7,10 +7,129 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 )
+
+// This fixture preserves the field layout of the original admission artifact,
+// with repository, content and operation data replaced by isolated test values.
+func historicalContentFixture(t *testing.T, p *ProspectiveReadmission) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/historical-content-admission.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var content map[string]any
+	if err := json.Unmarshal(raw, &content); err != nil {
+		t.Fatal(err)
+	}
+	p.ContentEvidencePath = filepath.Join(t.TempDir(), "original-admission.json")
+	p.ContentEvidenceSHA256 = receiptHash(raw)
+	if err := os.WriteFile(p.ContentEvidencePath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+func TestProspectiveHistoricalContentAliases(t *testing.T) {
+	a, p, verify := prospectiveFixtureMode(t, "shadow")
+	historicalContentFixture(t, &p)
+	before, _ := os.ReadFile(p.ContentEvidencePath)
+	if err := a.importProspective(p, p.Owner, verify); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.verifyProspectiveBundle(admissionBundle(), p.Original.Attempt.Identity); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(p.ContentEvidencePath)
+	if string(before) != string(after) {
+		t.Fatal("historical evidence rewritten")
+	}
+	if a.prospective.Original.Attempt.Identity.BundleSHA256 != "" {
+		t.Fatal("unknown original input fabricated")
+	}
+}
+
+func TestProspectiveHistoricalAliasNegatives(t *testing.T) {
+	for _, change := range []string{"equal", "mixed", "diff-conflict", "body-conflict", "empty", "canonical-empty", "malformed", "short", "null", "number", "missing", "wrong-hash", "wrong-repository", "wrong-pr", "wrong-base", "wrong-head", "wrong-mode", "missing-tuple", "pending", "denied", "owner", "native", "raw-sha", "unsupported-field", "duplicate"} {
+		t.Run(change, func(t *testing.T) {
+			a, p, verify := prospectiveFixtureMode(t, "shadow")
+			content := historicalContentFixture(t, &p)
+			switch change {
+			case "equal":
+				content["diff_sha256"] = p.DiffSHA256
+				content["pr_body_sha256"] = p.BodySHA256
+			case "mixed":
+				delete(content, "complete_diff_sha256")
+				content["diff_sha256"] = p.DiffSHA256
+			case "diff-conflict":
+				content["diff_sha256"] = receiptHash([]byte("other"))
+			case "body-conflict":
+				content["pr_body_sha256"] = receiptHash([]byte("other"))
+			case "empty":
+				content["complete_diff_sha256"] = ""
+			case "canonical-empty":
+				content["diff_sha256"] = ""
+			case "short":
+				content["complete_diff_sha256"] = "ab"
+			case "null":
+				content["complete_diff_sha256"] = nil
+			case "number":
+				content["complete_diff_sha256"] = 12
+			case "missing":
+				delete(content, "complete_diff_sha256")
+			case "malformed":
+				content["body_sha256"] = strings.Repeat("z", 64)
+				p.BodySHA256 = strings.Repeat("z", 64)
+			case "wrong-hash":
+				content["body_sha256"] = receiptHash([]byte("other"))
+			case "wrong-repository":
+				content["repository"] = "foreign/repo"
+			case "wrong-pr":
+				content["pr"] = 10
+			case "wrong-base":
+				content["base_sha"] = "foreign"
+			case "wrong-head":
+				content["head_sha"] = "foreign"
+			case "wrong-mode":
+				content["mode"] = "required"
+			case "missing-tuple":
+				delete(content, "repository")
+			case "pending", "denied":
+				p.Disclosure.Disposition = change
+			case "owner":
+				p.Owner.Actor = "foreign"
+			case "native":
+				p.Original.NativeJoin.NativeSession = "foreign"
+			case "unsupported-field":
+				content["unrecognized_artifact"] = true
+			}
+			raw, _ := json.Marshal(content)
+			if change == "duplicate" {
+				raw = []byte(strings.TrimSuffix(string(raw), "}") + `,"body_sha256":"` + p.BodySHA256 + `"}`)
+			}
+			if err := os.WriteFile(p.ContentEvidencePath, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			p.ContentEvidenceSHA256 = receiptHash(raw)
+			if change == "raw-sha" {
+				p.ContentEvidenceSHA256 = receiptHash([]byte("changed"))
+			}
+			err := a.importProspective(p, ReviewOwner{Actor: "original-worker", Native: "owning-native"}, verify)
+			if change == "equal" || change == "mixed" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("unqualified historical alias admitted")
+			}
+		})
+	}
+}
 
 func prospectiveFixture(t *testing.T) (*Admission, ProspectiveReadmission, func(NativeJoinProof, AttemptReceipt) error) {
 	return prospectiveFixtureMode(t, "required")

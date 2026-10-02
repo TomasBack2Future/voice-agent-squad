@@ -229,8 +229,15 @@ The original native delivery owner supplies a bounded absolute
   substitute for the owning native's launch/join/terminal chain in this lane.
 - `diff_sha256`, `body_sha256`, and an absolute retained `content_evidence_path`
   with its raw-file `content_evidence_sha256`. That JSON must contain the original
-  `diff_sha256` and `pr_body_sha256`; retain the genuine original artifact, never
-  invent or backdate its contents. These hashes prove content, not old full input.
+  `diff_sha256` and `pr_body_sha256`. The maintained unversioned historical
+  admission layout may instead use `complete_diff_sha256` and `body_sha256`;
+  its repository, PR, base/head and original mode must match the original attempt.
+  Unknown historical fields/layouts, duplicate fields, malformed or empty hashes
+  and conflicting canonical/alias values reject. Coexisting values must agree.
+  The raw-file SHA remains mandatory: retain the genuine original artifact,
+  never rewrite, invent or backdate it. These hashes prove content, not old full
+  input; current disclosure, native custody, fresh complete-input freeze and
+  atomic one-use gates remain independent requirements.
 - `owner`: exact `actor` and `native`; the caller's `SQUAD_AGENT` and
   `CODEX_THREAD_ID` / `SQUAD_SESSION_ID=codex:<native>` must agree. These are trusted
   local operator bindings, not authority to impersonate another Worker.
