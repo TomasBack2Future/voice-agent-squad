@@ -28,8 +28,9 @@ type Event struct {
 }
 
 type Store struct {
-	DB              *sql.DB
-	Repo, Recipient string
+	DB                  *sql.DB
+	Repo, NativeSession string
+	Recipient           string
 }
 
 // PublishRequest carries pointers, never a command or authority from the sender.
@@ -178,6 +179,9 @@ func (s Store) Discover(ctx context.Context) error {
 // Pending never advances ordinary mailbox cursors. Stale generations and
 // transferred reservations cannot be delivered to an old owner.
 func (s Store) Pending(ctx context.Context, session string, retry time.Duration) ([]Event, error) {
+	if err := s.controllerFence(ctx, s.DB, session); err != nil {
+		return nil, err
+	}
 	if s.Repo == "" || s.Recipient == "" || session == "" {
 		return nil, fmt.Errorf("repo, recipient and delivery session required")
 	}
@@ -185,6 +189,7 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
  FROM terminal_event_receipts e JOIN dispatch_reservations r
  ON r.repo_id=e.repo_id AND r.item_id=e.reservation_key AND r.generation=e.generation
  AND r.worker_thread_id=e.worker_session
+ AND r.state IN ('dispatched','completed')
  AND (r.reserved_by=e.recipient OR (e.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
  (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id=e.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id!=e.recipient AND c.claimed_at>=r.reserved_at)))
  WHERE e.repo_id=? AND e.recipient=? AND e.processed_at=0
@@ -207,12 +212,38 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
 }
 
 func (s Store) Delivered(ctx context.Context, id, session string) error {
-	if session == "" {
-		return fmt.Errorf("delivery session required")
+	if session == "" || s.Repo == "" || s.Recipient == "" {
+		return fmt.Errorf("repo, recipient and delivery session required")
 	}
-	_, err := s.DB.ExecContext(ctx, `UPDATE terminal_event_receipts SET delivered_session=?,delivered_at=?
- WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0`, session, time.Now().Unix(), s.Repo, s.Recipient, id)
-	return err
+	return store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
+		if err := s.controllerFence(ctx, tx, session); err != nil {
+			return err
+		}
+		// Transport can finish after ownership or decision changes. Recheck the same
+		// routing fence atomically before recording acceptance, including released
+		// Worker custody. A stale receipt must not become acknowledgement-eligible.
+		result, err := tx.ExecContext(ctx, `UPDATE terminal_event_receipts SET delivered_session=?,delivered_at=?
+ WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0
+ AND (kind!='decision-resolved' OR NOT EXISTS (SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=terminal_event_receipts.repo_id AND d.reservation_key=terminal_event_receipts.reservation_key AND d.generation=terminal_event_receipts.generation AND d.item_id=terminal_event_receipts.item_id AND d.outcome_id!=terminal_event_receipts.outcome_id))
+ AND EXISTS(SELECT 1 FROM dispatch_reservations r WHERE r.repo_id=terminal_event_receipts.repo_id
+ AND r.item_id=terminal_event_receipts.reservation_key AND r.generation=terminal_event_receipts.generation
+ AND r.worker_thread_id=terminal_event_receipts.worker_session
+ AND r.state IN ('dispatched','completed')
+ AND (terminal_event_receipts.kind!='decision-resolved' OR terminal_event_receipts.item_id=r.canonical_item_id)
+ AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
+ (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id!=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, session, time.Now().Unix(), s.Repo, s.Recipient, id)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrInvalidEvent
+		}
+		return nil
+	})
 }
 
 // Ack is an explicit recipient action after reconciliation, not an output/read
@@ -221,29 +252,72 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 	if s.Repo == "" || s.Recipient == "" || strings.TrimSpace(note) == "" {
 		return fmt.Errorf("repo, recipient and reconciliation note required")
 	}
-	result, err := s.DB.ExecContext(ctx, `UPDATE terminal_event_receipts SET processed_at=?,processed_note=?
+	return store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
+		if err := s.controllerFence(ctx, tx, ""); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE terminal_event_receipts SET processed_at=?,processed_note=?
  WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0 AND delivered_at>0
  AND (kind!='decision-resolved' OR NOT EXISTS (SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=terminal_event_receipts.repo_id AND d.reservation_key=terminal_event_receipts.reservation_key AND d.generation=terminal_event_receipts.generation AND d.item_id=terminal_event_receipts.item_id AND d.outcome_id!=terminal_event_receipts.outcome_id))
  AND EXISTS(SELECT 1 FROM dispatch_reservations r WHERE r.repo_id=terminal_event_receipts.repo_id
  AND r.item_id=terminal_event_receipts.reservation_key AND r.generation=terminal_event_receipts.generation
  AND r.worker_thread_id=terminal_event_receipts.worker_session
+ AND r.state IN ('dispatched','completed')
  AND (terminal_event_receipts.kind!='decision-resolved' OR terminal_event_receipts.item_id=r.canonical_item_id)
  AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind='decision-resolved' AND r.state='dispatched' AND EXISTS
  (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id!=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, time.Now().Unix(), note, s.Repo, s.Recipient, id)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 1 {
+			return nil
+		}
+		var previous string
+		err = tx.QueryRowContext(ctx, `SELECT processed_note FROM terminal_event_receipts WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at>0`, s.Repo, s.Recipient, id).Scan(&previous)
+		if err == nil && previous == note {
+			return nil
+		}
+		return fmt.Errorf("event missing, not delivered, stale, or already acknowledged with another note")
+	})
+}
+
+// A controller's native binding is distinct from the receiver incarnation.
+type controllerQuery interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s Store) controllerFence(ctx context.Context, db controllerQuery, incarnation string) error {
+	var retired int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_retired_controllers WHERE repo_id=? AND actor=?`, s.Repo, s.Recipient).Scan(&retired); err != nil {
+		return err
+	}
+	if retired != 0 {
+		return ErrInvalidEvent
+	}
+	var native string
+	err := db.QueryRowContext(ctx, `SELECT native_session FROM dispatch_controller_bindings WHERE repo_id=? AND actor=?`, s.Repo, s.Recipient).Scan(&native)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return err
+	if native != s.NativeSession {
+		return ErrInvalidEvent
 	}
-	if n == 1 {
-		return nil
+	if incarnation != "" {
+		var actual string
+		err = db.QueryRowContext(ctx, `SELECT incarnation FROM dispatch_controller_receivers WHERE repo_id=? AND actor=? AND native_session=?`, s.Repo, s.Recipient, native).Scan(&actual)
+		if err != nil {
+			return err
+		}
+		if actual != incarnation {
+			return ErrInvalidEvent
+		}
 	}
-	var previous string
-	err = s.DB.QueryRowContext(ctx, `SELECT processed_note FROM terminal_event_receipts WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at>0`, s.Repo, s.Recipient, id).Scan(&previous)
-	if err == nil && previous == note {
-		return nil
-	}
-	return fmt.Errorf("event missing, not delivered, stale, or already acknowledged with another note")
+	return nil
 }

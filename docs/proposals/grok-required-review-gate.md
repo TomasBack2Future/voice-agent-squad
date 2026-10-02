@@ -154,3 +154,114 @@ host/repository. See the [Interceptor handoff](../../workspace/agent-loop/projec
 Local Git inspection disables replace refs and legacy grafts, and clears inherited
 `GIT_*` repository/index/config overrides. It preserves normal HOME/PATH and does
 not delete or rewrite the user's replacement refs or Git configuration.
+
+## Bounded recovery of a joined sampling timeout
+
+The GitHub wrapper now reserves a durable repository/PR single-flight before
+sampling, independently of the status directory. Its private SQLite admission
+store defaults to `~/.squad/grok-review-admission`; configure `admission_dir` once
+for the reviewer installation. Every invocation for that installation must use
+that same directory. Changing it to evade custody is unsupported. It is separate
+from the Squad ledger. Receipts store input hashes and selected settings, never
+source diffs, prompts, credentials or raw model output. Normal invocation also rejects an existing managed Check on that head; it cannot sidestep recovery by omitting `recover`.
+
+A normal invocation prints `attempt_id`. Only a joined sampling timeout with no
+valid verdict and its failed published required Check is eligible for one
+explicit recovery:
+
+```sh
+squad-grok-review recover --from ORIGINAL_ATTEMPT_ID \
+  --repo owner/repo --pr 9 --mode required \
+  --model grok-4.7 --reasoning-effort medium --timeout 20m
+```
+
+Use the original configuration and output limits. The operation rejects changes
+to repository/PR/base/head, title/body, complete diff, reviewer core/policy,
+model/effort/timeout, mode, App identity or output bounds. It verifies all
+current-head required Checks from the configured App, rejects valid verdicts and
+unresolved Checks, and requires the original failed Check. It reserves the
+one-use slot atomically before invoking the existing bounded managed reviewer.
+The synchronous child invocation and publication must return before the flight
+is joined. Status observations are never join authority. The result still uses
+the real current-head Check publication; review and CI gates remain required.
+
+Publication-only failures, cancellations, unknown/unjoined custody and valid
+approved/blocking findings cannot recover. A second timeout cannot chain another
+recovery. Interruption after reservation leaves the flight and slot occupied;
+restarting the command or changing head cannot sample again. No force-clear or
+automatic retry is provided. Preserve both attempts; absent usage/cost remains
+unknown, never zero-cost evidence. An admission-store failure blocks sampling;
+a join-write failure blocks completion even if publication succeeded.
+
+Older invocations have no authoritative admission receipt. The owning Worker
+may provide an absolute `--from` legacy custody JSON of schema
+`squad.review-recovery.legacy.v1` (see `LegacyRecoveryReceipt` in
+`internal/grokreview/legacy_recovery.go`). It supplies the exact original frozen
+bundle SHA-256 and settings, original safe terminal status path/hash, and a
+pre-sampling `squad.review-input.v1` input receipt (`LegacyInputReceipt`) with its
+path/hash and recorded timestamp. A hash of only diff/body or a later reconstructed
+bundle cannot stand in for missing original complete-input evidence. It also needs a
+bounded `squad.review-join.v1` exit receipt path/hash for both wrapper and owned
+reviewer PIDs. Alternatively, `native_join` references the owning Codex native
+history's original launch, join and terminal tool records, with SHA-256 for each
+raw call and output line. The qualified host-retained exec/write_stdin/wait chain
+must link the original returned tool session, eventual completed cell and exit-1
+structured timeout report to the exact tuple/settings/failed Check. No asserted
+"joined" prose or invented PID is accepted. Unfamiliar native history formats
+remain unavailable. Append-only history may grow without changing those records.
+The adapter independently verifies the selected join provenance, matches the
+original terminal status and inventories its sibling status files for live or
+valid attempts on the relevant exact tuple; valid different-head history is retained without blocking that recovery. Missing original inputs/settings or joined process evidence
+blocks import; a failure comment is insufficient. Existing receipt/slot custody
+cannot be overwritten by reimporting legacy JSON. Preserve old receipts read-only.
+
+This is source capability, not installation or authorization to invoke another
+Worker's review. The installation owner controls adoption. The existing Worker
+owns the failed invocation and any eligible recovery after reviewed installation;
+source preparation never invokes a foreign Worker’s recovery.
+
+
+### Joining an interrupted or failed durable join
+
+`reconcile --from ATTEMPT_ID` is a local custody operation, not review sampling.
+Use the original selected `--repo`, `--pr`, required mode, model/effort/timeout,
+App identity and canonical admission directory. The runner records actual wrapper
+and reviewer PIDs; terminal completion journals a private safe receipt before the
+SQLite join. Reconcile requires verified original process absence and restores a
+terminal journal after a join-write failure, preserving verdict/publication and
+unknown usage accurately. If the original recorded processes both exited before
+terminal journaling, it joins an interrupted/error attempt without inventing a
+verdict, publication, cost or usage. Exact input history and one-use recovery slots
+stay consumed. A corrected different head may then enter normal admission.
+
+No lease timeout or force-clear proves child join. Missing historical process
+provenance requires the existing qualified original native/process join receipt;
+`reconcile --from ABSOLUTE_LEGACY_RECEIPT` verifies it through the same original
+input/status/join contract before clearing only the matching flight. Missing proof
+remains explicitly blocked. Reconcile never calls the model or publishes/replaces
+a Check; actual current-head review/CI gates remain required. Repeated identical
+terminal joins are idempotent, while changed settings/input/repo/PR or a live
+original process are rejected.
+
+The private receipt commits a launch stage before OS spawn. A verified dead
+wrapper still in `admitted` proves no sampler was launched and can be reconciled
+without inventing a child PID. A crash after `launching` but before recording the
+actual child PID remains blocked on original child/native join provenance; wrapper
+absence alone cannot prove an orphan sampler ended. The runtime/adapter maintainer
+and installation owner own that bounded provenance qualification. Joined replay
+is idempotent and never refunds an exact-input or one-use recovery slot.
+
+Shadow and required publication are separate lanes: a shadow sample never
+satisfies or consumes the required Check. Exact-input dedupe includes mode,
+while single-flight remains repository/PR-wide across both modes. Changing
+model/effort within a mode does not grant another normal sample.
+
+Before any publication, admission durably checkpoints the synchronously joined
+sampling result. Failure to record that custody prevents publishing. Publication
+checkpoints its actual response independently. If the response or terminal
+journal is lost, `reconcile` reads the configured App's actual Check, matching
+mode, head, attempt ID, complete frozen-input hash and expected verdict. This is
+read-only GitHub access and does not initialize Grok. A uniquely matched failed
+no-verdict timeout restores the one-use recovery prerequisite; ambiguous, live,
+wrong-input or wrong-verdict evidence fails closed. Original terminal artifacts
+and every actual review/CI gate remain intact; no approval is synthesized.

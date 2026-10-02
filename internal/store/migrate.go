@@ -290,6 +290,19 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		legacy = append(legacy, legacyRow{20, "dispatch_decisions"})
 	}
 
+	var controllerObjects int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE
+	 (type='table' AND name IN ('dispatch_controller_bindings','dispatch_retired_controllers','dispatch_handoffs','dispatch_controller_receivers')) OR
+	 (type='trigger' AND name IN ('dispatch_reject_retired_insert','dispatch_reject_retired_update'))`).Scan(&controllerObjects); err != nil {
+		return err
+	}
+	if controllerObjects > 0 {
+		if controllerObjects != 6 {
+			return fmt.Errorf("incomplete dispatch controller handoff guards; refusing legacy bootstrap")
+		}
+		legacy = append(legacy, legacyRow{21, "dispatch_controller_handoff"})
+	}
+
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

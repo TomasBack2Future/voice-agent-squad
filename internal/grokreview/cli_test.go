@@ -3,6 +3,7 @@ package grokreview
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -544,4 +545,29 @@ func TestValidateFindingsRejectsApprovedWithBlockingFinding(t *testing.T) {
 func strconvQuote(value string) string {
 	raw, _ := json.Marshal(value)
 	return string(raw)
+}
+
+func TestCLIRunnerRecordsActualChildAndJoinsOnCustodyWriteFailure(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "fake-grok")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexec /bin/sleep 5\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	config := testCLIConfig(t)
+	config.Binary = binary
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := 0
+	runner.SetProcessObserver(func(_ context.Context, actual int) error {
+		pid = actual
+		return fmt.Errorf("fixture custody DB failure")
+	})
+	result, audit, err := runner.Review(context.Background(), []byte("isolated fixture"))
+	if err == nil || pid <= 0 || audit.FailureKind != CLIFailureCanceled || result.Verdict == VerdictApproved {
+		t.Fatal(result, audit, pid, err)
+	}
+	if err = absentProcess(pid); err != nil {
+		t.Fatal("owned failed child not joined", err)
+	}
 }

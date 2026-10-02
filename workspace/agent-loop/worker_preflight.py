@@ -95,7 +95,8 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
     profile = check_profile(assignment, profile_path)
     if len(json.dumps(assignment, separators=(",", ":")).encode()) > 2048:
         raise ValidationError("assignment exceeds 2048-byte cold-start budget")
-    check_worktree(assignment)
+    if runtime != 'codex' or launch_config is None:
+        check_worktree(assignment)
 
     # The launcher supplies the actual client-visible entries, not just canonical
     # source paths. Resolving a source file alone does not prove client discovery.
@@ -124,10 +125,13 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
             raise ValidationError("a required executable is unavailable")
         available.append(Path(tool).name)
     launch_receipt = {"status": "not_checked"}
+    if runtime == "codex" and launch_config is None:
+        raise ValidationError("Codex launch config required; executable presence is not readiness")
     if launch_config is not None:
-        if runtime != "claude":
-            raise ValidationError("launch-config currently supports Claude only")
-        from claude_worker_launcher import check_launch
+        if runtime == "codex":
+            from codex_worker_launcher import check_launch
+        else:
+            from claude_worker_launcher import check_launch
         launch_receipt = check_launch(assignment, launch_config)
     return {
         "schema_version": "agent-loop.startup-receipt.v1", "status": "ready",
@@ -137,8 +141,9 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         "base_sha": assignment["base_sha"], "runtime": runtime,
         "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
         "skills": receipts, "executables": available,
-        "ownership": "not_checked", "repository_api_access": "not_checked",
-        "runtime_approval": "not_checked", "environment": "not_checked",
+        "ownership": launch_receipt.get("primary_ownership", "not_checked"), "repository_api_access": "not_checked",
+        "runtime_approval": launch_receipt.get("runtime_approval", "not_checked"),
+        "environment": launch_receipt.get("environment", "not_checked"),
         "launcher": launch_receipt,
     }
 
@@ -150,7 +155,7 @@ def main() -> int:
     parser.add_argument("--runtime", choices=("claude", "codex"), required=True)
     parser.add_argument("--skill", type=Path, action="append", required=True)
     parser.add_argument("--tool", action="append", default=[])
-    parser.add_argument("--launch-config", type=Path, help="check the canonical Claude launcher with child identity")
+    parser.add_argument("--launch-config", type=Path, help="check the selected runtime's canonical launcher")
     args = parser.parse_args()
     try:
         receipt = check(args.assignment, args.profile, args.runtime, args.skill, args.tool, args.launch_config)

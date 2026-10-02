@@ -108,6 +108,69 @@
           }
         }
       }
+    },
+    "delivery_readiness_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "human_authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignment_id",
+        "repository",
+        "reference",
+        "operations",
+        "managed_review"
+      ],
+      "properties": {
+        "assignment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$"
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "source",
+              "test",
+              "pull_request",
+              "managed_review",
+              "gated_merge",
+              "issue_close"
+            ]
+          }
+        },
+        "managed_review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "destination",
+            "content"
+          ],
+          "properties": {
+            "provider": {
+              "const": "grok"
+            },
+            "destination": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"
+            },
+            "content": {
+              "const": "source_diff_and_issue_contract_only"
+            }
+          }
+        }
+      }
     }
   }
 }
