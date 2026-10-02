@@ -281,6 +281,45 @@ class OwnedPipeTests(unittest.TestCase):
             rpc.call('thread/queue/add',rpc.pending_queue)
         rpc.close()
 
+    def test_malformed_acceptance_exact_readback_persists_acceptance_without_resubmission(self):
+        # The synthetic host retains the input although the reply is malformed.
+        # This is source recovery coverage, not native deduplication qualification.
+        script=HOST.replace("native='00000000-0000-0000-0000-000000000001'", "native='00000000-0000-0000-0000-000000000001'\nqueued=[]\nadds=0")
+        script=script.replace("elif m=='thread/queue/add':r=", "elif m=='thread/queue/add':\n  adds+=1\n  from pathlib import Path\n  Path(sys.argv[1]+'/wire-count').write_text(str(adds))\n  queued.append({'id':'stored','clientUserMessageId':p['clientUserMessageId'],'input':p['input']})\n  r=")
+        script=script.replace("'id':'synthetic-accepted'", "'id':None").replace("r={'data':[],'nextCursor':None}", "r={'data':queued,'nextCursor':None}")
+        child=self.child(script);rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'journal'
+        event=dict(event_id='exact-recovery',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        with self.assertRaisesRegex(ValidationError,'acceptance malformed'):
+            receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertTrue(rpc.uncertain);self.assertTrue(rpc.queue_uncertain)
+        self.assertEqual(json.loads(path.read_text())['exact-recovery']['state'],'intent')
+        original=copy.deepcopy(rpc.pending_queue)
+        accepted=dict(id='stored',clientUserMessageId=original['clientUserMessageId'],input=original['input'])
+        # Ambiguous, mismatched and incomplete readback cannot join this intent.
+        for label,pending in [
+                ('ambiguous',{'data':[accepted,accepted],'nextCursor':None}),
+                ('wrong-client',{'data':[dict(accepted,clientUserMessageId='other')],'nextCursor':None}),
+                ('wrong-input',{'data':[dict(accepted,input=[])],'nextCursor':None}),
+                ('incomplete',{'data':[accepted],'nextCursor':'more'})]:
+            with self.subTest(readback=label), patch.object(rpc,'call',side_effect=[pending,{'thread':{'turns':[]}}]) as calls:
+                with self.assertRaises(ValidationError):receiver.deliver(rpc,event,c,path)
+                self.assertTrue(rpc.queue_uncertain);self.assertEqual(rpc.pending_queue,original)
+                self.assertEqual(json.loads(path.read_text())['exact-recovery']['state'],'intent')
+                self.assertTrue(all(call.args[0] in ('thread/queue/list','thread/read') for call in calls.call_args_list))
+        # Real synthetic pipe readback works while both uncertainty flags are set.
+        pending=rpc.call('thread/queue/list',{'threadId':self.c['native_session_id'],'limit':100})
+        history=rpc.call('thread/read',{'threadId':self.c['native_session_id'],'includeTurns':True})
+        self.assertEqual(len(pending['data']),1);self.assertIn('thread',history)
+        receiver.deliver(rpc,event,c,path)
+        self.assertEqual(json.loads(path.read_text())['exact-recovery']['state'],'accepted')
+        self.assertFalse(rpc.queue_uncertain);self.assertFalse(rpc.uncertain)
+        self.assertIsNone(rpc.pending_queue)
+        sequence=rpc.sequence;receiver.deliver(rpc,event,c,path)
+        self.assertEqual(rpc.sequence,sequence)
+        self.assertEqual((self.root/'wire-count').read_text(),'1')
+        rpc.close()
+
     def test_notification_and_private_error_output_remain_bounded(self):
         script="import sys,json\nfor line in sys.stdin:\n q=json.loads(line)\n if 'id' not in q:continue\n if q['method']=='initialize':print(json.dumps({'id':q['id'],'result':{}}),flush=True)\n else:print(json.dumps({'id':q['id'],'error':{'message':'PRIVATE-SECRET'}}),flush=True)\n"
         p=self.child(script);rpc=OwnedStdioRPC(p,self.c)
