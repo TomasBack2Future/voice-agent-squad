@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/zsiec/squad/internal/store"
@@ -273,7 +274,8 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 			if err := json.Unmarshal([]byte(parentRaw), &stored); err != nil {
 				return err
 			}
-			if stored != prior {
+			// Receipts are independently decoded; pointer addresses are not custody.
+			if !reflect.DeepEqual(stored, prior) {
 				return fmt.Errorf("original custody changed")
 			}
 			if _, err := tx.ExecContext(ctx, "INSERT INTO review_recovery_roots(tuple,parent,child) VALUES(?,?,?)", tupleKey(prior.Identity), prior.ID, id); err != nil {

@@ -181,6 +181,10 @@ model/effort/timeout, mode, App identity or output bounds. It verifies all
 current-head shadow and required Checks from the configured App, rejects valid verdicts and
 unresolved Checks, and requires the original failed Check. It reserves the
 one-use slot atomically before invoking the existing bounded managed reviewer.
+The transaction rereads the entire original receipt and compares its decoded
+values, including nested terminal diagnostics and renderer provenance. Separate
+decodes of unchanged evidence qualify; any actual receipt change fails custody
+without reserving a recovery slot or starting a sampler.
 The synchronous child invocation and publication must return before the flight
 is joined. Status observations are never join authority. The result still uses
 the real current-head Check publication; review and CI gates remain required.
