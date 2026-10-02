@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func admissionSettings() ReviewSettings {
@@ -179,7 +181,7 @@ func TestAdmissionRejectsValidVerdictPublicationFailureAndUnjoined(t *testing.T)
 }
 func TestAdmissionSingleFlightRaceAndInterruptedRecovery(t *testing.T) {
 	dir := t.TempDir()
-	id := seedTimeout(t, dir)
+	id := seedDiagnosticTimeout(t, dir)
 	var winners atomic.Int32
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -669,5 +671,166 @@ func TestReconcileLostPublicationResponsePreservesJoinedTimeout(t *testing.T) {
 	}
 	if err := openTestAdmission(t, dir, r.ID, admissionSettings()).Start(context.Background(), admissionBundle()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Seed the actual receipt type, including every optional pointer-bearing subtree.
+// Persist and decode it independently, as normal timeout recovery does.
+func seedDiagnosticTimeout(t *testing.T, dir string) string {
+	t.Helper()
+	id := seedTimeout(t, dir)
+	a := openTestAdmission(t, dir, id, admissionSettings())
+	r, err := a.load(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC)
+	joined := started.Add(20 * time.Minute)
+	exit := -1
+	r.Terminal = &TerminalDiagnostics{
+		InputSHA256: r.Identity.BundleSHA256, StartedAt: started, FinishedAt: joined, JoinedAt: &joined,
+		ChildStarted: true, ChildWaited: true, ExitCode: &exit, DeadlineProducer: "reviewer_timeout",
+		StdoutBytes: 13, StderrBytes: 7, StdoutSHA256: strings.Repeat("a", 64), StderrSHA256: strings.Repeat("b", 64),
+		OutputTruncated: true, SessionEvidence: "qualified_local",
+		Session: &TerminalSession{SessionID: "00000000-0000-4000-8000-000000000001", LocalRequestID: "00000000-0000-4000-8000-000000000002", EventsSHA256: strings.Repeat("c", 64), FirstTokenAt: &started, FirstReasoningAt: &started, LastReasoningAt: &joined, ReasoningNotifications: 10},
+	}
+	r.RendererProvenance = &PatchRendererProvenance{Rule: "strict-full-patch", OriginalSHA256: strings.Repeat("d", 64), CurrentSHA256: strings.Repeat("e", 64), EvidenceSHA256: strings.Repeat("f", 64)}
+	r.InputProvenance = "prospective-legacy-new-input"
+	r.InputRecordedAt = started.Unix()
+	r.AuthorizationSHA256 = strings.Repeat("1", 64)
+	r.AuthorizationReference = "local-authorized-source"
+	r.OwnerActor, r.OwnerNative = "original-owner", "original-native"
+	r.LaunchStage, r.SamplingFailureStage = "sampling-completed", "sampling"
+	r.SamplingCompleted = true
+	r.ReviewerPID = 999999
+	r.RequestID, r.SessionID, r.ResolvedModel = "local-request", "local-session", r.Settings.Model
+	r.DurationMS = r.Settings.TimeoutMS
+	r.Publication.CommentID, r.Publication.CommentURL, r.Publication.CheckURL = 2, "https://example.test/comment/2", "https://example.test/check/1"
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec("UPDATE review_attempts SET receipt=? WHERE id=?", string(raw), id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestAdmissionRecoveryDecodedDiagnosticReceipt(t *testing.T) {
+	for _, field := range []string{"terminal", "renderer", "both"} {
+		t.Run(field, func(t *testing.T) {
+			dir := t.TempDir()
+			id := seedDiagnosticTimeout(t, dir)
+			a := openTestAdmission(t, dir, id, admissionSettings())
+			prior, err := a.load(context.Background(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if field == "terminal" {
+				prior.RendererProvenance = nil
+			}
+			if field == "renderer" {
+				prior.Terminal = nil
+			}
+			raw, err := json.Marshal(prior)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.db.Exec("UPDATE review_attempts SET receipt=? WHERE id=?", string(raw), id); err != nil {
+				t.Fatal(err)
+			}
+			a.check = func(_ context.Context, loaded AttemptReceipt) error {
+				if !reflect.DeepEqual(loaded, prior) {
+					t.Fatal("decoded receipt values changed")
+				}
+				if loaded == prior {
+					t.Fatal("fixture did not reproduce independent pointer decoding")
+				}
+				return nil
+			}
+			if err := a.Start(context.Background(), admissionBundle()); err != nil {
+				t.Fatalf("same-value diagnostic receipt rejected: %v", err)
+			}
+			after, err := a.load(context.Background(), id)
+			if err != nil || !reflect.DeepEqual(after, prior) {
+				t.Fatal("original receipt rewritten", err)
+			}
+			if a.Receipt().Parent != id {
+				t.Fatal("lost original root")
+			}
+			if err := a.Finish(context.Background(), timeoutReport()); err != nil {
+				t.Fatal(err)
+			}
+			if err := openTestAdmission(t, dir, id, admissionSettings()).Start(context.Background(), admissionBundle()); err == nil {
+				t.Fatal("diagnostic receipt recovery slot refunded")
+			}
+		})
+	}
+}
+
+func TestAdmissionRecoveryRejectsTransactionReceiptChanges(t *testing.T) {
+	changes := map[string]func(*AttemptReceipt){
+		"terminal-hash":      func(r *AttemptReceipt) { r.Terminal.InputSHA256 = "changed" },
+		"terminal-exit":      func(r *AttemptReceipt) { *r.Terminal.ExitCode = 0 },
+		"terminal-join-time": func(r *AttemptReceipt) { *r.Terminal.JoinedAt = r.Terminal.JoinedAt.Add(time.Second) },
+		"terminal-session":   func(r *AttemptReceipt) { r.Terminal.Session.LocalRequestID = "changed" },
+		"terminal-reasoning": func(r *AttemptReceipt) { r.Terminal.Session.ReasoningNotifications++ },
+		"terminal-nil":       func(r *AttemptReceipt) { r.Terminal = nil },
+		"renderer-rule":      func(r *AttemptReceipt) { r.RendererProvenance.Rule = "changed" },
+		"renderer-evidence":  func(r *AttemptReceipt) { r.RendererProvenance.EvidenceSHA256 = "changed" },
+		"renderer-nil":       func(r *AttemptReceipt) { r.RendererProvenance = nil },
+		"owner":              func(r *AttemptReceipt) { r.OwnerActor = "changed" },
+		"native":             func(r *AttemptReceipt) { r.OwnerNative = "changed" },
+		"tuple":              func(r *AttemptReceipt) { r.Identity.HeadSHA = "changed" },
+		"settings":           func(r *AttemptReceipt) { r.Settings.TimeoutMS++ },
+		"join":               func(r *AttemptReceipt) { r.Joined = false },
+		"verdict":            func(r *AttemptReceipt) { r.Verdict = VerdictApproved },
+		"publication":        func(r *AttemptReceipt) { r.Publication.CheckRunID++ },
+		"authorization":      func(r *AttemptReceipt) { r.AuthorizationSHA256 = "changed" },
+		"usage":              func(r *AttemptReceipt) { r.UsageKnown = true; r.Usage.TotalTokens = 1 },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			id := seedDiagnosticTimeout(t, dir)
+			a := openTestAdmission(t, dir, id, admissionSettings())
+			a.check = func(ctx context.Context, _ AttemptReceipt) error {
+				changed, err := a.load(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				change(&changed)
+				raw, err := json.Marshal(changed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = a.db.ExecContext(ctx, "UPDATE review_attempts SET receipt=? WHERE id=?", string(raw), id)
+				return err
+			}
+			err := a.Start(context.Background(), admissionBundle())
+			want := "original custody changed"
+			if name == "verdict" {
+				want = "current tuple already has a valid managed verdict"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("changed receipt admitted: %v", err)
+			}
+			for _, table := range []string{"review_flights", "review_recoveries", "review_recovery_roots"} {
+				var count int
+				if err := a.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				if count != 0 {
+					t.Fatalf("rejected custody reserved %s: %d", table, count)
+				}
+			}
+			var count int
+			if err := a.db.QueryRow("SELECT count(*) FROM review_attempts").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 {
+				t.Fatal("rejected custody persisted a child")
+			}
+		})
 	}
 }
