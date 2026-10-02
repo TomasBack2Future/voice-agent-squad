@@ -307,11 +307,13 @@ type LegacyCompletionEvidence struct {
 }
 
 type CompletionResult struct {
-	Attempt     string      `json:"attempt"`
-	Sampled     bool        `json:"sampled"`
-	Publication Publication `json:"publication"`
-	Verdict     Verdict     `json:"verdict"`
-	SealSHA256  string      `json:"seal_sha256"`
+	Attempt             string         `json:"attempt"`
+	Sampled             bool           `json:"sampled"`
+	Publication         Publication    `json:"publication"`
+	Verdict             Verdict        `json:"verdict"`
+	SealSHA256          string         `json:"seal_sha256"`
+	OriginalInput       ReviewIdentity `json:"original_input"`
+	CurrentInputMatches bool           `json:"current_input_matches"`
 }
 
 func (a *Admission) BindCompletionCustody(c CompletionCustody, guard func(context.Context, CompletionCustody) error) {
@@ -577,21 +579,8 @@ func (a *Admission) Complete(ctx context.Context, id string, c CompletionCustody
 	if checkName != expectedName {
 		return result, fmt.Errorf("original mode/App/Check mismatch")
 	}
-	current, err := github.FetchPullRequest(ctx, original.Identity.Repository, original.Identity.PR, token)
-	if err != nil {
-		return result, err
-	}
-	if current.Repository != frozen.Repository || current.Number != frozen.PullRequest || current.BaseRef != frozen.BaseRef || current.BaseSHA != frozen.BaseSHA || current.HeadSHA != frozen.HeadSHA || current.Title != frozen.Title || current.Description != frozen.Description || current.Diff != frozen.Diff {
-		return result, fmt.Errorf("live complete original input is stale; publication held")
-	}
-	lookupReceipt := original
-	lookupReceipt.SamplingCompleted = true
-	pub, err := a.publicationLookup(ctx, lookupReceipt)
-	if err != nil {
-		return result, err
-	}
 	if state == "reserved" {
-		if pub.CheckRunID > 0 || pid <= 0 {
+		if pid <= 0 {
 			return result, fmt.Errorf("reserved publication provenance conflicts")
 		}
 		if err := a.processAbsent(pid); err != nil {
@@ -630,6 +619,12 @@ func (a *Admission) Complete(ctx context.Context, id string, c CompletionCustody
 		}
 		state = "sealed"
 	}
+	lookupReceipt := original
+	lookupReceipt.SamplingCompleted = true
+	pub, err := a.publicationLookup(ctx, lookupReceipt)
+	if err != nil {
+		return result, err
+	}
 	if state != "sealed" {
 		if state != "published" && state != "publishing" {
 			return result, fmt.Errorf("unknown completion publication state")
@@ -642,10 +637,54 @@ func (a *Admission) Complete(ctx context.Context, id string, c CompletionCustody
 		if pub.CheckRunID <= 0 || (priorPub.CheckRunID > 0 && priorPub.CheckRunID != pub.CheckRunID) {
 			return result, fmt.Errorf("original publication uncertain; exact-attempt readback required, no write retry")
 		}
-		if err := a.finishCompletion(ctx, original, digest, pub); err != nil {
+		if err := a.validateCompletionCustody(ctx, c, original.Identity); err != nil {
 			return result, err
 		}
-		return CompletionResult{id, false, pub, seal.Result.Verdict, digest}, nil
+		if state == "published" {
+			// Already-published replay is read-only and cannot release a foreign
+			// operation. Revalidate the exact original receipt/seal under CAS.
+			err = store.WithTxRetry(ctx, a.db, func(tx *sql.Tx) error {
+				if err := a.compareReceiptTx(ctx, tx, original); err != nil {
+					return err
+				}
+				var count int
+				if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM review_completion_seals WHERE attempt=? AND digest=? AND state='published' AND json_extract(publication,'$.CheckRunID')=?", id, digest, pub.CheckRunID).Scan(&count); err != nil {
+					return err
+				}
+				if count != 1 {
+					return fmt.Errorf("original published seal changed")
+				}
+				return nil
+			})
+			if err != nil {
+				return result, err
+			}
+			pub = priorPub
+		} else if err := a.finishCompletion(ctx, original, digest, pub); err != nil {
+			return result, err
+		}
+		result = CompletionResult{Attempt: id, Publication: pub, Verdict: seal.Result.Verdict, SealSHA256: digest, OriginalInput: identity}
+		// Joining an actual old-head publication is bookkeeping, not approval
+		// for a changed current input. Do not let drift strand the old flight.
+		current, err := github.FetchPullRequest(ctx, identity.Repository, identity.PR, token)
+		if err != nil {
+			return result, fmt.Errorf("original publication joined; current input unavailable: %w", err)
+		}
+		if !completionSnapshotMatches(current, frozen) {
+			return result, fmt.Errorf("original publication joined; current input is stale, no current-input approval")
+		}
+		if err := a.validateCompletionCustody(ctx, c, original.Identity); err != nil {
+			return result, err
+		}
+		result.CurrentInputMatches = true
+		return result, nil
+	}
+	current, err := github.FetchPullRequest(ctx, identity.Repository, identity.PR, token)
+	if err != nil {
+		return result, err
+	}
+	if !completionSnapshotMatches(current, frozen) {
+		return result, fmt.Errorf("live complete original input is stale; publication held")
 	}
 	if pub.CheckRunID > 0 {
 		return result, fmt.Errorf("unexpected publication conflicts with sealed pre-write state")
@@ -653,7 +692,23 @@ func (a *Admission) Complete(ctx context.Context, id string, c CompletionCustody
 	if a.check == nil {
 		return result, fmt.Errorf("current exact managed Check gate unavailable")
 	}
-	if err := a.check(ctx, original); err != nil {
+	checkReceipt := AttemptReceipt{Identity: original.Identity, Settings: original.Settings}
+	var parentReceipt *AttemptReceipt
+	if original.Parent != "" {
+		if !validAttemptID(original.Parent) {
+			return result, fmt.Errorf("original parent identity invalid")
+		}
+		parent, err := a.load(ctx, original.Parent)
+		if err != nil {
+			return result, err
+		}
+		if !recoverable(parent) || parent.Settings != original.Settings || parent.Identity.Repository != identity.Repository || parent.Identity.PR != identity.PR || parent.Identity.BaseRef != identity.BaseRef || parent.Identity.BaseSHA != identity.BaseSHA || parent.Identity.HeadSHA != identity.HeadSHA {
+			return result, fmt.Errorf("original failed Check/parent custody changed")
+		}
+		parentReceipt = &parent
+		checkReceipt = parent
+	}
+	if err := a.check(ctx, checkReceipt); err != nil {
 		return result, err
 	}
 	if err := a.validateCompletionCustody(ctx, c, original.Identity); err != nil {
@@ -663,8 +718,13 @@ func (a *Admission) Complete(ctx context.Context, id string, c CompletionCustody
 		if err := a.compareReceiptTx(ctx, tx, original); err != nil {
 			return err
 		}
+		if parentReceipt != nil {
+			if err := a.compareReceiptTx(ctx, tx, *parentReceipt); err != nil {
+				return err
+			}
+		}
 		var conflicting int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM review_attempts WHERE id<>? AND json_extract(identity,'$.repository')=? AND json_extract(identity,'$.pr')=? AND json_extract(identity,'$.base_ref')=? AND json_extract(identity,'$.base_sha')=? AND json_extract(identity,'$.head_sha')=? AND json_extract(receipt,'$.verdict') IN ('approved','blocking')`, id, identity.Repository, identity.PR, identity.BaseRef, identity.BaseSHA, identity.HeadSHA).Scan(&conflicting); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM review_attempts WHERE id<>? AND json_extract(identity,'$.repository')=? AND json_extract(identity,'$.pr')=? AND json_extract(identity,'$.base_ref')=? AND json_extract(identity,'$.base_sha')=? AND json_extract(identity,'$.head_sha')=? AND json_extract(receipt,'$.verdict') IN ('approved','blocking') AND (json_extract(receipt,'$.settings.mode')=? OR ?<>'')`, id, identity.Repository, identity.PR, identity.BaseRef, identity.BaseSHA, identity.HeadSHA, original.Settings.Mode, original.Parent).Scan(&conflicting); err != nil {
 			return err
 		}
 		if conflicting != 0 {
@@ -710,6 +770,9 @@ func (a *Admission) Complete(ctx context.Context, id string, c CompletionCustody
 	if current.Title != frozen.Title || current.Description != frozen.Description || current.Diff != frozen.Diff || !samePullRequestTuple(current, PullRequestSnapshot{Repository: frozen.Repository, Number: frozen.PullRequest, BaseRef: frozen.BaseRef, BaseSHA: frozen.BaseSHA, HeadSHA: frozen.HeadSHA}) {
 		return result, fmt.Errorf("input changed at publication boundary; held without retry")
 	}
+	if err := a.validateCompletionCustody(ctx, c, original.Identity); err != nil {
+		return result, err
+	}
 	err = store.WithTxRetry(ctx, a.db, func(tx *sql.Tx) error {
 		if err := a.compareReceiptTx(ctx, tx, original); err != nil {
 			return err
@@ -737,7 +800,7 @@ func (a *Admission) Complete(ctx context.Context, id string, c CompletionCustody
 	if err := a.finishCompletion(ctx, original, digest, pub); err != nil {
 		return result, err
 	}
-	return CompletionResult{id, false, pub, seal.Result.Verdict, digest}, nil
+	return CompletionResult{Attempt: id, Publication: pub, Verdict: seal.Result.Verdict, SealSHA256: digest, OriginalInput: identity, CurrentInputMatches: true}, nil
 }
 
 func (a *Admission) finishCompletion(ctx context.Context, original AttemptReceipt, digest string, pub Publication) error {
@@ -880,6 +943,9 @@ func (a *Admission) AuthenticateLegacyCompletion(ctx context.Context, id string,
 	}
 	if len(payload) > 32<<20 {
 		return fmt.Errorf("completion seal exceeds bound")
+	}
+	if err := a.validateCompletionCustody(ctx, c, r.Identity); err != nil {
+		return err
 	}
 	return store.WithTxRetry(ctx, a.db, func(tx *sql.Tx) error {
 		if err := a.compareReceiptTx(ctx, tx, r); err != nil {
@@ -1285,4 +1351,8 @@ func parseOriginalWrapperReport(raw []byte, r AttemptReceipt) (FindingsResult, C
 	// untouched canonical accounting, authenticated by the original join journal.
 	audit = CLIAudit{Terminal: report.Terminal, AttemptID: r.ID, BundleSHA256: r.Identity.BundleSHA256, RequestID: report.Request, SessionID: report.Session, RequestedModel: report.Model, ReasoningEffort: report.Effort, ResolvedModel: report.Resolved, Usage: r.Usage, CostUSD: report.Cost, Duration: time.Duration(report.Duration) * time.Millisecond}
 	return result, audit, nil
+}
+
+func completionSnapshotMatches(current PullRequestSnapshot, frozen FrozenReviewBundle) bool {
+	return current.Repository == frozen.Repository && current.Number == frozen.PullRequest && current.BaseRef == frozen.BaseRef && current.BaseSHA == frozen.BaseSHA && current.HeadSHA == frozen.HeadSHA && current.Title == frozen.Title && current.Description == frozen.Description && current.Diff == frozen.Diff
 }

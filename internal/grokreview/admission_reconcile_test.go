@@ -59,6 +59,7 @@ type completionTestGateway struct {
 	acceptedOnError bool
 	afterFetch      func(int)
 	fetches         int
+	fetchError      error
 	audit           CLIAudit
 	name            string
 }
@@ -67,6 +68,9 @@ func (g *completionTestGateway) FetchPullRequest(_ context.Context, _ string, _ 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.fetches++
+	if g.fetchError != nil {
+		return PullRequestSnapshot{}, g.fetchError
+	}
 	if g.afterFetch != nil {
 		g.afterFetch(g.fetches)
 	}
@@ -875,11 +879,11 @@ func TestReconcileDecodedFullReceiptIsIdempotent(t *testing.T) {
 }
 
 func TestCompletionRecoveryChildRequiresUnchangedConsumedRoot(t *testing.T) {
-	for _, root := range []string{"missing", "exact", "foreign"} {
+	for _, root := range []string{"missing", "exact", "foreign", "other-mode-verdict", "parent-cas", "parent-check-drift"} {
 		t.Run(root, func(t *testing.T) {
 			f := newCompletionFixture(t)
 			r := f.original
-			r.Parent = "parent"
+			r.Parent = strings.Repeat("2", 16)
 			raw, _ := json.Marshal(r)
 			if _, err := f.a.db.Exec("UPDATE review_attempts SET receipt=? WHERE id=?", string(raw), r.ID); err != nil {
 				t.Fatal(err)
@@ -893,7 +897,7 @@ func TestCompletionRecoveryChildRequiresUnchangedConsumedRoot(t *testing.T) {
 			}
 			var seal completionSeal
 			_ = json.Unmarshal([]byte(payload), &seal)
-			seal.Original.Parent = "parent"
+			seal.Original.Parent = r.Parent
 			raw, _ = json.Marshal(seal)
 			if _, err := f.a.db.Exec("UPDATE review_completion_seals SET payload=?,digest=? WHERE attempt=?", string(raw), receiptHash(raw), r.ID); err != nil {
 				t.Fatal(err)
@@ -903,7 +907,55 @@ func TestCompletionRecoveryChildRequiresUnchangedConsumedRoot(t *testing.T) {
 				if root == "foreign" {
 					child = "old-child"
 				}
-				if _, err := f.a.db.Exec("INSERT INTO review_recovery_roots(tuple,parent,child)VALUES(?,?,?)", tupleKey(r.Identity), "parent", child); err != nil {
+				if _, err := f.a.db.Exec("INSERT INTO review_recovery_roots(tuple,parent,child)VALUES(?,?,?)", tupleKey(r.Identity), r.Parent, child); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if root == "exact" || root == "other-mode-verdict" || root == "parent-cas" || root == "parent-check-drift" {
+				parent := r
+				parent.ID = r.Parent
+				parent.Parent = ""
+				parent.Verdict = VerdictError
+				parent.FailureStage = "sampling"
+				parent.FailureKind = CLIFailureTimeout
+				parent.Publication = Publication{CheckRunID: 42, Conclusion: "failure"}
+				terminal := *parent.Terminal
+				exit := -1
+				terminal.ExitCode = &exit
+				terminal.DeadlineProducer = "reviewer_timeout"
+				terminal.StdoutBytes = 0
+				terminal.StdoutSHA256 = receiptHash(nil)
+				parent.Terminal = &terminal
+				if root == "parent-check-drift" {
+					parent.Settings.Effort = "high"
+				}
+				raw, _ := json.Marshal(parent)
+				input, _ := json.Marshal(parent.Identity)
+				if _, err := f.a.db.Exec("INSERT INTO review_attempts(id,identity,receipt)VALUES(?,?,?)", parent.ID, string(input), string(raw)); err != nil {
+					t.Fatal(err)
+				}
+				f.a.check = func(_ context.Context, checked AttemptReceipt) error {
+					if !reflect.DeepEqual(checked, parent) {
+						return errors.New("failed Check not verified against original parent")
+					}
+					if root == "parent-cas" {
+						changed := parent
+						changed.Publication.CheckRunID++
+						raw, _ := json.Marshal(changed)
+						_, err := f.a.db.Exec("UPDATE review_attempts SET receipt=? WHERE id=?", string(raw), changed.ID)
+						return err
+					}
+					return nil
+				}
+			}
+			if root == "other-mode-verdict" {
+				other := r
+				other.ID = "1111111111111111"
+				other.Settings.Mode = "shadow"
+				other.Parent = ""
+				raw, _ := json.Marshal(other)
+				input, _ := json.Marshal(other.Identity)
+				if _, err := f.a.db.Exec("INSERT INTO review_attempts(id,identity,receipt)VALUES(?,?,?)", other.ID, string(input), string(raw)); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -1048,5 +1100,223 @@ func TestTimeoutCannotSealOrCompleteVerdict(t *testing.T) {
 	}
 	if _, err := a.Complete(context.Background(), a.AttemptID(), CompletionCustody{}, &completionTestGateway{}, "token", "grok-review", "core", "policy"); err == nil {
 		t.Fatal("timeout converted to verdict")
+	}
+}
+
+func TestCompletionOtherModeVerdictDoesNotConsumeLane(t *testing.T) {
+	for _, otherMode := range []string{"shadow", "required"} {
+		t.Run(otherMode, func(t *testing.T) {
+			f := newCompletionFixture(t)
+			other := f.original
+			other.ID = "1111111111111111"
+			other.Settings.Mode = otherMode
+			raw, _ := json.Marshal(other)
+			identity, _ := json.Marshal(other.Identity)
+			if _, err := f.a.db.Exec("INSERT INTO review_attempts(id,identity,receipt)VALUES(?,?,?)", other.ID, string(identity), string(raw)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := f.complete()
+			if (err == nil) != (otherMode == "shadow") {
+				t.Fatal("completion mode lane qualification incorrect", otherMode, err)
+			}
+			if f.model.calls != 1 {
+				t.Fatal("completion resampled")
+			}
+			if otherMode == "required" && f.gateway.published != 0 {
+				t.Fatal("same mode conflict published")
+			}
+		})
+	}
+}
+
+func TestCompletionDriftDoesNotPreventPreWriteJoin(t *testing.T) {
+	f := newCompletionFixture(t)
+	f.gateway.afterFetch = func(count int) {
+		if count == 4 {
+			f.gateway.snapshot.Description = "still drifted"
+		}
+	}
+	if _, err := f.complete(); err == nil {
+		t.Fatal("boundary drift published")
+	}
+	f.gateway.afterFetch = nil
+	if _, err := f.complete(); err == nil {
+		t.Fatal("stale input approved")
+	}
+	var state string
+	var flight int
+	if err := f.a.db.QueryRow("SELECT state FROM review_completion_seals WHERE attempt=?", f.original.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.a.db.QueryRow("SELECT count(*) FROM review_flights").Scan(&flight); err != nil {
+		t.Fatal(err)
+	}
+	if state != "sealed" || flight != 0 || f.gateway.published != 0 || f.model.calls != 1 {
+		t.Fatal("proven pre-write join wedged by persistent input drift", state, flight)
+	}
+}
+
+func TestCompletionDriftDoesNotPreventExactPublicationJoin(t *testing.T) {
+	for _, drift := range []string{"body", "head", "fetch-failure"} {
+		t.Run(drift, func(t *testing.T) {
+			f := newCompletionFixture(t)
+			f.gateway.err = errors.New("publication response lost")
+			f.gateway.acceptedOnError = true
+			if _, err := f.complete(); err == nil {
+				t.Fatal("uncertain write reported success")
+			}
+			if drift == "head" {
+				f.gateway.snapshot.HeadSHA = "new-head"
+			} else {
+				f.gateway.snapshot.Description = "new body"
+			}
+			if drift == "fetch-failure" {
+				f.gateway.fetchError = errors.New("live PR transport unavailable")
+			}
+			result, err := f.complete()
+			if err == nil {
+				t.Fatal("stale/unavailable input approved")
+			}
+			var state string
+			var flight int
+			if err := f.a.db.QueryRow("SELECT state FROM review_completion_seals WHERE attempt=?", f.original.ID).Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.a.db.QueryRow("SELECT count(*) FROM review_flights").Scan(&flight); err != nil {
+				t.Fatal(err)
+			}
+			if state != "published" || flight != 0 || result.Publication.CheckRunID != 100 || result.CurrentInputMatches || result.OriginalInput != f.original.Identity || f.gateway.published != 1 || f.model.calls != 1 {
+				t.Fatal("exact original publication join wedged by drift", state, flight, result)
+			}
+			stored, err := f.a.load(context.Background(), f.original.ID)
+			if err != nil || !reflect.DeepEqual(stored, f.original) {
+				t.Fatal("original history changed", err)
+			}
+		})
+	}
+}
+
+func TestPublishedCompletionDriftReplayLeavesForeignFlight(t *testing.T) {
+	f := newCompletionFixture(t)
+	if _, err := f.complete(); err != nil {
+		t.Fatal(err)
+	}
+	f.gateway.snapshot.Description = "changed body"
+	if _, err := f.a.db.Exec("INSERT INTO review_flights(repository,pr,attempt)VALUES(?,?,?)", f.original.Identity.Repository, 9, "foreign"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.complete()
+	if err == nil || result.Publication.CheckRunID != 100 || result.CurrentInputMatches {
+		t.Fatal("historical completion transferred approval", err)
+	}
+	var attempt string
+	if err := f.a.db.QueryRow("SELECT attempt FROM review_flights").Scan(&attempt); err != nil || attempt != "foreign" {
+		t.Fatal("foreign flight changed", err)
+	}
+	if f.gateway.published != 1 || f.model.calls != 1 {
+		t.Fatal("historical replay published/sampled")
+	}
+}
+
+func TestWrapperCaptureWrongPathOrOrderFailsDespiteMatchingRecordHashes(t *testing.T) {
+	for _, name := range []string{"path", "order"} {
+		t.Run(name, func(t *testing.T) {
+			f, path := wrapperCompletionFixture(t)
+			raw, _ := os.ReadFile(path)
+			var e LegacyCompletionEvidence
+			_ = json.Unmarshal(raw, &e)
+			raw, _ = os.ReadFile(e.NativeJoin.RolloutPath)
+			lines := bytes.Split(bytes.TrimSpace(raw), []byte("\n"))
+			call := lines[len(lines)-2]
+			output := lines[len(lines)-1]
+			if name == "path" {
+				var row map[string]any
+				_ = json.Unmarshal(call, &row)
+				payload := row["payload"].(map[string]any)
+				payload["input"] = strings.Replace(payload["input"].(string), "review.log", "different.log", 1)
+				call, _ = json.Marshal(row)
+				lines[len(lines)-2] = call
+				e.WrapperReport.CaptureSHA256 = receiptHash(call)
+			} else {
+				lines = append(append(append([][]byte{}, lines[:5]...), call, output), lines[5:len(lines)-2]...)
+			}
+			raw = append(bytes.Join(lines, []byte("\n")), '\n')
+			if err := os.WriteFile(e.NativeJoin.RolloutPath, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ = json.Marshal(e)
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.a.AuthenticateLegacyCompletion(context.Background(), f.original.ID, f.c, path); err == nil {
+				t.Fatal("wrong actual capture provenance accepted", name)
+			}
+		})
+	}
+}
+
+func TestHistoricalWrapperBinaryRejectsUnknownContract(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "squad-grok-review")
+	if err := os.WriteFile(path, []byte("changed wrapper"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyOriginalWrapperBinary(path); err == nil {
+		t.Fatal("unknown historical validation contract accepted")
+	}
+}
+
+func TestPreWriteCompletionJoinCannotReleaseChangedFlight(t *testing.T) {
+	f := newCompletionFixture(t)
+	f.gateway.afterFetch = func(count int) {
+		if count == 4 {
+			f.gateway.snapshot.Description = "drifted"
+		}
+	}
+	if _, err := f.complete(); err == nil {
+		t.Fatal("boundary drift published")
+	}
+	if _, err := f.a.db.Exec("UPDATE review_flights SET attempt='foreign' WHERE attempt=?", f.original.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.gateway.afterFetch = nil
+	if _, err := f.complete(); err == nil {
+		t.Fatal("changed flight custody joined")
+	}
+	var attempt, state string
+	if err := f.a.db.QueryRow("SELECT attempt FROM review_flights").Scan(&attempt); err != nil || attempt != "foreign" {
+		t.Fatal("foreign flight changed", err)
+	}
+	if err := f.a.db.QueryRow("SELECT state FROM review_completion_seals WHERE attempt=?", f.original.ID).Scan(&state); err != nil || state != "reserved" {
+		t.Fatal("failed release CAS mutated state", err)
+	}
+	if f.gateway.published != 0 || f.model.calls != 1 {
+		t.Fatal("failed release CAS published/sampled")
+	}
+}
+
+func TestCompletionRechecksCustodyAfterBoundaryFetch(t *testing.T) {
+	f := newCompletionFixture(t)
+	lost := false
+	originalGuard := f.a.completionGuard
+	f.a.completionGuard = func(ctx context.Context, c CompletionCustody) error {
+		if lost {
+			return errors.New("confirmed custody rejection")
+		}
+		return originalGuard(ctx, c)
+	}
+	f.gateway.afterFetch = func(count int) {
+		if count == 4 {
+			lost = true
+		}
+	}
+	if _, err := f.complete(); err == nil {
+		t.Fatal("custody loss during boundary fetch published")
+	}
+	if f.gateway.published != 0 || f.model.calls != 1 {
+		t.Fatal("confirmed lost custody published/sampled")
+	}
+	var state string
+	if err := f.a.db.QueryRow("SELECT state FROM review_completion_seals WHERE attempt=?", f.original.ID).Scan(&state); err != nil || state != "reserved" {
+		t.Fatal("lost custody entered publishing", state, err)
 	}
 }

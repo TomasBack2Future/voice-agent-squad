@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -395,5 +396,17 @@ func TestCompletionNativeAndTargetRejectBeforeAnyProvider(t *testing.T) {
 				t.Fatal("unqualified completion opened admission store", err)
 			}
 		})
+	}
+}
+
+func TestHistoricalPublicationReceiptCannotApproveCurrentInput(t *testing.T) {
+	result := grokreview.CompletionResult{Attempt: "0123456789abcdef", Publication: grokreview.Publication{CheckRunID: 100}, Verdict: grokreview.VerdictApproved, OriginalInput: grokreview.ReviewIdentity{Repository: "owner/repo", PR: 9, HeadSHA: "original-head"}, CurrentInputMatches: false}
+	var out, stderr bytes.Buffer
+	if code := writeCompletionResult(result, fmt.Errorf("original publication joined; current input is stale"), &out, &stderr); code != 1 {
+		t.Fatal("historical publication approved stale input", code)
+	}
+	var receipt grokreview.CompletionResult
+	if err := json.Unmarshal(out.Bytes(), &receipt); err != nil || receipt.CurrentInputMatches || receipt.OriginalInput.HeadSHA != "original-head" || receipt.Publication.CheckRunID != 100 || receipt.Sampled {
+		t.Fatal("historical publication receipt lost attribution", err)
 	}
 }

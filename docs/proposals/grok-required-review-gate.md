@@ -421,11 +421,23 @@ create a sampling attempt, refund a root, or transfer approval to another input.
 
 Publication intent is durably distinguished from a reservation that has not
 started a remote write. A joined interrupted pre-write reservation can resume
-under the same custody. Once a POST may have started, only the existing
+under the same custody, even while the live PR remains drifted: proven pre-write
+cleanup releases only that original flight and grants no publication or sampling.
+Once a POST may have started, only the existing
 exact-attempt App lookup can resolve it: absence or an uncertain response does
 not authorize another Check/comment. Already published completion is idempotent.
 A concurrent foreign flight, live publisher, changed custody/input or ambiguous
-Check blocks completion without releasing another operation.
+Check blocks new publication without releasing another operation. A verified
+already-created exact-attempt publication can be joined even after body/head
+drift or a live-fetch failure, without another POST. Its JSON identifies
+`original_input` and reports `current_input_matches: false`; the CLI exits 1
+while the current input is stale or unavailable. Historical publication
+bookkeeping never supplies approval for the current input. Already-published
+replay is read-only and leaves a foreign flight untouched. Normal shadow and
+required completion lanes remain separate; consumed recovery roots retain the
+existing cross-mode verdict restrictions. A recovery child must retain its exact
+original recoverable parent; the current App verifies that original failed Check,
+and the transaction compares the complete parent receipt as well as the child.
 
 For historical identity-stale executions, add
 `--completion-evidence /absolute/private/original-proof.json`. Its schema is

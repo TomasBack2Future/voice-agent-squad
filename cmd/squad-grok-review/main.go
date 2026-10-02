@@ -834,7 +834,7 @@ func runCompletion(ctx context.Context, c config, stdout, stderr io.Writer) int 
 		return github.FindAttemptPublication(ctx, token, c.appID, r)
 	})
 	a.SetCompletionCheck(func(ctx context.Context, r grokreview.AttemptReceipt) error {
-		return github.VerifyRecoveryCheck(ctx, token, c.appID, grokreview.AttemptReceipt{Identity: r.Identity, Settings: r.Settings})
+		return github.VerifyRecoveryCheck(ctx, token, c.appID, r)
 	})
 	bundle, err := reviewer.Load()
 	if err != nil {
@@ -842,12 +842,21 @@ func runCompletion(ctx context.Context, c config, stdout, stderr io.Writer) int 
 		return 1
 	}
 	result, err := a.Complete(ctx, c.recoveryFrom, custody, github, token, c.checkName, bundle.Core.SHA256, bundle.Policy.SHA256)
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
+	return writeCompletionResult(result, err, stdout, stderr)
+}
+
+func writeCompletionResult(result grokreview.CompletionResult, completionErr error, stdout, stderr io.Writer) int {
+	if completionErr != nil {
+		if result.Publication.CheckRunID > 0 {
+			if code := encodeJSON(stdout, stderr, result); code != 0 {
+				return code
+			}
+		}
+		_, _ = fmt.Fprintln(stderr, completionErr)
 		return 1
 	}
-	if err := encodeJSON(stdout, stderr, result); err != 0 {
-		return err
+	if code := encodeJSON(stdout, stderr, result); code != 0 {
+		return code
 	}
 	if result.Verdict == grokreview.VerdictBlocking {
 		return 2
