@@ -11,6 +11,8 @@ import sys
 
 
 def settings(config_path: Path) -> dict:
+    if json.loads(config_path.read_text()).get('runtime', 'claude') != 'claude':
+        raise ValueError('Claude only: Codex requires its structured queue adapter')
     entry = {'type': 'command', 'command': sys.executable,
              'args': [str(Path(__file__).resolve()), '--config', str(config_path.resolve())],
              'asyncRewake': True, 'timeout': 86400}
@@ -20,6 +22,8 @@ def settings(config_path: Path) -> dict:
 
 def run(config_path: Path, event: dict) -> int:
     config = json.loads(config_path.read_text())
+    if config.get('runtime', 'claude') != 'claude':
+        raise ValueError('Claude only: Codex requires its structured queue adapter')
     if event.get('session_id') != config['native_session_id']:
         return 0
     state = Path(config['state_directory'])

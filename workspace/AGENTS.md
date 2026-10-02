@@ -30,6 +30,38 @@ Load phase-specific references only when that phase begins, and resume from a
 schema-valid checkpoint rather than transcript replay. Data Analyze is historical
 migration evidence, not a runtime dependency of this workspace.
 
+## Studio database routing
+
+Before Studio database access or deployment configuration changes, read the
+current installed `.agents/project-profiles/studio/profile.json` and its
+`references/couchbase-environments.md`. Their canonical source is
+`voice-agent-squad/workspace/agent-loop/projects/studio/`; update and install that
+source rather than editing a historical package snapshot.
+
+Studio staging and production use `couchbase-cn-2` and bucket
+`voice-agent-studio`, with separate scopes and runtime users: staging uses
+`staging` / `voice-agent-studio-staging`; production uses `_default` /
+`voice-agent-studio-production`. Production retains scope-limited sequential
+query permission for its existing SQL. DDL uses separate operations credentials.
+Keep the existing one-way old-to-new XDCR unchanged; writes on the new cluster
+must be reconciled before any database rollback. Connection addresses, aliases
+and network rules belong in the canonical reference, not inferred from old
+reports or another environment.
+
+## Runtime-independent role compatibility
+
+Muse, Claude and Codex are eligible for every authorized role, including
+Dispatcher, Worker, Deployer, Reviewer and Investigator. Apply the same capability
+requirements to the same role/operation/custody mode; client names do not grant
+or remove authority. Verify the actual execution surface and installed adapter,
+not just skill visibility or executable presence. Use the maintained
+`voice-agent-squad/workspace/agent-loop/runtime-compatibility.md` contract.
+Missing support is a repairable capability gap with an owner; do not silently
+substitute a different model, weaker permission/custody rule, or another role.
+Existing review requirements, runtime guards, pauses and installation boundaries
+remain in force. Generic auto-pick loops and client-specific hooks cannot override
+a dedicated role's assignment or prove unattended progress.
+
 ## Session control plane
 
 Squad is durable authority for assignment, ownership, dependency and environment
@@ -79,3 +111,28 @@ Studio deployment lock. Cross-service acceptance acquires all required resources
 in lexicographic item-ID order. Never bypass a detected cycle or automatically
 release protected ownership. Installing policy or migrating active tasks is a
 separate operation from editing source.
+
+## Flow audits and instruction adoption
+
+A workflow retrospective directly repairs authorized skills and working
+agreements; its code findings are routed through existing Issues/PRs and owners.
+Search open and closed work before filing, distinguish merged repairs from
+unconfirmed causes, and do not infer Worker/dispatch authority from Issue creation.
+Read the Dispatcher package's flow-retrospective reference for the role boundary.
+
+Worker startup verifies and reads its role skill and project profile at the
+selected source/package identities, recording that binding in existing evidence.
+A catalog entry or installed link alone is not proof of instruction loading.
+Resume reconciles decisions, current phase references, custody and external work;
+link refresh does not migrate a running session. User pause stops new work safely
+while preserving owned changes and operation evidence. Report source, commit,
+merge, installation, session adoption and actual effect separately.
+
+For an evidenced source-changing release blocker, merge the tested/reviewed fix
+into main, select one exact new main head and review its complete production
+delta, including extra merges/configuration/migrations/compatibility/downstream.
+Prepare fresh CI/images/provenance, staging and production admission with a new
+immutable tag/manifest; retain old evidence and never reuse old acceptance as new.
+Pin the selected SHA. Transient failures requiring no source change retain the
+original candidate. Preserve in-flight release identities, locks and ownership;
+only the release owner performs an authorized transition.

@@ -23,6 +23,13 @@ If documented local/workflow access is unavailable or mismatched, report the
 specific failed check and ask only for a missing path/context or access action,
 never secret values. Do not keep rediscovering access on every operation.
 
+## Studio database environment
+
+Before direct database access or a deployment configuration change, read the
+Studio profile's [Couchbase environment contract](../../../agent-loop/projects/studio/references/couchbase-environments.md).
+Select the environment explicitly; staging and production no longer share the
+same Studio cluster. Runtime application credentials do not authorize index DDL.
+
 ## Merge and deployment gate
 
 Select resources by the deployed component and operation. Preserve `ENV-001`

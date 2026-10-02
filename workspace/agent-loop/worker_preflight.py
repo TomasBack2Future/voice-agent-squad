@@ -88,14 +88,25 @@ def check_worktree(assignment: dict) -> None:
 
 
 def check(assignment_path: Path, profile_path: Path, runtime: str,
-          skills: list[Path], tools: list[str], launch_config: Path | None = None) -> dict:
+          skills: list[Path], tools: list[str], launch_config: Path | None = None,
+          *, context_only: bool = False) -> dict:
+    if runtime not in ('claude', 'codex', 'muse'):
+        raise ValidationError('unsupported runtime')
+    if context_only and launch_config is not None:
+        raise ValidationError('context-only cannot be combined with a launch config')
+    if not context_only:
+        if runtime == 'muse':
+            raise ValidationError('Muse launch adapter unavailable in this package; context-only is not execution readiness')
+        if launch_config is None:
+            raise ValidationError(f'{runtime.capitalize()} launch config required; executable presence is not readiness')
     assignment = validate_file(
         assignment_path, ROOT / "schemas/assignment-envelope.schema.json"
     )
     profile = check_profile(assignment, profile_path)
     if len(json.dumps(assignment, separators=(",", ":")).encode()) > 2048:
         raise ValidationError("assignment exceeds 2048-byte cold-start budget")
-    check_worktree(assignment)
+    if runtime != 'codex' or launch_config is None:
+        check_worktree(assignment)
 
     # The launcher supplies the actual client-visible entries, not just canonical
     # source paths. Resolving a source file alone does not prove client discovery.
@@ -125,20 +136,23 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         available.append(Path(tool).name)
     launch_receipt = {"status": "not_checked"}
     if launch_config is not None:
-        if runtime != "claude":
-            raise ValidationError("launch-config currently supports Claude only")
-        from claude_worker_launcher import check_launch
+        if runtime == "codex":
+            from codex_worker_launcher import check_launch
+        else:
+            from claude_worker_launcher import check_launch
         launch_receipt = check_launch(assignment, launch_config)
     return {
-        "schema_version": "agent-loop.startup-receipt.v1", "status": "ready",
+        "schema_version": "agent-loop.startup-receipt.v1",
+        "status": "context-checked" if context_only else "ready",
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "assignment_id": assignment["assignment_id"],
         "assignment_sha256": hashlib.sha256(assignment_path.read_bytes()).hexdigest(),
         "base_sha": assignment["base_sha"], "runtime": runtime,
         "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
         "skills": receipts, "executables": available,
-        "ownership": "not_checked", "repository_api_access": "not_checked",
-        "runtime_approval": "not_checked", "environment": "not_checked",
+        "ownership": launch_receipt.get("primary_ownership", "not_checked"), "repository_api_access": "not_checked",
+        "runtime_approval": launch_receipt.get("runtime_approval", "not_checked"),
+        "environment": launch_receipt.get("environment", "not_checked"),
         "launcher": launch_receipt,
     }
 
@@ -147,13 +161,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assignment", type=Path, required=True)
     parser.add_argument("--profile", type=Path, required=True)
-    parser.add_argument("--runtime", choices=("claude", "codex"), required=True)
+    parser.add_argument("--runtime", choices=("claude", "codex", "muse"), required=True)
     parser.add_argument("--skill", type=Path, action="append", required=True)
     parser.add_argument("--tool", action="append", default=[])
-    parser.add_argument("--launch-config", type=Path, help="check the canonical Claude launcher with child identity")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--launch-config", type=Path, help="check the selected runtime's canonical launcher")
+    mode.add_argument("--context-only", action="store_true", help="check portable inputs only; never reports execution ready")
     args = parser.parse_args()
     try:
-        receipt = check(args.assignment, args.profile, args.runtime, args.skill, args.tool, args.launch_config)
+        receipt = check(args.assignment, args.profile, args.runtime, args.skill, args.tool,
+                        args.launch_config, context_only=args.context_only)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         # Do not echo input documents, OS errors or command output into receipts.
         reason = str(error) if isinstance(error, ValidationError) else "preflight input unavailable"

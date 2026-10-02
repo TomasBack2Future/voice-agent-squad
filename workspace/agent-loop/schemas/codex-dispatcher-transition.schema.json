@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "native_session_id",
+    "agent_id",
+    "worktree",
+    "schema_version",
+    "prior_selection",
+    "checkpoint_file",
+    "checkpoint_sha256",
+    "old_writer_pid",
+    "old_writer_started_at",
+    "old_writer_joined",
+    "old_receiver_joined",
+    "external_operations_joined",
+    "authorization_reference",
+    "reservation_fences",
+    "old_writer_scope"
+  ],
+  "properties": {
+    "native_session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f-]{36}$"
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "worktree": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "schema_version": {
+      "const": "agent-loop.codex-dispatcher-transition.v1"
+    },
+    "prior_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client",
+        "model",
+        "effort",
+        "provider",
+        "sandbox",
+        "approval_policy",
+        "approvals_reviewer"
+      ],
+      "properties": {
+        "client": {
+          "const": "app"
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+        },
+        "effort": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
+        "provider": {
+          "const": "openai"
+        },
+        "sandbox": {
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ]
+        },
+        "approval_policy": {
+          "enum": [
+            "on-request",
+            "untrusted",
+            "never",
+            "on-failure"
+          ]
+        },
+        "approvals_reviewer": {
+          "enum": [
+            "user",
+            "auto_review"
+          ]
+        }
+      }
+    },
+    "checkpoint_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "checkpoint_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "old_writer_pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "old_writer_started_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "old_writer_joined": {
+      "const": true
+    },
+    "old_receiver_joined": {
+      "const": true
+    },
+    "external_operations_joined": {
+      "const": true
+    },
+    "authorization_reference": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"
+    },
+    "reservation_fences": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "generation",
+          "worker_native_session_id"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "worker_native_session_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f-]{36}$"
+          }
+        }
+      }
+    },
+    "old_writer_scope": {
+      "enum": [
+        "dedicated-process",
+        "shared-backend"
+      ]
+    }
+  }
+}

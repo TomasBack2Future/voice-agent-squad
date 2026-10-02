@@ -180,3 +180,62 @@ func TestMCPDecisionCASAndGet(t *testing.T) {
 		}
 	}
 }
+
+func TestDeferredNativeAcceptanceAndMCPParity(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	_, err := env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,'DISPATCH-1','github:repo#1',?,1,1,0,'dispatched',1,'worker-session','','TASK')`, env.RepoID, env.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,'TASK','worker',1,2,'done')`, env.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := chat.New(env.DB, env.RepoID)
+	if err = c.Post(ctx, chat.PostRequest{AgentID: "worker", Thread: "TASK", Kind: "say", Body: "outcome"}); err != nil {
+		t.Fatal(err)
+	}
+	var outcome int64
+	if err = env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	s := terminalevents.Store{DB: env.DB, Repo: env.RepoID, Recipient: env.AgentID}
+	id, err := s.Publish(ctx, "worker", terminalevents.PublishRequest{Reservation: "DISPATCH-1", Generation: 1, WorkerSession: "worker-session", Kind: "handoff-complete", OutcomeID: outcome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err = receiveTerminalEvents(ctx, s, "native-incarnation", time.Second, &out, true); err != nil {
+		t.Fatal(err)
+	}
+	var receipt struct {
+		Recipient string                 `json:"recipient"`
+		Session   string                 `json:"delivery_session"`
+		Events    []terminalevents.Event `json:"events"`
+	}
+	if err = json.Unmarshal(out.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Recipient != env.AgentID || receipt.Session != "native-incarnation" || len(receipt.Events) != 1 || receipt.Events[0].DeliveredAt != 0 {
+		t.Fatal(out.String())
+	}
+	if err = s.Ack(ctx, id, "too early"); err == nil {
+		t.Fatal("pending pipe read became handling acknowledgement")
+	}
+	raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "squad_terminal_events_delivered", "arguments": map[string]string{"event_id": id, "delivery_session": "native-incarnation", "agent_id": env.AgentID}}})
+	out.Reset()
+	if err = runMCP(ctx, env.DB, env.RepoID, env.Root, strings.NewReader(string(raw)+"\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "delivered") {
+		t.Fatal(out.String())
+	}
+	var processed int64
+	if err = env.DB.QueryRow("SELECT processed_at FROM terminal_event_receipts WHERE event_id=?", id).Scan(&processed); err != nil || processed != 0 {
+		t.Fatal(processed, err)
+	}
+	if err = s.Ack(ctx, id, "recipient reconciled"); err != nil {
+		t.Fatal(err)
+	}
+}

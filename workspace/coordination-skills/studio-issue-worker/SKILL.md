@@ -5,11 +5,18 @@ description: "Resolve exactly one explicitly assigned Voice Agent Studio GitHub 
 
 # Studio Single-Issue Worker
 
-Before work-package planning, performance sampling, repeated review corrections or
-retained fixtures, read [delivery quality](references/delivery-quality.md).
+Before work-package planning, ENV admission, shared-failure retry or blocker
+handoff, performance sampling, repeated review corrections or retained fixtures,
+read [delivery quality](references/delivery-quality.md).
 
 Before isolated database setup, read
 [execution efficiency](references/execution-efficiency.md).
+Before Studio database access or deployment configuration changes, read the
+assigned Studio project profile's `references/couchbase-environments.md`.
+Production uses `couchbase-cn-2`, `voice-agent-studio._default`, and the independent
+`voice-agent-studio-production` runtime account. Preserve the documented scoped
+query permissions and separate DDL identity; do not infer production settings
+from staging or rewrite business SQL merely to switch database credentials.
 Batch progress polling belongs to the Dispatcher. Integration Workers keep
 handoff and release ownership, record waiting checkpoints and yield when no
 actionable work remains; an idle turn does not release the primary claim.
@@ -35,6 +42,10 @@ through a verified message API/mailbox when available. Never inject a background
 callback into cmux terminal input. Without a safe wakeup channel, record pending
 reconciliation; ledger messages alone do not wake its task. Never treat callback
 delivery as acceptance or proven Worker termination.
+
+For flow audits, startup skill binding, user pauses and release-repair routing,
+read [role-bound flow repair](../squad-dispatcher/references/flow-retrospective.md). Preserve the assigned role;
+process optimization does not assign product implementation.
 
 ## Design handoff
 
@@ -94,7 +105,7 @@ Formal handoff events and terminal callbacks remain required and deduplicated.
    park with `claim --wait`; do not poll or search for other work.
 3. Keep this Issue claim through implementation, PR corrections, guarded merge,
    exact-revision staging verification, and final Issue disposition.
-4. Use a clean isolated Codex/git worktree and `codex/issue-<number>-<slug>`
+4. Use a clean isolated git worktree and `codex/issue-<number>-<slug>`
    branch. Preserve all unrelated dirty worktrees.
 
 ## Studio boundaries
@@ -124,7 +135,7 @@ Formal handoff events and terminal callbacks remain required and deduplicated.
 
 ## External Grok reviewer
 
-The owning Codex Worker remains the only code-changing role. Grok is an
+The owning Worker remains the only code-changing role. Grok is an
 untrusted local reviewer; the external GitHub App is only its publication
 identity, and neither is a Squad Worker. Never create a reviewer task, invoke raw
 Grok, manually publish a same-name status/Check, use `--admin`, or push a no-op

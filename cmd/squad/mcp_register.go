@@ -73,14 +73,16 @@ func attDirOf(repoRoot string) string   { return filepath.Join(repoRoot, ".squad
 func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
 	srv.Register(mcp.Tool{
 		Name: "squad_heartbeat", Description: "Renew owned active claims under the exact dispatched Worker generation; does not consume messages.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_id":{"type":"string"},"reservation":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1},"check":{"type":"boolean"}},"required":["reservation","worker_session","generation"],"additionalProperties":false}`),
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_id":{"type":"string"},"reservation":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1},"check":{"type":"boolean"},"json":{"type":"boolean"},"require_primary":{"type":"boolean"}},"required":["reservation","worker_session","generation"],"additionalProperties":false}`),
 		Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var a struct {
-				Agent       string `json:"agent_id"`
-				Reservation string `json:"reservation"`
-				Session     string `json:"worker_session"`
-				Generation  int64  `json:"generation"`
-				Check       bool   `json:"check"`
+				Agent          string `json:"agent_id"`
+				Reservation    string `json:"reservation"`
+				Session        string `json:"worker_session"`
+				Generation     int64  `json:"generation"`
+				Check          bool   `json:"check"`
+				JSON           bool   `json:"json"`
+				RequirePrimary bool   `json:"require_primary"`
 			}
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
@@ -92,7 +94,10 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 			if err != nil {
 				return nil, err
 			}
-			err = claims.New(db, repoID, nil).WorkerHeartbeat(ctx, agent, a.Reservation, a.Session, a.Generation, a.Check)
+			err = claims.New(db, repoID, nil).WorkerHeartbeat(ctx, agent, a.Reservation, a.Session, a.Generation, a.Check, a.RequirePrimary)
+			if a.JSON {
+				return heartbeatReceipt(err, agent, a.Reservation, a.Session, a.Generation, a.Check, a.RequirePrimary), nil
+			}
 			return map[string]bool{"ok": err == nil}, err
 		},
 	})
@@ -200,6 +205,8 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 			return claims.New(db, repoID, nil).CheckResource(ctx, a.Item, a.Scope, filepath.Join(repoRoot, ".squad/items"), filepath.Join(repoRoot, ".squad/done"), a.RequirePolicy)
 		},
 	})
+
+	registerDispatchControllerTools(srv, db, repoID, repoRoot)
 
 	srv.Register(mcp.Tool{
 		Name: "squad_dispatch_takeover", Description: "Operator recovery of verified stopped sessions with exact custody fences; ENV requires separate recover.",
@@ -773,6 +780,28 @@ func registerInspectionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot strin
 
 func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
 	registerDecisionTools(srv, db, repoID, repoRoot)
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_delivered", Description: "Record fenced native transport acceptance. This does not acknowledge handling.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","delivery_session"],"properties":{"event_id":{"type":"string"},"delivery_session":{"type":"string"},"native_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			EventID string `json:"event_id"`
+			Session string `json:"delivery_session"`
+			Native  string `json:"native_session"`
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := resolveAgentID(a.AgentID)
+		if err != nil {
+			return nil, err
+		}
+		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor, NativeSession: a.Native}).Delivered(ctx, a.EventID, a.Session); err != nil {
+			return nil, err
+		}
+		return map[string]string{"event_id": a.EventID, "state": "delivered"}, nil
+	}})
 	srv.Register(mcp.Tool{Name: "squad_terminal_events_publish", Description: "Publish a fenced outcome or design decision; recipient comes from the ledger. Persistence is pending, not delivered.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","generation","worker_session","kind","outcome_id"],"properties":{"reservation":{"type":"string"},"generation":{"type":"integer","minimum":1},"worker_session":{"type":"string"},"kind":{"enum":["issue-closed","handoff-complete","blocked","decision-request","decision-resolved","reconcile-needed"]},"expected_decision":{"type":"integer","minimum":0},"outcome_id":{"type":"integer","minimum":1},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			terminalevents.PublishRequest
@@ -795,10 +824,11 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		return map[string]string{"event_id": id, "state": "pending"}, nil
 	}})
 
-	srv.Register(mcp.Tool{Name: "squad_terminal_events_ack", Description: "Acknowledge one delivered terminal event after recipient reconciliation.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","note"],"properties":{"event_id":{"type":"string"},"note":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_ack", Description: "Acknowledge one delivered terminal event after recipient reconciliation.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","note"],"properties":{"event_id":{"type":"string"},"note":{"type":"string"},"native_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			EventID string `json:"event_id"`
 			Note    string `json:"note"`
+			Native  string `json:"native_session"`
 			AgentID string `json:"agent_id"`
 		}
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -811,7 +841,7 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		if err != nil {
 			return nil, err
 		}
-		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor}).Ack(ctx, a.EventID, a.Note); err != nil {
+		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor, NativeSession: a.Native}).Ack(ctx, a.EventID, a.Note); err != nil {
 			return nil, err
 		}
 		return map[string]string{"event_id": a.EventID, "state": "processed"}, nil

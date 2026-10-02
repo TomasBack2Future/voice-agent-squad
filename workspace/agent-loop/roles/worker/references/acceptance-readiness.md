@@ -16,6 +16,24 @@ that only failed/cancelled records can be retried. Reuse valid retained evidence
 Separate correctness, environment health, performance objectives and review state.
 Existing approved hard gates remain; do not invent latency gates from one sample.
 
+Bind the plan to the configured API origin/Project and candidate/fixture provenance.
+Check execution and ephemeral-cleanup scope separately, including the actual supported
+cleanup method; credential presence is not sufficient. A retained fixture needs a
+verified reference/state. When creation requires ENV, prepare its supported command,
+definition and eligible expected state before the lock, then verify the created
+fixture under ownership before the assertion. Do not require an unauthorized write
+to pass preparation or claim that a prepared fixture already exists. For retained
+writes, record custody instead of inventing a deletion API. Identify login/MFA or
+other human-only prerequisites early and only from verified capability evidence.
+
+Use the existing read-only delivery preflight's `acceptance-readiness` action where
+that helper is available; its compact fields are defined by the
+[executable fixtures](../../../../coordination-skills/studio-issue-worker/scripts/delivery-check.test.mjs).
+This checks evidence completeness, not actual access or permission. Retain the
+checked plan in the current checkpoint, and recheck only
+changed/stale inputs. Incomplete readiness blocks ENV admission, not independent code
+or script preparation; assign one preparation owner and an explicit resume condition.
+
 Use the UI for the user interaction being accepted. Use supported authenticated
 API scripts for hashes, frozen metadata, pagination and final-state assertions.
 Keep UI authentication in its supported browser context when required; never
@@ -40,6 +58,16 @@ untracked requests. Reuse completed portions of acceptance and report remaining
 assertions explicitly. A healthy revision is not functional acceptance; an
 acceptance timeout is not proof that rollout failed. Classify failing control
 fixtures before attributing them to the new feature.
+
+For a shared failure, report its run/trace, exact component identity and failed
+assertion once, then follow the
+[shared-blocker contract](operational-readiness.md#one-shared-blocker-one-repair-owner).
+A transient error permits only the existing policy's safe bounded retry
+(default at most one when no budget
+is specified); verify prior operations are terminal or safely idempotent first.
+An unchanged deterministic error needs a verified changed condition before rerun.
+Do not discard other accepted assertions or group unrelated error codes as one
+cause. An unresolved external mutation never becomes permission for a new attempt.
 
 A review timeout/error has no verdict. Follow actual enforcement policy, retain
 the unresolved review status, and repair the operational cause before resampling;

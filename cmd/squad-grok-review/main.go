@@ -28,6 +28,11 @@ type config struct {
 	descriptionFile   string
 	configPath        string
 	doctor            bool
+	reconcile         bool
+	recovery          bool
+	prospective       bool
+	recoveryFrom      string
+	admissionDir      string
 	repository        string
 	pullRequest       int
 	checkName         string
@@ -54,6 +59,7 @@ type localConfig struct {
 	GrokBinary      string `json:"grok_bin,omitempty"`
 	GitHubBinary    string `json:"gh_bin,omitempty"`
 	StatusDir       string `json:"status_dir,omitempty"`
+	AdmissionDir    string `json:"admission_dir,omitempty"`
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
@@ -90,6 +96,9 @@ type doctorOutput struct {
 }
 
 type commandOutput struct {
+	ParentAttempt   string                    `json:"parent_attempt,omitempty"`
+	InputProvenance string                    `json:"input_provenance,omitempty"`
+	AttemptID       string                    `json:"attempt_id,omitempty"`
 	Provider        string                    `json:"provider,omitempty"`
 	RepositoryHost  string                    `json:"repository_host,omitempty"`
 	DiffSHA256      string                    `json:"diff_sha256,omitempty"`
@@ -125,7 +134,30 @@ func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
 
+func currentReviewOwner() (grokreview.ReviewOwner, error) {
+	native := os.Getenv("CODEX_THREAD_ID")
+	session := os.Getenv("SQUAD_SESSION_ID")
+	if session != "" {
+		if !strings.HasPrefix(session, "codex:") {
+			return grokreview.ReviewOwner{}, fmt.Errorf("prospective admission requires the original Codex native owner")
+		}
+		selected := strings.TrimPrefix(session, "codex:")
+		if native != "" && native != selected {
+			return grokreview.ReviewOwner{}, fmt.Errorf("native delivery owner mismatch")
+		}
+		native = selected
+	}
+	owner := grokreview.ReviewOwner{Actor: os.Getenv("SQUAD_AGENT"), Native: native}
+	if owner.Actor == "" || owner.Native == "" {
+		return owner, fmt.Errorf("original review owner identity unavailable")
+	}
+	return owner, nil
+}
+
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "authorization-readback" {
+		return runAuthorizationReadback(args[1:], stdout, stderr)
+	}
 	configuration, err := parseConfig(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -133,6 +165,35 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if configuration.reconcile {
+		settings := grokreview.ReviewSettings{Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
+		admission, openErr := grokreview.OpenAdmission(configuration.admissionDir, settings, configuration.recoveryFrom, nil)
+		if openErr != nil {
+			_, _ = fmt.Fprintln(stderr, openErr)
+			return 1
+		}
+		defer func() { _ = admission.Close() }()
+		admission.SetPublicationLookup(func(ctx context.Context, r grokreview.AttemptReceipt) (grokreview.Publication, error) {
+			github, token, err := prepareGitHubReadback(ctx, configuration)
+			if err != nil {
+				return grokreview.Publication{}, err
+			}
+			return github.FindAttemptPublication(ctx, token, configuration.appID, r)
+		})
+		id := configuration.recoveryFrom
+		if filepath.IsAbs(id) {
+			if err := admission.ImportLegacy(id); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			id = admission.LegacyAttemptID()
+		}
+		if err := admission.Reconcile(ctx, id, configuration.repository, configuration.pullRequest); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return encodeJSON(stdout, stderr, map[string]any{"attempt": id, "joined": true, "sampled": false, "published": false, "recovery_slot": "unchanged"})
 	}
 	dependencies, err := prepareRuntime(ctx, configuration)
 	if err != nil {
@@ -190,6 +251,44 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
+	var admission *grokreview.Admission
+	if configuration.provider == "github" {
+		settings := grokreview.ReviewSettings{Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
+		check := func(checkCtx context.Context, prior grokreview.AttemptReceipt) error {
+			return dependencies.github.(*grokreview.GitHubCLI).VerifyRecoveryCheck(checkCtx, dependencies.installationToken, configuration.appID, prior)
+		}
+		admission, err = grokreview.OpenAdmission(configuration.admissionDir, settings, configuration.recoveryFrom, check)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		defer func() { _ = admission.Close() }()
+		if configuration.recovery && filepath.IsAbs(configuration.recoveryFrom) {
+			if configuration.prospective {
+				owner, ownerErr := currentReviewOwner()
+				if ownerErr != nil {
+					_, _ = fmt.Fprintln(stderr, ownerErr)
+					return 1
+				}
+				err = admission.ImportProspective(configuration.recoveryFrom, owner)
+			} else {
+				err = admission.ImportLegacy(configuration.recoveryFrom)
+			}
+			if err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
+		if statusWriter != nil {
+			if err = statusWriter.BindAttempt(admission.AttemptID()); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
+		dependencies.model.SetLaunchObserver(admission.ReviewerLaunching)
+		dependencies.model.SetProcessObserver(admission.ReviewerStarted)
+		service.SetAdmission(admission)
+	}
 	var report grokreview.ReviewReport
 	var reviewErr error
 	if configuration.provider == "local-git" {
@@ -201,6 +300,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		output := newCommandOutput(report)
+		if admission != nil {
+			output.AttemptID = admission.AttemptID()
+			output.ParentAttempt = admission.Receipt().Parent
+			output.InputProvenance = admission.Receipt().InputProvenance
+		}
 		if configuration.provider == "local-git" {
 			output.Provider = "local-git"
 			output.RepositoryHost = configuration.repositoryHost
@@ -223,6 +327,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func runAuthorizationReadback(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("authorization-readback", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var request, receipt string
+	flags.StringVar(&request, "request", "", "absolute current exact review scope JSON")
+	flags.StringVar(&receipt, "receipt", "", "existing real disclosure receipt; omission reports unavailable")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return 1
+	}
+	owner, err := currentReviewOwner()
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	result, err := grokreview.ReadDisclosure(receipt, request, owner)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return encodeJSON(stdout, stderr, result)
 }
 
 func prepareRuntime(ctx context.Context, configuration config) (runtimeDependencies, error) {
@@ -281,12 +407,24 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 
 func parseConfig(args []string, output io.Writer) (config, error) {
 	var configuration config
-	if len(args) > 0 && args[0] == "doctor" {
+	if len(args) > 0 && args[0] == "readmit" {
+		configuration.recovery = true
+		configuration.prospective = true
+		args = args[1:]
+	} else if len(args) > 0 && args[0] == "reconcile" {
+		configuration.reconcile = true
+		args = args[1:]
+	} else if len(args) > 0 && args[0] == "recover" {
+		configuration.recovery = true
+		args = args[1:]
+	} else if len(args) > 0 && args[0] == "doctor" {
 		configuration.doctor = true
 		args = args[1:]
 	}
 	flags := flag.NewFlagSet("squad-grok-review", flag.ContinueOnError)
 	flags.SetOutput(output)
+	flags.StringVar(&configuration.recoveryFrom, "from", "", "joined timeout attempt ID or absolute legacy custody receipt")
+	flags.StringVar(&configuration.admissionDir, "admission-dir", "", "canonical reviewer admission directory (shared by all invocations)")
 	flags.StringVar(&configuration.provider, "provider", "github", "review input: github or local-git (no publication)")
 	flags.StringVar(&configuration.cloneLayout, "clone-layout", "plain", "HTTPS clone path layout: plain or bitbucket-server")
 	flags.StringVar(&configuration.repositoryHost, "repository-host", "", "explicit implementation Git host for local review")
@@ -395,6 +533,28 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if !filepath.IsAbs(configuration.statusDir) {
 		return config{}, fmt.Errorf("--status-dir must be an absolute path")
 	}
+	if configuration.admissionDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return config{}, err
+		}
+		configuration.admissionDir = filepath.Join(home, ".squad", "grok-review-admission")
+	}
+	if !filepath.IsAbs(configuration.admissionDir) {
+		return config{}, fmt.Errorf("--admission-dir must be absolute")
+	}
+	if configuration.recovery && (configuration.recoveryFrom == "" || configuration.provider != "github") {
+		return config{}, fmt.Errorf("recover requires --from and GitHub provider; original mode must be preserved")
+	}
+	if configuration.prospective && !filepath.IsAbs(configuration.recoveryFrom) {
+		return config{}, fmt.Errorf("readmit requires an absolute prospective terminal-legacy custody/disclosure receipt")
+	}
+	if configuration.reconcile && (configuration.recoveryFrom == "" || configuration.provider != "github") {
+		return config{}, fmt.Errorf("reconcile requires --from and GitHub provider; original mode must be preserved")
+	}
+	if !configuration.recovery && !configuration.reconcile && configuration.recoveryFrom != "" {
+		return config{}, fmt.Errorf("--from requires recover")
+	}
 	if configuration.timeout <= 0 || configuration.maxGitHubOutput <= 0 || configuration.maxReviewerOutput <= 0 {
 		return config{}, fmt.Errorf("timeouts and output limits must be positive")
 	}
@@ -447,6 +607,9 @@ func applyLocalConfig(configuration *config, local localConfig, visited map[stri
 	}
 	if !visited["gh-bin"] && local.GitHubBinary != "" {
 		configuration.githubBinary = local.GitHubBinary
+	}
+	if !visited["admission-dir"] && local.AdmissionDir != "" {
+		configuration.admissionDir = local.AdmissionDir
 	}
 	if !visited["status-dir"] && local.StatusDir != "" {
 		configuration.statusDir = local.StatusDir
@@ -527,4 +690,27 @@ func safeProcessEnvironment() map[string]string {
 		}
 	}
 	return environment
+}
+
+// Reconcile only authenticates GitHub if an actual publication response was
+// lost. It never resolves/initializes Grok or loads a model runtime.
+func prepareGitHubReadback(ctx context.Context, c config) (*grokreview.GitHubCLI, string, error) {
+	binary, err := resolveBinary(c.githubBinary)
+	if err != nil {
+		return nil, "", err
+	}
+	key, err := os.ReadFile(c.appPrivateKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("read GitHub App key: %w", err)
+	}
+	jwt, err := grokreview.MintAppJWT(c.appID, key, time.Now())
+	if err != nil {
+		return nil, "", err
+	}
+	github, err := grokreview.NewGitHubCLI(binary, time.Minute, c.maxGitHubOutput)
+	if err != nil {
+		return nil, "", err
+	}
+	token, err := github.MintInstallationToken(ctx, jwt, c.installationID)
+	return github, token, err
 }

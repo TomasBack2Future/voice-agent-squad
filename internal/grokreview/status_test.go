@@ -180,3 +180,31 @@ func TestReviewStatusWriterRejectsSymlinkDirectory(t *testing.T) {
 		t.Fatal("expected symlink directory rejection")
 	}
 }
+
+func TestReviewStatusBindsAdmissionAttemptBeforeObservation(t *testing.T) {
+	writer, err := NewReviewStatusWriter(t.TempDir(), "required", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "0123456789abcdef"
+	if err = writer.BindAttempt(id); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Observe(ReviewObservation{State: ReviewStateFreezing, Snapshot: PullRequestSnapshot{Repository: "owner/repo", Number: 9}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(writer.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewStatus
+	if err = json.Unmarshal(raw, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Attempt != id {
+		t.Fatal("status lost admission attempt identity")
+	}
+	if err = writer.BindAttempt("fedcba9876543210"); err == nil {
+		t.Fatal("changed active status identity")
+	}
+}

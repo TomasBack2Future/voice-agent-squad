@@ -14,6 +14,7 @@ import sys
 import time
 import uuid
 import terminal_receiver
+from human_authorization import authorization, prompt_context
 
 from validate_context_package import ROOT, ValidationError, validate_file
 from worker_preflight import check_profile, check_worktree
@@ -102,6 +103,13 @@ def binding(assignment: dict, c: dict, env: dict) -> str:
 
 def check_resources(assignment: dict, c: dict, env: dict) -> list[dict]:
     phases = [p for p in ('staging', 'production') if assignment['authorization'].get(p)]
+    if c.get('delivery_readiness_file'):
+        from delivery_readiness import selected_readiness, verify_admission
+        readiness = selected_readiness(assignment, c)
+        verify_admission(assignment, c, env, readiness)
+        if not readiness['environment_required_now']:
+            return []
+        phases = [readiness['environment_phase']]
     if not phases:
         return []
     path = Path(assignment['project_profile']['path'])
@@ -144,6 +152,7 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
     check_profile(assignment)
     check_worktree(assignment)
     c = config_file(config_path)
+    authorization(c, assignment)
     env = child_environment(c)
     state = binding(assignment, c, env)
     resources = check_resources(assignment, c, env)
@@ -151,7 +160,8 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
     return {'status': 'ready', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
-            'runtime_approval': 'not_checked', 'model_launch': 'not_performed'}
+            'runtime_approval': 'not_checked', 'model_launch': 'not_performed',
+            'authorization': authorization(c, assignment)}
 
 
 def wait_for_binding(assignment: dict, c: dict, env: dict, budget: float) -> None:
@@ -235,6 +245,7 @@ def main() -> int:
         check_profile(a)
         check_worktree(a)
         c = config_file(args.config)
+        authorization(c, a)
         env = child_environment(c)
         check_resources(a, c, env)
         wait_for_binding(a, c, env, args.wait_seconds)
@@ -242,6 +253,8 @@ def main() -> int:
         check_worktree(a)
         # Read the prompt only after binding. Never echo it or the child environment.
         prompt = Path(c['prompt_file']).read_text()
+        if c.get('human_authorization'):
+            prompt += prompt_context(c, a)
         receiver_args = receiver_arguments(c, args.config)
         os.chdir(a['worktree'])
         return supervise([c['client_executable'], '--session-id',

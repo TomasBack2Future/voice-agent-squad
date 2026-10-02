@@ -216,3 +216,18 @@ Without the replacement fields this transfers only Dispatcher custody. It keeps
 the still-running Worker's generation/session intact and reroutes unprocessed
 Dispatcher receipts. The operator must inventory all affected reservations and
 keep a new writer inactive until every necessary binding is read back.
+### Session identity isolation
+
+An explicit `SQUAD_AGENT` takes precedence. Otherwise, a session selected by
+`SQUAD_SESSION_ID` or the supported terminal session variables reads only its
+own persisted identity. A missing or unreadable per-session file derives a new
+session actor; it must not borrow the legacy unscoped `agent-id.txt`. Sessions
+without a session key retain that legacy behavior. This applies equally to
+Claude, Codex and Muse; launchers still supply explicit sanitized native/actor
+bindings. Native provider variables are not an ownership transfer mechanism.
+
+This changes identity resolution only. It does not migrate or recover an existing
+claim, reservation or environment. A session that previously relied on the global
+fallback must resolve its actual custody before writing under a new identity;
+use explicit existing actor binding only when its ownership is independently
+verified. Never copy an actor name merely to make a failed ownership check pass.

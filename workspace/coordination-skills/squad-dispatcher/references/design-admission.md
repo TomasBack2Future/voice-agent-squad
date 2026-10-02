@@ -147,3 +147,12 @@ Require a compact executable acceptance plan before environment admission, using
 An AC list alone does not establish runnable fixtures, supported retry states,
 access or a usable evidence path. Delegate bounded preparation outside ENV;
 reuse valid checks and avoid another approval round for routine implementation.
+
+Bind that plan to the configured API origin/Project, exact candidate and fixture
+provenance. Verify execution and cleanup capabilities separately. A retained fixture
+needs a fresh state read; a fixture that must be created under ENV needs a prepared
+supported creation path and eligible expected state, not a fictitious existing ID.
+Include bounded completion assertions, cleanup or retained custody, and any actual
+login/MFA prerequisite. Use the `acceptance-readiness` delivery preflight before ENV
+admission. Missing readiness blocks that affected phase; independent implementation
+may proceed with a named preparation owner and resume condition.

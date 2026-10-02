@@ -24,8 +24,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: install pinned workflow evidence parser
+        run: python3 -m pip install -r workspace/agent-loop/workflow-requirements.txt
       - name: test optional session entrypoint without model calls
         run: python3 -m unittest discover -s workspace/agent-loop/tests -v
+      - name: test read-only observer with isolated SQLite fixtures
+        run: python3 -m unittest discover -s scripts/squad-observer -v
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

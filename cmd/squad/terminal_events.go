@@ -15,8 +15,9 @@ import (
 
 func newTerminalEventsCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "terminal-events", Short: "Durable recipient acknowledgements and safe hook delivery"}
-	var session string
+	var session, nativeSession string
 	var max time.Duration
+	var deferDelivery bool
 	listen := &cobra.Command{Use: "listen", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		bc, err := bootClaimContext(cmd.Context())
 		if err != nil {
@@ -26,10 +27,23 @@ func newTerminalEventsCmd() *cobra.Command {
 		if session == "" || max <= 0 || max > 24*time.Hour {
 			return fmt.Errorf("delivery-session required and max must be in (0,24h]")
 		}
-		return listenTerminalEvents(cmd.Context(), terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID}, session, max, cmd.OutOrStdout())
+		return receiveTerminalEvents(cmd.Context(), terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}, session, max, cmd.OutOrStdout(), deferDelivery)
 	}}
+	listen.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native, distinct from receiver incarnation")
 	listen.Flags().StringVar(&session, "delivery-session", "", "Receiver incarnation, unique for each client start/resume")
 	listen.Flags().DurationVar(&max, "max", 23*time.Hour, "Maximum receiver lifetime")
+	listen.Flags().BoolVar(&deferDelivery, "defer-delivery", false, "Leave events pending until structured transport confirms acceptance")
+	var deliveredSession string
+	delivered := &cobra.Command{Use: "delivered <event-id>", Short: "Record native transport acceptance without acknowledging handling", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}).Delivered(cmd.Context(), args[0], deliveredSession)
+	}}
+	delivered.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native")
+	delivered.Flags().StringVar(&deliveredSession, "delivery-session", "", "Receiver incarnation that confirmed transport acceptance")
 	var note string
 	ack := &cobra.Command{Use: "ack <event-id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		bc, err := bootClaimContext(cmd.Context())
@@ -37,8 +51,9 @@ func newTerminalEventsCmd() *cobra.Command {
 			return err
 		}
 		defer bc.Close()
-		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID}).Ack(cmd.Context(), args[0], note)
+		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}).Ack(cmd.Context(), args[0], note)
 	}}
+	ack.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native")
 	ack.Flags().StringVar(&note, "note", "", "Durable reconciliation result/reference")
 	var request terminalevents.PublishRequest
 	publish := &cobra.Command{Use: "publish", Short: "Persist one validated event for its ledger-derived recipient", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -60,7 +75,7 @@ func newTerminalEventsCmd() *cobra.Command {
 	publish.Flags().Int64Var(&request.OutcomeID, "outcome", 0, "Durable Squad outcome/decision message id")
 	publish.Flags().Int64Var(&request.ExpectedDecision, "expected-decision", 0, "Current adopted decision revision for Worker outcomes")
 	cmd.AddCommand(terminalDecisionCommands()...)
-	cmd.AddCommand(listen, ack, publish)
+	cmd.AddCommand(listen, delivered, ack, publish)
 	return cmd
 }
 
@@ -68,6 +83,10 @@ func newTerminalEventsCmd() *cobra.Command {
 // hook converts a nonempty receipt to asyncRewake exit 2. A timed-out receiver
 // emits a renewal reminder rather than silently disabling future wakeups.
 func listenTerminalEvents(ctx context.Context, s terminalevents.Store, session string, max time.Duration, out io.Writer) error {
+	return receiveTerminalEvents(ctx, s, session, max, out, false)
+}
+
+func receiveTerminalEvents(ctx context.Context, s terminalevents.Store, session string, max time.Duration, out io.Writer, deferDelivery bool) error {
 	l, err := listener.New("127.0.0.1:0")
 	if err != nil {
 		return err
@@ -90,12 +109,14 @@ func listenTerminalEvents(ctx context.Context, s terminalevents.Store, session s
 			return err
 		}
 		if len(events) > 0 {
-			if err = json.NewEncoder(out).Encode(map[string]any{"type": "worker-terminal-delivery-v1", "events": events}); err != nil {
+			if err = json.NewEncoder(out).Encode(map[string]any{"type": "worker-terminal-delivery-v1", "recipient": s.Recipient, "delivery_session": session, "events": events}); err != nil {
 				return err
 			}
-			for _, e := range events {
-				if err = s.Delivered(ctx, e.ID, session); err != nil {
-					return err
+			if !deferDelivery {
+				for _, e := range events {
+					if err = s.Delivered(ctx, e.ID, session); err != nil {
+						return err
+					}
 				}
 			}
 			return nil

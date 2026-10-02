@@ -2,8 +2,11 @@ package grokreview
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 )
 
 const FrozenReviewSchemaVersion = "squad.local-review.request.v1"
@@ -77,7 +80,18 @@ type LocalReviewService struct {
 	coreHash   string
 	policyHash string
 	observer   ReviewObserver
+	admission  ReviewAdmission
 }
+
+// ReviewAdmission is mandatory custody, unlike best-effort status observation.
+type ReviewAdmission interface {
+	Start(context.Context, []byte) error
+	Finish(context.Context, ReviewReport) error
+	Checkpoint(context.Context, ReviewReport) error
+	AttemptID() string
+}
+
+func (s *LocalReviewService) SetAdmission(a ReviewAdmission) { s.admission = a }
 
 func NewLocalReviewService(model ModelReviewer, github PullRequestGateway, coreHash, policyHash string, observers ...ReviewObserver) (*LocalReviewService, error) {
 	if model == nil || github == nil {
@@ -108,7 +122,7 @@ func (s *LocalReviewService) ReviewWorktree(ctx context.Context, repository stri
 	return s.review(ctx, "", "local-review", repository, 0, true)
 }
 
-func (s *LocalReviewService) review(ctx context.Context, token, checkName, repository string, number int, local bool) (ReviewReport, error) {
+func (s *LocalReviewService) review(ctx context.Context, token, checkName, repository string, number int, local bool) (report ReviewReport, returnErr error) {
 	s.observe(ReviewObservation{
 		State:    ReviewStateFreezing,
 		Snapshot: PullRequestSnapshot{Repository: repository, Number: number},
@@ -140,6 +154,16 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 		return ReviewReport{Snapshot: snapshot, FailureStage: "freezing"}, fmt.Errorf("encode frozen review bundle: %w", err)
 	}
 
+	if s.admission != nil {
+		if err := s.admission.Start(ctx, bundle); err != nil {
+			return ReviewReport{Snapshot: snapshot, FailureStage: "admission"}, err
+		}
+		defer func() {
+			finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			returnErr = errors.Join(returnErr, s.admission.Finish(finishCtx, report))
+		}()
+	}
 	s.observe(ReviewObservation{State: ReviewStateSampling, Snapshot: snapshot})
 	result, audit, reviewErr := s.model.Review(ctx, bundle)
 	failureStage := ""
@@ -168,18 +192,39 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 		}
 	}
 
-	current, err := s.github.FetchPullRequestIdentity(ctx, repository, number, token)
+	var current PullRequestSnapshot
+	if s.admission != nil {
+		current, err = s.github.FetchPullRequest(ctx, repository, number, token)
+	} else {
+		current, err = s.github.FetchPullRequestIdentity(ctx, repository, number, token)
+	}
 	if err != nil {
 		s.observe(ReviewObservation{State: ReviewStateError, FailureStage: "identity", Snapshot: snapshot, Result: result, Audit: audit})
 		return ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: "identity"}, err
 	}
-	if !samePullRequestTuple(snapshot, current) {
+	if !samePullRequestTuple(snapshot, current) || (s.admission != nil && (snapshot.Title != current.Title || snapshot.Description != current.Description || snapshot.Diff != current.Diff)) {
 		s.observe(ReviewObservation{State: ReviewStateStale, FailureStage: "identity", Snapshot: snapshot, Result: result, Audit: audit})
 		return ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: "identity"}, fmt.Errorf("pull request base or head changed during review; result was not published")
 	}
+	if s.admission != nil {
+		audit.AttemptID = s.admission.AttemptID()
+		audit.BundleSHA256 = fmt.Sprintf("%x", sha256.Sum256(bundle))
+		report = ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: failureStage}
+		if err := s.admission.Checkpoint(ctx, report); err != nil {
+			return report, fmt.Errorf("sampling custody checkpoint: %w", err)
+		}
+	}
 	s.observe(ReviewObservation{State: ReviewStatePublishing, Snapshot: snapshot, Result: result, Audit: audit})
 	publication, err := s.github.PublishReview(ctx, token, checkName, snapshot, result, audit)
-	report := ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, Publication: publication}
+	report = ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, Publication: publication, FailureStage: failureStage}
+	if s.admission != nil {
+		checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		checkpointErr := s.admission.Checkpoint(checkpointCtx, report)
+		cancel()
+		if checkpointErr != nil {
+			return report, errors.Join(err, fmt.Errorf("publication custody checkpoint: %w", checkpointErr))
+		}
+	}
 	if err != nil {
 		report.FailureStage = "publishing"
 		s.observe(ReviewObservation{State: ReviewStateError, FailureStage: "publishing", Snapshot: snapshot, Result: result, Audit: audit, Publication: publication})

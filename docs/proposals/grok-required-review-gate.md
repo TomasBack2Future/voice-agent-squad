@@ -154,3 +154,189 @@ host/repository. See the [Interceptor handoff](../../workspace/agent-loop/projec
 Local Git inspection disables replace refs and legacy grafts, and clears inherited
 `GIT_*` repository/index/config overrides. It preserves normal HOME/PATH and does
 not delete or rewrite the user's replacement refs or Git configuration.
+
+## Bounded recovery of a joined sampling timeout
+
+The GitHub wrapper now reserves a durable repository/PR single-flight before
+sampling, independently of the status directory. Its private SQLite admission
+store defaults to `~/.squad/grok-review-admission`; configure `admission_dir` once
+for the reviewer installation. Every invocation for that installation must use
+that same directory. Changing it to evade custody is unsupported. It is separate
+from the Squad ledger. Receipts store input hashes and selected settings, never
+source diffs, prompts, credentials or raw model output. Normal invocation also rejects an existing managed Check on that head; it cannot sidestep recovery by omitting `recover`.
+
+A normal invocation prints `attempt_id`. Only a joined sampling timeout with no
+valid verdict and its failed published original-mode Check is eligible for one
+explicit recovery:
+
+```sh
+squad-grok-review recover --from ORIGINAL_ATTEMPT_ID \
+  --repo owner/repo --pr 9 --mode required \
+  --model grok-4.7 --reasoning-effort medium --timeout 20m
+```
+
+Use the original configuration and output limits. The operation rejects changes
+to repository/PR/base/head, title/body, complete diff, reviewer core/policy,
+model/effort/timeout, mode, App identity or output bounds. It verifies all
+current-head shadow and required Checks from the configured App, rejects valid verdicts and
+unresolved Checks, and requires the original failed Check. It reserves the
+one-use slot atomically before invoking the existing bounded managed reviewer.
+The synchronous child invocation and publication must return before the flight
+is joined. Status observations are never join authority. The result still uses
+the real current-head Check publication; review and CI gates remain required.
+
+Publication-only failures, cancellations, unknown/unjoined custody and valid
+approved/blocking findings cannot recover. A second timeout cannot chain another
+recovery. Interruption after reservation leaves the flight and slot occupied;
+restarting the command or changing head cannot sample again. No force-clear or
+automatic retry is provided. Preserve both attempts; absent usage/cost remains
+unknown, never zero-cost evidence. An admission-store failure blocks sampling;
+a join-write failure blocks completion even if publication succeeded.
+
+Older invocations have no authoritative admission receipt. The owning Worker
+may provide an absolute `--from` legacy custody JSON of schema
+`squad.review-recovery.legacy.v1` (see `LegacyRecoveryReceipt` in
+`internal/grokreview/legacy_recovery.go`). It supplies the exact original frozen
+bundle SHA-256 and settings, original safe terminal status path/hash, and a
+pre-sampling `squad.review-input.v1` input receipt (`LegacyInputReceipt`) with its
+path/hash and recorded timestamp. A hash of only diff/body or a later reconstructed
+bundle cannot stand in for missing original complete-input evidence. It also needs a
+bounded `squad.review-join.v1` exit receipt path/hash for both wrapper and owned
+reviewer PIDs. Alternatively, `native_join` references the owning Codex native
+history's original launch, join and terminal tool records, with SHA-256 for each
+raw call and output line. The qualified host-retained exec/write_stdin/wait chain
+must link the original returned tool session, eventual completed cell and exit-1
+structured timeout report to the exact tuple/settings/failed Check. No asserted
+"joined" prose or invented PID is accepted. Unfamiliar native history formats
+remain unavailable. Append-only history may grow without changing those records.
+The adapter independently verifies the selected join provenance, matches the
+original terminal status and inventories its sibling status files for live or
+valid attempts on the relevant exact tuple; valid different-head history is retained without blocking that recovery. Missing original inputs/settings or joined process evidence
+blocks import; a failure comment is insufficient. Existing receipt/slot custody
+cannot be overwritten by reimporting legacy JSON. Preserve old receipts read-only.
+
+
+### Prospective re-admission when original full input is unavailable
+
+`readmit` is explicitly a **new-input** operation, not legacy replay. The original
+failed receipt keeps its complete-input hash empty and unknown usage/cost intact.
+The original native delivery owner supplies a bounded absolute
+`squad.review-readmission.prospective.v1` receipt (`ProspectiveReadmission` in
+`internal/grokreview/prospective.go`). It contains:
+
+- `original`: the legacy terminal status/settings/failed Check and genuine
+  `native_join` above, with no original input receipt/hash. PID assertions cannot
+  substitute for the owning native's launch/join/terminal chain in this lane.
+- `diff_sha256`, `body_sha256`, and an absolute retained `content_evidence_path`
+  with its raw-file `content_evidence_sha256`. That JSON must contain the original
+  `diff_sha256` and `pr_body_sha256`; retain the genuine original artifact, never
+  invent or backdate its contents. These hashes prove content, not old full input.
+- `owner`: exact `actor` and `native`; the caller's `SQUAD_AGENT` and
+  `CODEX_THREAD_ID` / `SQUAD_SESSION_ID=codex:<native>` must agree. These are trusted
+  local operator bindings, not authority to impersonate another Worker.
+- `disclosure`: the real scope receipt below, with operation
+  `prospective_legacy_readmission`, exact original tuple and mode, and an empty
+  original `bundle_sha256`. A prior ordinary-review permission alone is not this
+  new-input authorization.
+
+```sh
+squad-grok-review readmit --from /absolute/prospective-receipt.json \
+  --repo owner/repo --pr 9 --mode shadow \
+  --model grok-4.7 --reasoning-effort high --timeout 20m
+```
+
+Both `recover` and `readmit` preserve the **original** shadow or required mode,
+model, effort, timeout, App and output limits. A shadow result never fulfills the
+required gate. `readmit` verifies current base/head/diff/body against the retained
+original identity, then freezes the complete new current bundle (including
+current core/policy/description), its SHA-256, timestamp, owner and authorization
+hash in the private store **before** model invocation. The child receipt and CLI
+output label it `prospective-legacy-new-input` and retain `parent_attempt`.
+Never describe that child as equivalent to the missing old prompt.
+
+All import/recover/readmit lanes share an atomic one-use root keyed by the
+original failed attempt **and** repository/PR/base-ref/base/head, across modes and
+complete-input hashes. Existing consumed recovery history is backfilled on store
+open. A used or interrupted root cannot be refunded or bypassed by ordinary
+sampling, mode/core/policy changes, alternate stores/exporters or a new PR. A
+valid current-tuple verdict in either mode or any live managed Check blocks
+recovery; different-head terminal history remains valid and does not block it.
+A second terminal failure ends this path; the original owner records the actual
+failure and uses the normal decision route without further sampling.
+
+### Exact disclosure scope readback
+
+`authorization-readback` reads existing local operator-authored receipts without
+initializing Grok, provider credentials, GitHub or the admission store:
+
+```sh
+squad-grok-review authorization-readback \
+  --request /absolute/current-scope.json \
+  --receipt /absolute/existing-disclosure.json
+```
+
+Both files use `squad.review-disclosure.v1`, with `owner`, exact `identity`
+(`repository`, `pr`, `base_ref`, `base_sha`, `head_sha`, `bundle_sha256`), `mode`,
+`operation` (`managed_review` or `prospective_legacy_readmission`),
+`provider: grok`, and `content: source_diff_and_review_contract`. The real receipt
+also has `reference` pointing to retained human authorization and `disposition`
+(`granted`, `pending`, `denied`). A request describes scope; it grants nothing.
+Use an empty complete-input hash only for explicitly unknown original prospective
+identity. The operation reports `unavailable` for no receipt, preserves exact
+pending/denied status, or returns `scope-mismatch` plus the retained reference and
+receipt disposition. It never propagates a grant to another PR/head/native/mode
+or operation and never samples/publishes. An operator must derive the receipt
+from actual human evidence: this local trust contract does not authenticate or
+manufacture that evidence. Keep one existing pending question when authority is
+absent; Full Access and source implementation permission are not disclosure grants.
+
+This is source capability, not installation or authorization to invoke another
+Worker's review. The installation owner controls adoption. The existing Worker
+owns the failed invocation and any eligible recovery after reviewed installation;
+source preparation never invokes a foreign Worker’s recovery.
+
+
+### Joining an interrupted or failed durable join
+
+`reconcile --from ATTEMPT_ID` is a local custody operation, not review sampling.
+Use the original selected `--repo`, `--pr`, original mode, model/effort/timeout,
+App identity and canonical admission directory. The runner records actual wrapper
+and reviewer PIDs; terminal completion journals a private safe receipt before the
+SQLite join. Reconcile requires verified original process absence and restores a
+terminal journal after a join-write failure, preserving verdict/publication and
+unknown usage accurately. If the original recorded processes both exited before
+terminal journaling, it joins an interrupted/error attempt without inventing a
+verdict, publication, cost or usage. Exact input history and one-use recovery slots
+stay consumed. A corrected different head may then enter normal admission.
+
+No lease timeout or force-clear proves child join. Missing historical process
+provenance requires the existing qualified original native/process join receipt;
+`reconcile --from ABSOLUTE_LEGACY_RECEIPT` verifies it through the same original
+input/status/join contract before clearing only the matching flight. Missing proof
+remains explicitly blocked. Reconcile never calls the model or publishes/replaces
+a Check; actual current-head review/CI gates remain required. Repeated identical
+terminal joins are idempotent, while changed settings/input/repo/PR or a live
+original process are rejected.
+
+The private receipt commits a launch stage before OS spawn. A verified dead
+wrapper still in `admitted` proves no sampler was launched and can be reconciled
+without inventing a child PID. A crash after `launching` but before recording the
+actual child PID remains blocked on original child/native join provenance; wrapper
+absence alone cannot prove an orphan sampler ended. The runtime/adapter maintainer
+and installation owner own that bounded provenance qualification. Joined replay
+is idempotent and never refunds an exact-input or one-use recovery slot.
+
+Shadow and required publication are separate lanes: a shadow sample never
+satisfies or consumes the required Check. Exact-input dedupe includes mode,
+while single-flight remains repository/PR-wide across both modes. Changing
+model/effort within a mode does not grant another normal sample.
+
+Before any publication, admission durably checkpoints the synchronously joined
+sampling result. Failure to record that custody prevents publishing. Publication
+checkpoints its actual response independently. If the response or terminal
+journal is lost, `reconcile` reads the configured App's actual Check, matching
+mode, head, attempt ID, complete frozen-input hash and expected verdict. This is
+read-only GitHub access and does not initialize Grok. A uniquely matched failed
+no-verdict timeout restores the one-use recovery prerequisite; ambiguous, live,
+wrong-input or wrong-verdict evidence fails closed. Original terminal artifacts
+and every actual review/CI gate remain intact; no approval is synthesized.

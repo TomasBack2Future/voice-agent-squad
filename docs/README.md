@@ -6,6 +6,8 @@
 - [Architecture](architecture.md): source boundaries and durable state ownership.
 - [Environments and CI](environments-and-ci.md): test/release capabilities and
   local distribution rather than application deployment.
+- [Read-only observer](reference/read-only-observer.md): optional stdio MCP
+  snapshots, incremental messages and bounded local execution receipts.
 - [Workspace templates](../workspace/README.md): optional outer workspace routing.
 
 The tutorials below document optional product adoption, not requirements for

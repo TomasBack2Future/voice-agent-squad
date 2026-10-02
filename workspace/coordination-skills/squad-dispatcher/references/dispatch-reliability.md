@@ -14,6 +14,18 @@ idle integration owner once per reservation generation/head/event. Active owners
 receive no routine reminders. Direct ACK/commit/accepted transfer messages remain valid.
 Observe with compact snapshots and saved cursors on the existing heartbeat; no new timer.
 
+Before relying on unattended progress, verify the actual next-invocation route:
+the selected ledger, current Dispatcher/native session, callback binding and
+receiver owner/incarnation/liveness; for an existing heartbeat, verify its enabled
+state and exact target. Record event-driven, periodic, both, or unavailable in the
+existing checkpoint. A running receiver proves a transport is present, not that
+every delivered event was handled or its dependency advanced. Reconcile durable
+delivery and handled cursors separately from Worker outcome and reservation state.
+An absent/paused heartbeat or one targeting an old session is not periodic fallback.
+Report that limit; preserve explicit pauses and do not silently enable, retarget,
+duplicate or replace a controller. Repair an evidenced route fault within existing
+authority, using the session-continuity contract for any actual migration.
+
 ## Asynchronous creation
 Before creation, persist reservation key/generation and a creation-attempt identifier.
 Persist the returned clientThreadId immediately when setup is queued. A queued or
@@ -65,3 +77,25 @@ risk. Do not routinely interrupt active Workers or invent another monitor.
 Use [session continuity](session-continuity.md) for behavioral health checks and
 cross-provider/model takeover. It owns the writer, callback and reservation
 closure protocol; quiet time alone never triggers replacement.
+
+## Shared failure reconciliation
+
+Apply the Worker's [shared-blocker contract](../../../agent-loop/roles/worker/references/operational-readiness.md#one-shared-blocker-one-repair-owner).
+Group only failures with matching phase, environment, component identity/revision,
+stable error code and normalized failed condition, supported by the actual run/trace.
+For different component revisions, require evidence of the common cause and record
+each affected revision explicitly; an HTTP status or the word "TokenUsage" alone
+is not a fingerprint. `no_changes`, `timed_out`, storage failure and upstream model
+failure must not be treated as one defect without causal evidence.
+
+Reuse one canonical incident/item, live repair claim and affected-phase dependency.
+Give each waiting item a concrete next action and resume condition. Deterministic
+failures stop unchanged reruns; transient failures use the existing runbook's bounded
+safe retry, or at most one safe retry if it sets no budget. Unknown attribution needs
+bounded diagnosis. Preserve unaffected acceptance assertions and frozen provenance;
+do not restart complete CI/deployment or stop independent implementation just because
+one shared acceptance assertion failed. This never waives a required final gate.
+
+Use `shared-failure` in the existing read-only delivery preflight before choosing
+retry or repair wait, and `blocker` before assigning a human prerequisite. Reuse the
+existing incident/checkpoint as its evidence source, not a parallel failure ledger.

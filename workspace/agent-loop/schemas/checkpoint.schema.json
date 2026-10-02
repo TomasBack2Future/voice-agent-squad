@@ -55,6 +55,7 @@
     "decision_revision": {"type": "integer", "minimum": 1},
     "operation_receipts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["intent", "state"], "properties": {"intent": {"type": "string", "minLength": 1}, "state": {"enum": ["intent-recorded", "submitted", "uncertain", "running", "completed", "reconciled"]}}}},
     "next_operation": {"type": "object", "additionalProperties": false, "required": ["intent", "action"], "properties": {"intent": {"type": "string", "minLength": 1}, "action": {"enum": ["dispatch", "reconcile", "observe"]}}},
+    "delivery_readiness": {"type":"object","additionalProperties":false,"required":["lane","selected_phase","outcome","admission_owner","admission_revision","native_session_id","receipt"],"properties":{"lane":{"enum":["source-only","manual-deploy","auto-deploy"]},"selected_phase":{"enum":["source","merge","deploy","acceptance","closure"]},"outcome":{"enum":["working","pr-created","source-merged","staging-accepted","issue-closed"]},"admission_owner":{"type":"string","minLength":1},"admission_revision":{"type":"integer","minimum":1},"native_session_id":{"type":"string","minLength":1},"receipt":{"type":"string","minLength":1}}},
     "evidence_receipts": {"type": "array", "items": {"type": "string"}}
   }
 }

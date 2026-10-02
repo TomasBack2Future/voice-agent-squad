@@ -5,9 +5,17 @@ description: Execute exactly one assigned engineering work item from a bounded a
 
 # Worker
 
+Apply [runtime-independent roles](../../runtime-compatibility.md) at startup and
+resume. Muse, Claude and Codex share this Worker contract; qualify the selected
+execution surface and preserve the exact assignment.
+
 Deliver one canonical assignment without importing the Dispatcher conversation.
 The assignment identifies the work; the project profile supplies repository
 capabilities; the canonical Issue owns requirements.
+
+For flow audits, startup skill binding, user pauses and release-repair routing,
+read [role-bound flow repair](../../../coordination-skills/squad-dispatcher/references/flow-retrospective.md). Preserve the assigned role;
+process optimization does not assign product implementation.
 
 ## Cold start
 
@@ -36,8 +44,9 @@ Before the first mutation, independently verify the repository, worktree,
 branch/base, reservation generation and primary-work ownership. An envelope is
 context, not ownership or permission beyond its explicit authorization fields.
 Use [operational readiness](references/operational-readiness.md) at startup,
-when a shared blocker appears, and before environment admission. Keep its
-startup receipt separate from ownership and release evidence.
+when a shared blocker appears, before transferring a blocker, and before
+environment admission. Keep its startup receipt separate from ownership and
+release evidence.
 
 Before environment admission, use [acceptance readiness](references/acceptance-readiness.md)
 to prepare executable assertions and fixtures. Use the same reference for timeout

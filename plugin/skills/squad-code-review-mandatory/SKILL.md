@@ -1,6 +1,6 @@
 ---
 name: squad-code-review-mandatory
-description: Every item — even a one-line fix — gets reviewed by superpowers:code-reviewer before commit. No exceptions. The agent is cheap; production bugs are not.
+description: Require independent review under the repository policy, with a portable self-contained briefing and evidence-bound findings.
 allowed-tools:
   - Task
   - Bash
@@ -21,9 +21,17 @@ Invoke this skill before every commit on a claimed item. Yes, even a one-line ty
 Every item, before commit:
 
 1. Run `squad review-request <ID>` (or `/review <ID>`) — this records that review is in flight and posts to the item thread.
-2. Read `superpowers:requesting-code-review` to construct the briefing correctly.
-3. Spawn `superpowers:code-reviewer` as a subagent. The subagent does not see your conversation; the prompt must be self-contained.
-4. When findings come back, use `superpowers:receiving-code-review` to evaluate each one. Do not perform-agree.
+2. Construct the self-contained briefing below. If available, the optional
+   `superpowers:requesting-code-review` integration can help prepare it.
+3. Use the repository-approved independent review mechanism. For local agent
+   review, spawn an independent read-only reviewer using the selected client's
+   supported subagent capability; Muse, Claude and Codex are eligible. A
+   `superpowers:code-reviewer` agent is one integration, not a required tool name.
+   Do not substitute this for a required managed reviewer/model/Check, launch
+   a duplicate review, or manufacture a verdict when a tool is unavailable.
+4. Verify each finding against evidence; the optional
+   `superpowers:receiving-code-review` integration does not change this obligation.
+   Do not perform-agree.
 
 ## What to include in the briefing
 
@@ -33,8 +41,8 @@ The reviewer needs:
 - File:line references for the major changes.
 - Specific concerns you want them to focus on.
 - Output format: prioritized findings (Critical / High / Medium / Low) with file:line and a suggested fix per finding.
-- **Premise-validation latitude.** Add: "If the claimed failure seems dubious, empirically verify against the pre-fix code (revert the fix, rerun tests, observe). Report back if the bug does not reproduce so we can reclassify."
-- **Working-tree hygiene.** Add: "If you patch/revert/modify any file to verify behavior, restore it. Do not leave `.bak` files, scratch test files, or uncommitted edits behind."
+- **Premise-validation latitude.** Add: "If the claimed failure seems dubious, verify it against pre-fix code in an isolated disposable checkout when the review contract permits execution. Never revert or patch the author's checkout or frozen input. Report non-reproduction or an unverified premise with evidence; a snapshot-only review stays within its supplied bundle."
+- **Working-tree hygiene.** Add: "The author's checkout and review tuple are read-only. Keep permitted experiments in an isolated disposable checkout; clean up only your own test artifacts. A client that shares the working directory does not grant shared-file mutation authority."
 
 ## Why this matters
 

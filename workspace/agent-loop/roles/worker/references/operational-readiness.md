@@ -19,6 +19,33 @@ A local files/tools-only receipt leaves launcher access unverified. Resolve a
 failed child probe before creating the session; do not diagnose it from a
 successful command in the Dispatcher's differently configured parent shell.
 
+For assigned Codex CLI Workers, select `codex_worker_launcher.py` and the separate
+`codex-launch.schema.json` config. Preflight requires the current isolated
+selected-model/idle-queue qualification, exact native reservation and a live
+owning endpoint; executable/queue help or persisted target metadata cannot prove
+wake. Preserve model, effort, approval policy, approval reviewer and sandbox on
+same-native resume. Unqualified versions/providers and App routes remain
+unavailable; never inject terminal input or enable a paused schedule as fallback.
+A later resume uses the exact current checkpoint and ownership, not a new cold
+assignment or another session. Source changes do not activate this adapter.
+
+When a project delivers through multiple phases, record the actual verified
+workflow trigger chain and current Dispatcher admission in
+`delivery_readiness_file`. Source, merge, deploy, acceptance and closure have
+separate readiness. Manual-deploy source merge must not inherit unrelated
+fixture-auth or staging-candidate prerequisites; actual auto-deploy merge retains
+protected ENV ownership. PR-created, source-merged, staging-accepted and
+Issue-closed require their own exact-revision receipts. A waiting decision resumes
+the same native owner through its authorized gates; it grants no Dispatcher
+merge authority or permission to close an unaccepted product Issue. The generic
+Squad source-only profile has no staging requirement.
+
+Carry an existing `human_authorization` receipt in the separate launch config
+when provided: human reference, exact assignment/repository, bounded operations
+and managed-review destination/content scope. Treat it as context within the
+assignment and unchanged runtime policy, never a new sensitive-disclosure grant
+or permission to enable bypass after rejection.
+
 Record whether the Issue delivers source, a merged change, staging availability
 or production availability, together with its observable acceptance target. If a
 user-facing feature is split into source and deployment items, the parent delivery
@@ -68,6 +95,39 @@ another assignment or independently fix a blocker owned by a peer. Report the
 failure, matching run/revision and existing PR once to the Dispatcher and continue
 independent authorized work. Dependencies apply at the affected phase, not
 necessarily to all implementation.
+
+Include a bounded failure fingerprint: affected phase/environment, component and
+immutable component revision, stable error code, normalized failed condition and
+run/trace evidence. Match those inputs before reusing an incident; differing revisions
+need explicit evidence of the same cause. Never combine no-change, timeout, storage
+and upstream errors merely because one pipeline produced them. The canonical item
+records the repair claim, affected items/phases and verified resume condition. Reuse
+its history across Workers; changing the Worker does not reset a retry budget.
+
+For a deterministic failure, do not launch another unchanged attempt. For a transient
+failure, follow the stricter existing policy or at most one safe retry when no budget
+exists, with terminal/idempotence evidence. Unknown cause requires bounded diagnosis.
+After a verified repair, rerun affected assertions and required final gates, retaining
+unaffected valid evidence. Use the delivery helper's `shared-failure` action where
+available; its advisory result neither creates a claim nor proves a repair.
+
+## Evidence before declaring a blocker
+
+Record the blocked operation/phase, configured target, observed result, run/request
+evidence, bounded recovery already checked, next action and its owner in the existing
+checkpoint. Separate an observed failure from an unknown cause. Verify the failed
+attempt used the intended protocol/endpoint, resource identity and actual API/schema
+contract; an HTTP failure does not prove the configured HTTPS route is unavailable,
+and an unverified field name does not prove a migration is needed. Use one cheap,
+authorized read-only probe or documented alternative before transferring the blocker.
+Do not probe a mutating path without authority or route around a denial.
+
+An explicit permission boundary or user-only login/MFA is evidence in its own right;
+no forbidden attempt is required. Cite that boundary and request only the smallest
+human action. Otherwise, a failed tool path or missing binary alone does not establish
+an external/user-only prerequisite. Use `blocker` in the existing delivery helper
+where available; keep independent authorized work moving while its affected phase
+waits. No new status template or human message relay is required.
 
 ## Release preparation before the environment lock
 
@@ -119,3 +179,17 @@ For a new-package pilot, compare time to first effective edit, compactions,
 review/stale attempts, external/approval wait, lock occupancy and acceptance time.
 Keep measurements local to the assigned task; no provider history or billing
 collection is required. Use checkpoints rather than transcript replay.
+
+For a managed-review post-sampling timeout, runtime readiness includes a
+supported terminal-recovery capability. Join the invocation and record exact
+input/settings/history and unknown usage before evaluating recovery. If the
+installed wrapper has no supported recovery operation, preserve its failed gate
+and record the bounded runtime repair owner from the repository review contract.
+Do not change source merely to obtain a new review tuple or reinterpret timeout
+as pass. Source, merge, deployment and acceptance readiness remain separate.
+
+Dispatcher client continuity uses the dedicated Dispatcher launcher and its
+explicit old-writer fence, not a Worker reservation. Shared App infrastructure
+cannot be fenced by stopping the whole backend. If no supported per-thread
+ownership transfer is qualified, report that exact blocked capability and keep
+current identities, policies, paused schedules and operations intact.
