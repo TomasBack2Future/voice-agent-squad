@@ -192,6 +192,14 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 		}
 	}
 
+	if s.admission != nil {
+		audit.AttemptID = s.admission.AttemptID()
+		audit.BundleSHA256 = fmt.Sprintf("%x", sha256.Sum256(bundle))
+		report = ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: failureStage}
+		if err := s.admission.Checkpoint(ctx, report); err != nil {
+			return report, fmt.Errorf("sampling custody checkpoint: %w", err)
+		}
+	}
 	var current PullRequestSnapshot
 	if s.admission != nil {
 		current, err = s.github.FetchPullRequest(ctx, repository, number, token)
@@ -206,12 +214,10 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 		s.observe(ReviewObservation{State: ReviewStateStale, FailureStage: "identity", Snapshot: snapshot, Result: result, Audit: audit})
 		return ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: "identity"}, fmt.Errorf("pull request base or head changed during review; result was not published")
 	}
-	if s.admission != nil {
-		audit.AttemptID = s.admission.AttemptID()
-		audit.BundleSHA256 = fmt.Sprintf("%x", sha256.Sum256(bundle))
-		report = ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: failureStage}
-		if err := s.admission.Checkpoint(ctx, report); err != nil {
-			return report, fmt.Errorf("sampling custody checkpoint: %w", err)
+
+	if intent, ok := s.admission.(interface{ PublicationStarting(context.Context) error }); ok {
+		if err := intent.PublicationStarting(ctx); err != nil {
+			return report, err
 		}
 	}
 	s.observe(ReviewObservation{State: ReviewStatePublishing, Snapshot: snapshot, Result: result, Audit: audit})
