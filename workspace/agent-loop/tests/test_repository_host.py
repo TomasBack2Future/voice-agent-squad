@@ -21,7 +21,7 @@ class InterceptorPreflightTests(unittest.TestCase):
 
     def test_interceptor_with_github_tracking_issue(self):
         self.select_interceptor()
-        self.assertEqual('ready', self.check()['status'])
+        self.assertEqual('context-checked', self.check()['status'])
 
     def test_interceptor_rejects_foreign_host_same_path(self):
         self.select_interceptor()
