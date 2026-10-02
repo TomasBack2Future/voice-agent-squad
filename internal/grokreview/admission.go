@@ -39,6 +39,7 @@ type ReviewIdentity struct {
 // AttemptReceipt is authoritative only in the private admission store. No diff,
 // prompt, findings prose, credentials or raw model output is persisted here.
 type AttemptReceipt struct {
+	Terminal               *TerminalDiagnostics     `json:"terminal_diagnostics,omitempty"`
 	RendererProvenance     *PatchRendererProvenance `json:"renderer_provenance,omitempty"`
 	InputProvenance        string                   `json:"input_provenance,omitempty"`
 	InputRecordedAt        int64                    `json:"input_recorded_at,omitempty"`
@@ -349,6 +350,7 @@ func (a *Admission) finishReceipt(ctx context.Context, r AttemptReceipt) error {
 }
 
 func receiptForReport(r AttemptReceipt, report ReviewReport) AttemptReceipt {
+	r.Terminal = report.Audit.Terminal
 	r.Verdict = report.Result.Verdict
 	r.FailureStage = report.FailureStage
 	r.FailureKind = report.Audit.FailureKind

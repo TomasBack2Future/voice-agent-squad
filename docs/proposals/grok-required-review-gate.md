@@ -372,3 +372,40 @@ read-only GitHub access and does not initialize Grok. A uniquely matched failed
 no-verdict timeout restores the one-use recovery prerequisite; ambiguous, live,
 wrong-input or wrong-verdict evidence fails closed. Original terminal artifacts
 and every actual review/CI gate remain intact; no approval is synthesized.
+
+### Safe terminal diagnostics
+
+New sampling receipts, local status files and command JSON include an optional
+`terminal_diagnostics` object. It records the exact input SHA-256, process start
+and finish times, whether the direct child started and was waited, its exit code
+when known, and the deadline producer (`reviewer_timeout`, `caller_deadline` or
+`caller_cancel`). `joined_at` is present only after waiting that direct child.
+Stdout/stderr byte counts and SHA-256 cover all received bytes, even when the
+in-memory output cap truncates them; `output_truncated` makes that distinction
+explicit. No raw input, output, stderr, prompts or hidden reasoning is retained
+in this object. Direct-child wait is not remote provider cancellation proof or
+proof that every descendant exited.
+
+After a joined timeout/cancellation, the adapter can read the Grok CLI's retained
+session metadata from only this invocation's physical private working-directory
+index under the configured home. It does not search other sessions or make a
+model/API call. Attribution requires the retained prompt to match the complete
+frozen input byte for byte, one unambiguous UUID session, matching configured
+model/effort, and bounded regular files without symlinks. Reads are capped at
+32 MiB for prompt history, 64 KiB for summary, 4 MiB for events and 20,000 event
+records. Duplicate keys, malformed/truncated records, unsupported event shapes,
+wrong session/model, and timestamps outside the invocation window reject the
+session evidence. Missing or incompatible retention is reported as unavailable
+or unqualified and does not change the sampling result.
+
+`session_evidence: qualified_local` adds only the local CLI session UUID,
+`local_request_id`, an event-stream hash, and allowlisted first-token/reasoning
+phase timestamps and counts. These are CLI-reported observations: notification
+counts are not token usage, and a local request ID is not independently verified
+provider wire correlation. Other Grok versions or phases may remain unqualified.
+The adapter does not infer a finish reason, transport health, remote cancellation,
+cost, usage, approval or retry authority from these observations. In particular,
+active reasoning notifications followed by a deadline remain **no verdict**.
+Historical receipts and failed Checks are unchanged; diagnostics neither reset
+nor refund consumed recovery roots, admit another attempt, change settings, nor
+substitute for independent review or business acceptance.
