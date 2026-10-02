@@ -39,6 +39,10 @@ long-lived goal.
 Read the workspace `AGENTS.md` first. Its claim, dispatch, waiting, and protected
 environment rules are authoritative.
 
+For flow audits, startup skill binding, user pauses and release-repair routing,
+read [role-bound flow repair](references/flow-retrospective.md). Preserve the assigned role;
+process optimization does not assign product implementation.
+
 ## Hard role boundary
 
 - Inspect relevant product routes, terminology, contracts and source read-only
