@@ -49,14 +49,15 @@ func backfillRecoveryRoots(ctx context.Context, db *sql.DB) error {
 // reconstruction. Native custody and original content hashes stay independently
 // evidenced; disclosure is scoped to this owner and exact review tuple.
 type ProspectiveReadmission struct {
-	SchemaVersion         string                `json:"schema_version"`
-	Original              LegacyRecoveryReceipt `json:"original"`
-	DiffSHA256            string                `json:"diff_sha256"`
-	BodySHA256            string                `json:"body_sha256"`
-	ContentEvidencePath   string                `json:"content_evidence_path"`
-	ContentEvidenceSHA256 string                `json:"content_evidence_sha256"`
-	Owner                 ReviewOwner           `json:"owner"`
-	Disclosure            ReviewDisclosure      `json:"disclosure"`
+	RendererEquivalence   *PatchRendererEvidence `json:"renderer_equivalence,omitempty"`
+	SchemaVersion         string                 `json:"schema_version"`
+	Original              LegacyRecoveryReceipt  `json:"original"`
+	DiffSHA256            string                 `json:"diff_sha256"`
+	BodySHA256            string                 `json:"body_sha256"`
+	ContentEvidencePath   string                 `json:"content_evidence_path"`
+	ContentEvidenceSHA256 string                 `json:"content_evidence_sha256"`
+	Owner                 ReviewOwner            `json:"owner"`
+	Disclosure            ReviewDisclosure       `json:"disclosure"`
 }
 
 type ReviewOwner struct {
@@ -113,6 +114,11 @@ func (a *Admission) importProspective(receipt ProspectiveReadmission, owner Revi
 	}
 	if _, diffAlias := content["complete_diff_sha256"]; diffAlias || content["body_sha256"] != nil {
 		if err := content.verifyHistoricalAdmission(raw, r); err != nil {
+			return err
+		}
+	}
+	if receipt.RendererEquivalence != nil {
+		if _, err := receipt.verifyRenderer(nil); err != nil {
 			return err
 		}
 	}
@@ -221,8 +227,15 @@ func (a *Admission) verifyProspectiveBundle(bundle []byte, identity ReviewIdenti
 	if err := json.Unmarshal(bundle, &frozen); err != nil {
 		return err
 	}
-	if tupleKey(identity) != tupleKey(p.Original.Attempt.Identity) || frozen.SchemaVersion != FrozenReviewSchemaVersion || receiptHash([]byte(frozen.Diff)) != p.DiffSHA256 || receiptHash([]byte(frozen.Description)) != p.BodySHA256 {
+	if tupleKey(identity) != tupleKey(p.Original.Attempt.Identity) || frozen.SchemaVersion != FrozenReviewSchemaVersion || receiptHash([]byte(frozen.Description)) != p.BodySHA256 {
 		return fmt.Errorf("prospective current tuple/content changed")
+	}
+	if p.RendererEquivalence != nil {
+		_, err := p.verifyRenderer([]byte(frozen.Diff))
+		return err
+	}
+	if receiptHash([]byte(frozen.Diff)) != p.DiffSHA256 {
+		return fmt.Errorf("prospective current diff changed; complete renderer evidence required")
 	}
 	return nil
 }

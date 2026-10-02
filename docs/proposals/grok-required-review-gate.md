@@ -252,6 +252,31 @@ squad-grok-review readmit --from /absolute/prospective-receipt.json \
   --model grok-4.7 --reasoning-effort high --timeout 20m
 ```
 
+When authentic complete retained diff bytes and the current gateway diff differ
+only in descriptive hunk context, the prospective receipt may add
+`renderer_equivalence` (`PatchRendererEvidence` in `internal/grokreview/renderer.go`).
+It contains schema `squad.review-renderer-equivalence.v1`, the exact original
+`identity` with unknown bundle hash empty, and absolute `original_patch_path` /
+`current_patch_path` with their respective raw `*_patch_sha256` hashes. The
+original raw SHA must equal the retained `diff_sha256`; never replace that hash
+or regenerate missing historical bytes. Both nonempty regular streams are
+bounded to 8 MiB. Qualification parses complete Git patches and valid hunk
+ranges/counts, with isolated Git parse-only validation of metadata/binary data.
+Only the descriptive suffix after a valid closing `@@` may differ. All file
+headers, metadata, ranges, source whitespace, newline markers and order stay
+byte-identical; malformed/truncated/ambiguous input rejects. The streams are
+re-read before reservation and the current bytes must equal the frozen gateway
+patch. The child receipt and CLI output add `renderer_provenance` with both raw hashes, rule
+and evidence hash; authorization retains the complete proof paths/tuple. No
+normalized digest authorizes sampling. Body, disclosure, native custody,
+settings, failed Check and atomic one-use gates are unchanged. Missing authentic
+original bytes remains an explicit qualification failure.
+
+The embedded reviewer core also requires positive supplied scope or an actual
+supplied failing check for compile/undefined-symbol findings. An unchanged
+declaration omitted from a diff hunk cannot establish absence. Supported defects
+still block; this contract never changes a prior verdict or approves an attempt.
+
 Both `recover` and `readmit` preserve the **original** shadow or required mode,
 model, effort, timeout, App and output limits. A shadow result never fulfills the
 required gate. `readmit` verifies current base/head/diff/body against the retained
