@@ -393,7 +393,7 @@ Unix endpoint/PID. The config accepts no bypass option or arbitrary credentials.
 The source adapter currently qualifies the installed **0.159.2 CLI** contract on
 the OpenAI route. Other versions/providers and App targets are unavailable until
 separately implemented and qualified. An App thread ID is never inferred from a
-CLI reservation, and a paused/old-target schedule is never enabled as fallback.
+CLI reservation, and source preparation leaves existing schedules unchanged. Preserve explicit current user overrides, including an already ACTIVE fallback, and unrelated pauses. A schedule targeting a retired controller does not prove new-controller wake or authorize parallel dispatch.
 
 The endpoint must already belong to the intended native server and have the
 exact thread loaded. The helper verifies its process and socket incarnation,
@@ -582,3 +582,49 @@ from explicit handled acknowledgement. To return to App, first join the new
 CLI and its receiver at a safe operation boundary, retain journals and claims,
 then resume the same UUID with its original effective selection. A shared-App
 return also needs the supported per-thread reverse fence; do not invent one.
+
+
+### Fresh Dispatcher adoption after controller handoff
+
+`codex_dispatcher_adoption.py` is the separate fresh-native route. It requires an
+installed successful `dispatch handoff` audit receipt and exact current new
+actor/native/controller epoch. It never impersonates the old actor, starts a new
+thread or stops an App backend. Only the new inactive dedicated CLI must be
+joined before resume; the actual selected Unix server and unchanged effective
+model/effort/sandbox/approval reviewer are independently qualified. The schema is
+`schemas/codex-dispatcher-adoption.schema.json`.
+
+Controller handoff is a ledger protocol fence. The complete exact old-owner
+reservation inventory is CAS checked in one transaction; ownership and
+unhandled owner-directed recipients move together. Worker identity/generation,
+claims, decisions, external operations and handled history remain unchanged.
+The retired actor cannot reserve/reacquire or perform transferred owner actions.
+This does not assert an operating-system fence over arbitrary unrelated tools.
+Keep the old controller inactive under its authorized role; never use direct SQL
+or actor impersonation to defeat the installed protocol.
+
+The new session-owned receiver claims its exact native/epoch/incarnation in the
+ledger, in addition to its local lock. Another incarnation is rejected. Normal
+helper exit releases only that exact receiver; a crash/unknown release leaves it
+occupied until the owning installer verifies the original helper/client join and
+uses the exact release route. No lease expiry, timer or background controller is
+introduced. Controller listen/delivered/ack uses `--native-session`; the native
+binding is distinct from delivery incarnation. Acceptance still requires a real
+persisted event delivered, handled and followed by authorized downstream work.
+
+Rollback leaves retired actors retired and preserves receiver intent journals,
+claims, decisions and receipt history. Stop only the new owned receiver/client
+at a safe boundary. Retain a fence-capable runtime and ledger migration; an older
+runtime lacking controller/native fencing is not an eligible active rollback.
+A further owner-initiated handoff to a registered fresh actor/native is the
+supported custody reversal; never revive an unfenced shared App writer.
+
+Environment workflow evidence uses the complete commit tree and committed blobs,
+not index files or dirty content. Install the pinned parser with
+`python3 -m pip install -r workspace/agent-loop/workflow-requirements.txt`.
+Actual YAML `on` events must be completely covered and match graph labels;
+workflow_run parents must match named committed workflows. Duplicate keys,
+aliases/tags, unknown action/command effects or unsupported triggers fail closed
+for independent qualification rather than creating a weaker environment lane.
+Manual source merge remains independent of fixture access once actual routing
+and Dispatcher admission are verified.

@@ -106,7 +106,9 @@ type CLIConfig struct {
 }
 
 type CLIRunner struct {
-	config CLIConfig
+	config          CLIConfig
+	processObserver func(context.Context, int) error
+	launchObserver  func(context.Context) error
 }
 
 type CLIDoctor struct {
@@ -381,7 +383,24 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 	prepared.command.Stdout = stdout
 	prepared.command.Stderr = stderr
 	started := time.Now()
-	err = prepared.command.Run()
+	if r.launchObserver != nil {
+		if err = r.launchObserver(ctx); err != nil {
+			return FindingsResult{}, audit, fmt.Errorf("reviewer launch custody recording failed: %w", err)
+		}
+	}
+	err = prepared.command.Start()
+	if err == nil {
+		if r.processObserver != nil {
+			if custodyErr := r.processObserver(ctx, prepared.command.Process.Pid); custodyErr != nil {
+				_ = prepared.command.Process.Kill()
+				_ = prepared.command.Wait()
+				audit.FailureKind = CLIFailureCanceled
+				audit.Duration = time.Since(started)
+				return FindingsResult{}, audit, fmt.Errorf("reviewer process custody recording failed: %w", custodyErr)
+			}
+		}
+		err = prepared.command.Wait()
+	}
 	duration := time.Since(started)
 	stderrSum := sha256.Sum256(stderr.Bytes())
 	audit.Duration = duration
@@ -705,4 +724,12 @@ func (b *cappedBuffer) Write(data []byte) (int, error) {
 
 func (b *cappedBuffer) Bytes() []byte {
 	return b.buffer.Bytes()
+}
+
+func (r *CLIRunner) SetProcessObserver(observer func(context.Context, int) error) {
+	r.processObserver = observer
+}
+
+func (r *CLIRunner) SetLaunchObserver(observer func(context.Context) error) {
+	r.launchObserver = observer
 }

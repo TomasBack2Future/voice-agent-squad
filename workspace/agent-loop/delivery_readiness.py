@@ -181,35 +181,119 @@ def selected_readiness(assignment, c):
             'staging': 'not-applicable', 'authority': 'assignment-source-only'}
 
 
+def workflow_facts(raw):
+    """Parse committed YAML; unsupported/ambiguous execution never proves CI-only."""
+    try:
+        import yaml
+    except ImportError:
+        raise ValidationError('PyYAML workflow parser unavailable; install pinned workflow requirements') from None
+    class Loader(yaml.BaseLoader):
+        def construct_mapping(self, node, deep=False):
+            result = {}
+            for key, value in node.value:
+                name = self.construct_object(key, deep=deep)
+                if not isinstance(name, str) or name in result:
+                    raise ValidationError('duplicate or unsupported workflow key')
+                result[name] = self.construct_object(value, deep=deep)
+            return result
+    try:
+        if len(raw) > 1 << 20:
+            raise ValidationError('workflow exceeds inspection bound')
+        if any(isinstance(token, (yaml.tokens.AliasToken, yaml.tokens.AnchorToken, yaml.tokens.TagToken)) for token in yaml.scan(raw)):
+            raise ValidationError('workflow aliases/anchors/tags require supported independent qualification')
+        workflow = yaml.load(raw, Loader=Loader)
+    except yaml.YAMLError:
+        raise ValidationError('workflow YAML unavailable or malformed') from None
+    if not isinstance(workflow, dict):
+        raise ValidationError('workflow must be a mapping')
+    triggers = workflow.get('on')
+    if isinstance(triggers, str): triggers = {triggers: None}
+    if isinstance(triggers, list): triggers = {key: None for key in triggers}
+    if not isinstance(triggers, dict) or not triggers:
+        raise ValidationError('actual workflow triggers unavailable')
+    events = set()
+    for event, config in triggers.items():
+        if event == 'push':
+            if isinstance(config, dict) and 'tags' in config:
+                events.add('tag_push')
+            # Unless positively tag-only, a push can include main. Branch/path
+            # filters do not weaken the gate through hand-written labels.
+            if not isinstance(config, dict) or 'tags' not in config or 'branches' in config:
+                events.add('main_push')
+        elif event in ('pull_request', 'workflow_dispatch', 'workflow_run', 'repository_dispatch', 'release'):
+            events.add(event)
+        else:
+            raise ValidationError('unsupported actual workflow trigger: ' + event)
+    safe_actions = ('actions/checkout@', 'actions/setup-go@', 'actions/setup-python@', 'actions/setup-node@',
+                    'actions/cache@', 'actions/upload-artifact@', 'actions/download-artifact@', 'golangci/golangci-lint-action@')
+    effect = 'ci'
+    jobs = workflow.get('jobs', {})
+    if not isinstance(jobs, dict):
+        raise ValidationError('unsupported workflow jobs')
+    for job in jobs.values():
+        if not isinstance(job, dict) or 'uses' in job:
+            raise ValidationError('reusable workflow effect requires independent qualification')
+        for step in job.get('steps', []):
+            if not isinstance(step, dict):
+                raise ValidationError('unsupported workflow step')
+            action = step.get('uses', '')
+            run = step.get('run', '')
+            if action and not action.startswith(safe_actions):
+                # Unknown actions can deploy; never accept a self-labeled CI effect.
+                raise ValidationError('workflow action effect is unqualified; cannot trust self-labeled CI/deploy evidence')
+            if run:
+                for line in run.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith('#'): continue
+                    if re.match(r'(?:helm (?:upgrade|install)|kubectl (?:apply|set|rollout)|gh workflow run)(?: |$)', line):
+                        effect = 'deploy'
+                    elif not re.fullmatch(r'(?:go (?:test|vet|build)|golangci-lint run|python3 -m unittest(?: discover)?|node --test)(?: [A-Za-z0-9_./*:=, -]+)?', line):
+                        raise ValidationError('workflow command effect is unqualified; cannot derive a weaker environment lane')
+    return workflow, events, effect
+
+
 def verify_workflow_inventory(snapshot, assignment):
-    """Omission is not evidence: cover every tracked workflow at the exact head."""
+    """Read the complete commit tree and blobs, never index/worktree provenance."""
     worktree = Path(assignment['worktree']).resolve(strict=True)
-    result = subprocess.run(['git', '-C', str(worktree), 'ls-files', '-z', '--', '.github/workflows'],
-                            capture_output=True, text=True, timeout=10)
-    if result.returncode:
-        raise ValidationError('current workflow inventory unavailable')
-    paths = {p for p in result.stdout.split('\0') if p.endswith(('.yml', '.yaml'))}
+    def git(*args):
+        result = subprocess.run(['git', '-C', str(worktree), *args], capture_output=True, timeout=10)
+        if result.returncode: raise ValidationError('committed workflow evidence unavailable')
+        return result.stdout
+    head = git('rev-parse', 'HEAD').decode().strip()
+    if head != snapshot.get('head_sha'):
+        raise ValidationError('workflow inventory revision is not the current source head')
+    paths = {p for p in git('ls-tree', '-r', '--name-only', '-z', head, '--', '.github/workflows').decode().split('\0') if p.endswith(('.yml', '.yaml'))}
     inventory = snapshot.get('workflow_inventory')
     if not paths or not isinstance(inventory, list) or len(inventory) != len(paths):
-        raise ValidationError('complete current workflow inventory required')
+        raise ValidationError('complete committed workflow inventory required')
     declared = {entry.get('path'): entry for entry in inventory if isinstance(entry, dict)}
     if set(declared) != paths:
-        raise ValidationError('workflow inventory omits or adds a workflow')
-    head = subprocess.run(['git', '-C', str(worktree), 'rev-parse', 'HEAD'],
-                          capture_output=True, text=True, timeout=10)
-    if head.returncode or head.stdout.strip() != snapshot.get('head_sha'):
-        raise ValidationError('workflow inventory revision is not the current source head')
-    covered = set()
-    for node in snapshot['trigger_chain']:
-        if node.get('workflow_path') not in paths or node['revision'] != snapshot['head_sha']:
-            raise ValidationError('trigger node lacks current workflow inventory evidence')
-        covered.add(node['workflow_path'])
-    if covered != paths:
-        raise ValidationError('trigger chain omits a current workflow')
+        raise ValidationError('workflow inventory omits or adds a committed workflow')
+    facts = {}
     for name, entry in declared.items():
+        raw = git('show', head + ':' + name)
         path = worktree / name
-        if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != entry.get('sha256'):
-            raise ValidationError('workflow content differs from verified trigger evidence')
+        if (hashlib.sha256(raw).hexdigest() != entry.get('sha256') or path.is_symlink()
+                or not path.is_file() or path.read_bytes() != raw):
+            raise ValidationError('workflow evidence or active file differs from committed blob')
+        facts[name] = workflow_facts(raw)
+    covered = {name: set() for name in paths}
+    for node in snapshot['trigger_chain']:
+        name = node.get('workflow_path')
+        if name not in paths or node['revision'] != head:
+            raise ValidationError('trigger node lacks committed workflow evidence')
+        workflow, events, effect = facts[name]
+        if node['event'] not in events or (effect == 'deploy' and node['effect'] != 'deploy'):
+            raise ValidationError('declared trigger/effect weakens actual committed workflow')
+        if node['event'] == 'workflow_run':
+            config = workflow['on']['workflow_run']
+            upstream = config.get('workflows', []) if isinstance(config, dict) else []
+            parents = [n for n in snapshot['trigger_chain'] if n['id'] in node.get('triggered_by', [])]
+            if not parents or any(facts[parent['workflow_path']][0].get('name') not in upstream for parent in parents):
+                raise ValidationError('workflow_run upstream does not match committed workflows')
+        covered[name].add(node['event'])
+    if any(covered[name] != facts[name][1] for name in paths):
+        raise ValidationError('trigger chain omits an actual committed event')
 
 
 def verify_admission(assignment, c, env, readiness):

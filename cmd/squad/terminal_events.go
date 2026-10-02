@@ -15,7 +15,7 @@ import (
 
 func newTerminalEventsCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "terminal-events", Short: "Durable recipient acknowledgements and safe hook delivery"}
-	var session string
+	var session, nativeSession string
 	var max time.Duration
 	var deferDelivery bool
 	listen := &cobra.Command{Use: "listen", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -27,8 +27,9 @@ func newTerminalEventsCmd() *cobra.Command {
 		if session == "" || max <= 0 || max > 24*time.Hour {
 			return fmt.Errorf("delivery-session required and max must be in (0,24h]")
 		}
-		return receiveTerminalEvents(cmd.Context(), terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID}, session, max, cmd.OutOrStdout(), deferDelivery)
+		return receiveTerminalEvents(cmd.Context(), terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}, session, max, cmd.OutOrStdout(), deferDelivery)
 	}}
+	listen.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native, distinct from receiver incarnation")
 	listen.Flags().StringVar(&session, "delivery-session", "", "Receiver incarnation, unique for each client start/resume")
 	listen.Flags().DurationVar(&max, "max", 23*time.Hour, "Maximum receiver lifetime")
 	listen.Flags().BoolVar(&deferDelivery, "defer-delivery", false, "Leave events pending until structured transport confirms acceptance")
@@ -39,8 +40,9 @@ func newTerminalEventsCmd() *cobra.Command {
 			return err
 		}
 		defer bc.Close()
-		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID}).Delivered(cmd.Context(), args[0], deliveredSession)
+		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}).Delivered(cmd.Context(), args[0], deliveredSession)
 	}}
+	delivered.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native")
 	delivered.Flags().StringVar(&deliveredSession, "delivery-session", "", "Receiver incarnation that confirmed transport acceptance")
 	var note string
 	ack := &cobra.Command{Use: "ack <event-id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -49,8 +51,9 @@ func newTerminalEventsCmd() *cobra.Command {
 			return err
 		}
 		defer bc.Close()
-		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID}).Ack(cmd.Context(), args[0], note)
+		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}).Ack(cmd.Context(), args[0], note)
 	}}
+	ack.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native")
 	ack.Flags().StringVar(&note, "note", "", "Durable reconciliation result/reference")
 	var request terminalevents.PublishRequest
 	publish := &cobra.Command{Use: "publish", Short: "Persist one validated event for its ledger-derived recipient", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {

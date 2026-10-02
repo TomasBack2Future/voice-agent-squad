@@ -1017,3 +1017,48 @@ Delivered events remain pending until explicit recipient acknowledgment and
 retry through the existing receiver. No new polling daemon or auto-permission
 mechanism is introduced. External dependency or authentication recovery still
 needs verified evidence from its owner before the Dispatcher sets `proceed`.
+
+
+### Dispatcher controller handoff
+
+These commands change coordination custody only; they do not install, migrate a
+native client, alter permissions or transfer Worker/ENV claims. Under legitimate
+identities, register the distinct successor first, then the existing owner runs:
+
+```sh
+squad dispatch controller-bind --native-session OLD_VERIFIED_NATIVE --expected-epoch 0
+squad dispatch list --json
+squad dispatch handoff --request COMPLETE_VERIFIED_HANDOFF_JSON
+squad dispatch handoff-get --request-id HANDOFF_ID
+```
+
+The JSON contains `request_id`, `expected_epoch`, `old_native`, `new_actor`,
+`new_native` and the complete exact `reservations` returned for that owner.
+It must include all states, without editing native/generation/claims. Bootstrap
+native identity and the successor's native must be independently read back by the
+installation owner. Handoff checks the bound old native/epoch, registered fresh
+actor and complete unchanged cohort. It atomically updates reservation owner and
+unhandled owner-event recipient, resets their old delivery receipts, and stores
+an immutable idempotency/audit receipt. Same input replays return that receipt;
+changed input, omission, wrong owner/generation/native and concurrent losers fail.
+Worker decision wakes and handled history remain at their original recipients.
+All subsequent owner-only close/continue/decision operations use the new actor;
+old messages cannot become new-owner decisions. New reservations by retired
+actors fail at the database protocol boundary. No owner-only administrative
+closure remains delegated to the retired actor.
+
+The successor reads `dispatch controller-status`, claims a session-owned receiver
+with `dispatch receiver-bind --native-session NATIVE --epoch EPOCH --incarnation ID`,
+and releases exactly that receiver with `dispatch receiver-release` and the same
+arguments after actual helper/client join. Controller `terminal-events listen`,
+`delivered` and `ack` require `--native-session NATIVE`. Delivery incarnation stays
+separate; binding another receiver without release fails. New native actor/epoch
+readback is mandatory before activation, not evidence that delivery was handled.
+MCP exposes matching `squad_dispatch_controller_bind`, `controller_status`,
+`handoff`, `handoff_get`, `receiver_bind` and `receiver_release` operations;
+mutations use the actual process actor, never a supplied impersonation field.
+
+Retired actors are not reactivated. Reverse custody uses a further fenced handoff
+to a legitimately registered fresh actor/native. Retain the installed fencing
+runtime on rollback; preserve paused schedules, Worker/ENV claims and uncertain
+intents. Shared App backend termination and direct database updates are excluded.

@@ -206,6 +206,8 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 		},
 	})
 
+	registerDispatchControllerTools(srv, db, repoID, repoRoot)
+
 	srv.Register(mcp.Tool{
 		Name: "squad_dispatch_continue", Description: "Dispatcher-owned fenced continuation for the same Worker; old item released/done, new item held by same actor.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"reservation":{"type":"string"},"from_item":{"type":"string"},"item":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1}},"required":["reservation","from_item","item","worker_session","generation"],"additionalProperties":false}`),
@@ -759,10 +761,11 @@ func registerInspectionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot strin
 
 func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
 	registerDecisionTools(srv, db, repoID, repoRoot)
-	srv.Register(mcp.Tool{Name: "squad_terminal_events_delivered", Description: "Record fenced native transport acceptance. This does not acknowledge handling.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","delivery_session"],"properties":{"event_id":{"type":"string"},"delivery_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_delivered", Description: "Record fenced native transport acceptance. This does not acknowledge handling.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","delivery_session"],"properties":{"event_id":{"type":"string"},"delivery_session":{"type":"string"},"native_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			EventID string `json:"event_id"`
 			Session string `json:"delivery_session"`
+			Native  string `json:"native_session"`
 			AgentID string `json:"agent_id"`
 		}
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -775,7 +778,7 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		if err != nil {
 			return nil, err
 		}
-		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor}).Delivered(ctx, a.EventID, a.Session); err != nil {
+		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor, NativeSession: a.Native}).Delivered(ctx, a.EventID, a.Session); err != nil {
 			return nil, err
 		}
 		return map[string]string{"event_id": a.EventID, "state": "delivered"}, nil
@@ -802,10 +805,11 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		return map[string]string{"event_id": id, "state": "pending"}, nil
 	}})
 
-	srv.Register(mcp.Tool{Name: "squad_terminal_events_ack", Description: "Acknowledge one delivered terminal event after recipient reconciliation.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","note"],"properties":{"event_id":{"type":"string"},"note":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_ack", Description: "Acknowledge one delivered terminal event after recipient reconciliation.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","note"],"properties":{"event_id":{"type":"string"},"note":{"type":"string"},"native_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			EventID string `json:"event_id"`
 			Note    string `json:"note"`
+			Native  string `json:"native_session"`
 			AgentID string `json:"agent_id"`
 		}
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -818,7 +822,7 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		if err != nil {
 			return nil, err
 		}
-		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor}).Ack(ctx, a.EventID, a.Note); err != nil {
+		if err = (terminalevents.Store{DB: db, Repo: repoID, Recipient: actor, NativeSession: a.Native}).Ack(ctx, a.EventID, a.Note); err != nil {
 			return nil, err
 		}
 		return map[string]string{"event_id": a.EventID, "state": "processed"}, nil

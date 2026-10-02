@@ -169,3 +169,10 @@ func (a *Admission) ImportLegacy(path string) error {
 	a.legacy = &r
 	return nil
 }
+
+func (a *Admission) LegacyAttemptID() string {
+	if a.legacy == nil {
+		return ""
+	}
+	return a.legacy.ID
+}

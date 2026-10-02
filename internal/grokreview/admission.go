@@ -39,6 +39,9 @@ type ReviewIdentity struct {
 // AttemptReceipt is authoritative only in the private admission store. No diff,
 // prompt, findings prose, credentials or raw model output is persisted here.
 type AttemptReceipt struct {
+	LaunchStage   string         `json:"launch_stage,omitempty"`
+	WrapperPID    int            `json:"wrapper_pid,omitempty"`
+	ReviewerPID   int            `json:"reviewer_pid,omitempty"`
 	CostKnown     bool           `json:"cost_known"`
 	RequestID     string         `json:"request_id,omitempty"`
 	SessionID     string         `json:"session_id,omitempty"`
@@ -62,12 +65,14 @@ type AttemptReceipt struct {
 type RecoveryCheck func(context.Context, AttemptReceipt) error
 
 type Admission struct {
-	db       *sql.DB
-	settings ReviewSettings
-	from     string
-	check    RecoveryCheck
-	receipt  AttemptReceipt
-	legacy   *AttemptReceipt
+	db            *sql.DB
+	dir           string
+	processAbsent func(int) error
+	settings      ReviewSettings
+	from          string
+	check         RecoveryCheck
+	receipt       AttemptReceipt
+	legacy        *AttemptReceipt
 }
 
 // OpenAdmission never opens or migrates the Squad work ledger. All invocations
@@ -110,7 +115,7 @@ func OpenAdmission(dir string, settings ReviewSettings, from string, check Recov
 		_ = db.Close()
 		return nil, err
 	}
-	return &Admission{db: db, settings: settings, from: from, check: check, receipt: AttemptReceipt{ID: id}}, nil
+	return &Admission{db: db, dir: dir, processAbsent: absentProcess, settings: settings, from: from, check: check, receipt: AttemptReceipt{ID: id}}, nil
 }
 func (a *Admission) Close() error      { return a.db.Close() }
 func (a *Admission) AttemptID() string { return a.receipt.ID }
@@ -142,7 +147,7 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 		return err
 	}
 	id := a.receipt.ID
-	candidate := AttemptReceipt{ID: id, Identity: identity, Settings: a.settings}
+	candidate := AttemptReceipt{ID: id, Identity: identity, Settings: a.settings, WrapperPID: os.Getpid(), LaunchStage: "admitted"}
 	var prior AttemptReceipt
 	if a.from != "" {
 		if a.legacy != nil {
@@ -255,6 +260,13 @@ func (a *Admission) Finish(ctx context.Context, report ReviewReport) error {
 	r.ResolvedModel = report.Audit.ResolvedModel
 	r.DurationMS = report.Audit.Duration.Milliseconds()
 	r.CompletedAt = time.Now().Unix()
+	if err := a.writeJoinJournal(r); err != nil {
+		return err
+	}
+	return a.finishReceipt(ctx, r)
+}
+
+func (a *Admission) finishReceipt(ctx context.Context, r AttemptReceipt) error {
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return err

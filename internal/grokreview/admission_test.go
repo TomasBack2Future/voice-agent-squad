@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -343,5 +344,157 @@ func TestLegacyImportPreservesValidDifferentHeadHistory(t *testing.T) {
 	write(filepath.Join(statusDir, "old-valid.json"), old)
 	if err := a.ImportLegacy(path); err == nil {
 		t.Fatal("valid current-head verdict ignored")
+	}
+}
+
+func TestAdmissionReconcileAfterJoinWriteFailurePreservesSlot(t *testing.T) {
+	dir := t.TempDir()
+	parent := seedTimeout(t, dir)
+	a := openTestAdmission(t, dir, parent, admissionSettings())
+	if err := a.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
+	}
+	id := a.AttemptID()
+	if err := a.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Finish(context.Background(), timeoutReport()); err == nil {
+		t.Fatal("closed DB join succeeded")
+	}
+	resumed := openTestAdmission(t, dir, "", admissionSettings())
+	if err := resumed.Reconcile(context.Background(), id, "owner/repo", 9); err == nil {
+		t.Fatal("live original wrapper bypassed")
+	}
+	resumed.processAbsent = func(int) error { return nil } // Isolated fixture simulates verified original process exit.
+	if err := resumed.Reconcile(context.Background(), id, "owner/repo", 9); err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.Reconcile(context.Background(), id, "owner/repo", 9); err != nil {
+		t.Fatal("idempotent join", err)
+	}
+	if err := openTestAdmission(t, dir, parent, admissionSettings()).Start(context.Background(), admissionBundle()); err == nil {
+		t.Fatal("recovery slot refunded")
+	}
+	var b FrozenReviewBundle
+	_ = json.Unmarshal(admissionBundle(), &b)
+	b.HeadSHA = "corrected-head"
+	raw, _ := json.Marshal(b)
+	if err := resumed.Start(context.Background(), raw); err != nil {
+		t.Fatal("joined flight still wedges corrected head", err)
+	}
+}
+
+func TestAdmissionReconcileRequiresTerminalProofAndExactCustody(t *testing.T) {
+	dir := t.TempDir()
+	a := openTestAdmission(t, dir, "", admissionSettings())
+	if err := a.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
+	}
+	id := a.AttemptID()
+	if err := a.Reconcile(context.Background(), id, "owner/repo", 9); err == nil {
+		t.Fatal("unjoined interrupted flight expired without proof")
+	}
+	if err := a.Finish(context.Background(), timeoutReport()); err != nil {
+		t.Fatal(err)
+	}
+	a.processAbsent = func(int) error { return nil }
+	if err := a.Reconcile(context.Background(), id, "foreign/repo", 9); err == nil {
+		t.Fatal("wrong repo joined")
+	}
+	if err := a.Reconcile(context.Background(), id, "owner/repo", 8); err == nil {
+		t.Fatal("wrong PR joined")
+	}
+	var journal joinJournal
+	path := filepath.Join(dir, "joins", id+".json")
+	if _, err := readBoundedJSON(path, &journal); err != nil {
+		t.Fatal(err)
+	}
+	journal.Receipt.Identity.HeadSHA = "changed"
+	raw, _ := json.Marshal(journal)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Reconcile(context.Background(), id, "owner/repo", 9); err == nil {
+		t.Fatal("changed terminal input joined")
+	}
+}
+
+func TestAdmissionInterruptedProcessJoinDoesNotResampleOrRefund(t *testing.T) {
+	dir := t.TempDir()
+	parent := seedTimeout(t, dir)
+	a := openTestAdmission(t, dir, parent, admissionSettings())
+	if err := a.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReviewerStarted(context.Background(), os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	id := a.AttemptID()
+	resumed := openTestAdmission(t, dir, "", admissionSettings())
+	if err := resumed.Reconcile(context.Background(), id, "owner/repo", 9); err == nil {
+		t.Fatal("live original processes joined")
+	}
+	resumed.processAbsent = func(int) error { return nil } // Actual PID fixture; simulate both verified exits.
+	if err := resumed.Reconcile(context.Background(), id, "owner/repo", 9); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := resumed.load(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !receipt.Joined || receipt.Verdict != VerdictError || receipt.FailureKind != CLIFailureCanceled || receipt.Publication.CheckRunID != 0 {
+		t.Fatal("invented verdict or publication", receipt)
+	}
+	if err := openTestAdmission(t, dir, parent, admissionSettings()).Start(context.Background(), admissionBundle()); err == nil {
+		t.Fatal("interrupted one-use slot refunded")
+	}
+	var b FrozenReviewBundle
+	_ = json.Unmarshal(admissionBundle(), &b)
+	b.HeadSHA = "fixed-head"
+	raw, _ := json.Marshal(b)
+	if err := resumed.Start(context.Background(), raw); err != nil {
+		t.Fatal("joined interruption wedges next head", err)
+	}
+}
+
+func TestAdmissionInterruptedBeforeLaunchAndSpawnGap(t *testing.T) {
+	for _, launching := range []bool{false, true} {
+		t.Run(fmt.Sprint(launching), func(t *testing.T) {
+			dir := t.TempDir()
+			a := openTestAdmission(t, dir, "", admissionSettings())
+			if err := a.Start(context.Background(), admissionBundle()); err != nil {
+				t.Fatal(err)
+			}
+			if launching {
+				if err := a.ReviewerLaunching(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resumed := openTestAdmission(t, dir, "", admissionSettings())
+			resumed.processAbsent = func(int) error { return nil } // Verified original wrapper exit fixture.
+			err := resumed.Reconcile(context.Background(), a.AttemptID(), "owner/repo", 9)
+			if launching {
+				if err == nil {
+					t.Fatal("unknown spawned child provenance accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = resumed.Reconcile(context.Background(), a.AttemptID(), "owner/repo", 9); err != nil {
+				t.Fatal("joined replay", err)
+			}
+			if err = resumed.Start(context.Background(), admissionBundle()); err == nil {
+				t.Fatal("same input sampled again")
+			}
+			var b FrozenReviewBundle
+			_ = json.Unmarshal(admissionBundle(), &b)
+			b.HeadSHA = "corrected-head"
+			raw, _ := json.Marshal(b)
+			if err = resumed.Start(context.Background(), raw); err != nil {
+				t.Fatal("prelaunch interruption wedges corrected head", err)
+			}
+		})
 	}
 }

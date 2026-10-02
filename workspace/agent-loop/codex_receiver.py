@@ -127,7 +127,7 @@ def deliver(rpc, event, c, journal_path):
 def listen(c, path, seconds):
     env = child_environment(c)
     argv = [c['coordination_executable'], 'terminal-events', 'listen', '--defer-delivery',
-            '--delivery-session', c['incarnation'], '--max', str(seconds) + 's']
+            '--delivery-session', c['incarnation'], '--native-session', c['native_session_id'], '--max', str(seconds) + 's']
     with subprocess.Popen(argv, cwd=c['ledger_directory'], env=env,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as child:
         try:
@@ -145,6 +145,19 @@ def listen(c, path, seconds):
         if child.returncode:
             raise ValidationError('event listen stopped; no delivery or processing acknowledgement')
         return json.loads(out)
+
+
+def controller_receiver(c, release=False):
+    if c['role'] != 'dispatcher' or not c.get('controller_epoch'):
+        return
+    result = subprocess.run([c['coordination_executable'], 'dispatch',
+                             'receiver-release' if release else 'receiver-bind',
+                             '--native-session', c['native_session_id'],
+                             '--epoch', str(c['controller_epoch']), '--incarnation', c['incarnation']],
+                            cwd=c['ledger_directory'], env=child_environment(c),
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise ValidationError('controller receiver ownership unavailable; no second receiver admitted')
 
 
 def run(path):
@@ -165,33 +178,43 @@ def run(path):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        deadline = time.monotonic() + c['max_seconds']
-        retries = {}
-        while alive(c, path) and time.monotonic() < deadline:
-            receipt = listen(c, path, max(1, int(deadline - time.monotonic())))
-            if receipt is None or not alive(c, path):
-                return 0
-            events = validate_events(receipt, c)
-            if server_identity(c) != c['server_identity']:
-                raise ValidationError('native endpoint incarnation changed; no replacement executor')
+        if c.get('controller_epoch'):
             with RPC(c['endpoint']) as rpc:
                 live_target(rpc, c, c['worktree'])
-                for event in events:
-                    if not alive(c, path):
-                        return 0
-                    retries[event['event_id']] = retries.get(event['event_id'], 0) + 1
-                    if retries[event['event_id']] > 3:
-                        raise ValidationError('bounded delivery retry exhausted; handling still pending')
-                    deliver(rpc, event, c, state / (c['native_session_id'] + '.delivery.json'))
-                    if not alive(c, path):
-                        return 0
-                    result = subprocess.run([c['coordination_executable'], 'terminal-events', 'delivered',
-                                             event['event_id'], '--delivery-session', c['incarnation']],
-                                            cwd=c['ledger_directory'], env=child_environment(c),
-                                            capture_output=True, text=True, timeout=10)
-                    if result.returncode:
-                        raise ValidationError('delivery fence rejected; handling remains unacknowledged')
-        return 0
+        controller_receiver(c)
+        try:
+            deadline = time.monotonic() + c['max_seconds']
+            retries = {}
+            while alive(c, path) and time.monotonic() < deadline:
+                receipt = listen(c, path, max(1, int(deadline - time.monotonic())))
+                if receipt is None or not alive(c, path):
+                    return 0
+                events = validate_events(receipt, c)
+                if server_identity(c) != c['server_identity']:
+                    raise ValidationError('native endpoint incarnation changed; no replacement executor')
+                with RPC(c['endpoint']) as rpc:
+                    live_target(rpc, c, c['worktree'])
+                    for event in events:
+                        if not alive(c, path):
+                            return 0
+                        retries[event['event_id']] = retries.get(event['event_id'], 0) + 1
+                        if retries[event['event_id']] > 3:
+                            raise ValidationError('bounded delivery retry exhausted; handling still pending')
+                        deliver(rpc, event, c, state / (c['native_session_id'] + '.delivery.json'))
+                        if not alive(c, path):
+                            return 0
+                        result = subprocess.run([c['coordination_executable'], 'terminal-events', 'delivered',
+                                                 event['event_id'], '--delivery-session', c['incarnation'], '--native-session', c['native_session_id']],
+                                                cwd=c['ledger_directory'], env=child_environment(c),
+                                                capture_output=True, text=True, timeout=10)
+                        if result.returncode:
+                            raise ValidationError('delivery fence rejected; handling remains unacknowledged')
+            return 0
+        finally:
+            try:
+                controller_receiver(c, release=True)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                print('Receiver release unverified; original incarnation retained for owning installer reconciliation.', file=sys.stderr)
 
 
 def supervise(argv, assignment, c, env, config_path, owner):

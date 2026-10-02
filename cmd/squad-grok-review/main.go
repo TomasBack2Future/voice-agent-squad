@@ -28,6 +28,7 @@ type config struct {
 	descriptionFile   string
 	configPath        string
 	doctor            bool
+	reconcile         bool
 	recovery          bool
 	recoveryFrom      string
 	admissionDir      string
@@ -139,6 +140,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if configuration.reconcile {
+		settings := grokreview.ReviewSettings{Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
+		admission, openErr := grokreview.OpenAdmission(configuration.admissionDir, settings, configuration.recoveryFrom, nil)
+		if openErr != nil {
+			_, _ = fmt.Fprintln(stderr, openErr)
+			return 1
+		}
+		defer func() { _ = admission.Close() }()
+		id := configuration.recoveryFrom
+		if filepath.IsAbs(id) {
+			if err := admission.ImportLegacy(id); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			id = admission.LegacyAttemptID()
+		}
+		if err := admission.Reconcile(ctx, id, configuration.repository, configuration.pullRequest); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return encodeJSON(stdout, stderr, map[string]any{"attempt": id, "joined": true, "sampled": false, "published": false, "recovery_slot": "unchanged"})
+	}
 	dependencies, err := prepareRuntime(ctx, configuration)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
@@ -219,6 +242,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 		}
+		dependencies.model.SetLaunchObserver(admission.ReviewerLaunching)
+		dependencies.model.SetProcessObserver(admission.ReviewerStarted)
 		service.SetAdmission(admission)
 	}
 	var report grokreview.ReviewReport
@@ -315,6 +340,10 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 
 func parseConfig(args []string, output io.Writer) (config, error) {
 	var configuration config
+	if len(args) > 0 && args[0] == "reconcile" {
+		configuration.reconcile = true
+		args = args[1:]
+	}
 	if len(args) > 0 && args[0] == "recover" {
 		configuration.recovery = true
 		args = args[1:]
@@ -448,7 +477,10 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if configuration.recovery && (configuration.recoveryFrom == "" || configuration.provider != "github" || configuration.mode != "required") {
 		return config{}, fmt.Errorf("recover requires --from, Github provider and required mode")
 	}
-	if !configuration.recovery && configuration.recoveryFrom != "" {
+	if configuration.reconcile && (configuration.recoveryFrom == "" || configuration.provider != "github" || configuration.mode != "required") {
+		return config{}, fmt.Errorf("reconcile requires --from and required GitHub mode")
+	}
+	if !configuration.recovery && !configuration.reconcile && configuration.recoveryFrom != "" {
 		return config{}, fmt.Errorf("--from requires recover")
 	}
 	if configuration.timeout <= 0 || configuration.maxGitHubOutput <= 0 || configuration.maxReviewerOutput <= 0 {

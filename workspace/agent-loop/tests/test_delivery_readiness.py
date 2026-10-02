@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from delivery_readiness import evaluate, selected_readiness, trigger_lane, verify_admission, verify_workflow_inventory
+from delivery_readiness import evaluate, selected_readiness, trigger_lane, verify_admission, verify_workflow_inventory, workflow_facts
 from validate_context_package import ValidationError
 from claude_worker_launcher import check_resources
 
@@ -74,6 +74,48 @@ class DeliveryReadinessTests(unittest.TestCase):
             with self.assertRaises(ValidationError):verify_workflow_inventory(omitted,a)
             (workflows/'deploy.yml').write_text('changed deployment trigger')
             with self.assertRaises(ValidationError):verify_workflow_inventory(s,a)
+
+    def test_workflow_inventory_uses_commit_not_staged_deletion_or_dirty_blob(self):
+        for mutation in ('staged-deletion', 'dirty-trigger'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); workflows=root/'.github/workflows'; workflows.mkdir(parents=True)
+                ci=workflows/'ci.yml'; deploy=workflows/'deploy.yml'
+                ci.write_text('name: ci\non: [push]\n')
+                deploy.write_text('name: deploy\non: [push]\n')
+                subprocess.run(['git','init','-q',tmp],check=True)
+                subprocess.run(['git','-C',tmp,'add','.'],check=True)
+                subprocess.run(['git','-C',tmp,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','core.hooksPath=/dev/null','commit','-qm','fixture'],check=True)
+                head=subprocess.check_output(['git','-C',tmp,'rev-parse','HEAD'],text=True).strip()
+                snapshot=copy.deepcopy(self.s); snapshot['head_sha']=head
+                if mutation=='staged-deletion':
+                    subprocess.run(['git','-C',tmp,'rm','-q','.github/workflows/deploy.yml'],check=True)
+                    names=['ci.yml']
+                else:
+                    deploy.write_text('name: deploy\non: [workflow_dispatch]\n')
+                    names=['ci.yml','deploy.yml']
+                snapshot['trigger_chain']=[dict(self.node(name,'main_push' if name=='ci.yml' else 'workflow_dispatch','ci' if name=='ci.yml' else 'deploy'),workflow_path='.github/workflows/'+name,revision=head) for name in names]
+                snapshot['workflow_inventory']=[dict(path='.github/workflows/'+name,sha256=hashlib.sha256((workflows/name).read_bytes()).hexdigest()) for name in names]
+                with self.assertRaises(ValidationError): verify_workflow_inventory(snapshot,dict(self.a,worktree=tmp))
+
+    def test_workflow_inventory_rejects_relabelled_push_as_manual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); path=root/'.github/workflows/deploy.yml'; path.parent.mkdir(parents=True)
+            path.write_text('name: deploy\non: [push]\n')
+            subprocess.run(['git','init','-q',tmp],check=True)
+            subprocess.run(['git','-C',tmp,'add','.'],check=True)
+            subprocess.run(['git','-C',tmp,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','core.hooksPath=/dev/null','commit','-qm','fixture'],check=True)
+            head=subprocess.check_output(['git','-C',tmp,'rev-parse','HEAD'],text=True).strip()
+            s=copy.deepcopy(self.s);s['head_sha']=head
+            s['workflow_inventory']=[dict(path='.github/workflows/deploy.yml',sha256=hashlib.sha256(path.read_bytes()).hexdigest())]
+            s['trigger_chain']=[dict(self.node('deploy','workflow_dispatch','deploy'),workflow_path='.github/workflows/deploy.yml',revision=head)]
+            with self.assertRaises(ValidationError): verify_workflow_inventory(s,dict(self.a,worktree=tmp))
+
+    def test_committed_yaml_trigger_and_execution_effects_are_not_self_labels(self):
+        workflow,events,effect=workflow_facts(b'name: deploy\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs:\n  deploy:\n    steps:\n      - run: helm upgrade release chart\n')
+        self.assertEqual(events,{'main_push','workflow_dispatch'})
+        self.assertEqual(effect,'deploy')
+        for raw in (b'on: [push]\non: [workflow_dispatch]\n',b'on: &events [push]\n',b'on: [push]\njobs:\n  ci:\n    steps:\n      - run: ./unknown-effect.sh\n'):
+            with self.assertRaises(ValidationError):workflow_facts(raw)
 
     def test_source_admission_skips_manual_deploy_resource_prerequisites(self):
         with tempfile.TemporaryDirectory() as tmp:

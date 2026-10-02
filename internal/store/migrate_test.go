@@ -283,8 +283,8 @@ func TestMigrate_BootstrapsLegacyDBWithoutIntakeColumns(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 20 {
-		t.Fatalf("want version 20 after bootstrap; got %d", maxV)
+	if maxV != 21 {
+		t.Fatalf("want version 21 after bootstrap; got %d", maxV)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestMigrate_BootstrapPreservesWorktreeAndSeedsAllVersions(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM migration_versions`).Scan(&rows); err != nil {
 		t.Fatalf("count migration_versions: %v", err)
 	}
-	if rows != 20 {
-		t.Errorf("migration_versions row count = %d, want 20 (bootstrap missed markers)", rows)
+	if rows != 21 {
+		t.Errorf("migration_versions row count = %d, want 21 (bootstrap missed markers)", rows)
 	}
 }
 
@@ -633,8 +633,8 @@ func TestMigrate_IntakeInterviewIdempotent_From008(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 20 {
-		t.Fatalf("want max version 20 after 008→020 upgrade; got %d", maxV)
+	if maxV != 21 {
+		t.Fatalf("want max version 21 after 008→021 upgrade; got %d", maxV)
 	}
 }
 
@@ -687,5 +687,25 @@ func TestResourceMigrationPreservesActiveLegacyClaim(t *testing.T) {
 	}
 	if agent != "old" || generation != 7 || group != "" || scope != "" {
 		t.Fatalf("active claim changed: %s %d %s %s", agent, generation, group, scope)
+	}
+}
+
+func TestMigrate_ControllerHandoffBootstrapRejectsMissingFence(t *testing.T) {
+	db := openEmptyDBNoMigrate(t)
+	if err := Migrate(context.Background(), db, defaultMigrationsFS); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE migration_versions; DROP TRIGGER dispatch_reject_retired_insert`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(context.Background(), db, defaultMigrationsFS); err == nil || !strings.Contains(err.Error(), "incomplete dispatch controller") {
+		t.Fatalf("missing controller fence accepted: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM migration_versions`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("partial bootstrap stamped %d versions", n)
 	}
 }

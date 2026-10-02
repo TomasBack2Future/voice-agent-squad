@@ -219,3 +219,34 @@ This is source capability, not installation or authorization to invoke another
 Worker's review. The installation owner controls adoption. The existing Worker
 owns the failed invocation and any eligible recovery after reviewed installation;
 source preparation never invokes a foreign Worker’s recovery.
+
+
+### Joining an interrupted or failed durable join
+
+`reconcile --from ATTEMPT_ID` is a local custody operation, not review sampling.
+Use the original selected `--repo`, `--pr`, required mode, model/effort/timeout,
+App identity and canonical admission directory. The runner records actual wrapper
+and reviewer PIDs; terminal completion journals a private safe receipt before the
+SQLite join. Reconcile requires verified original process absence and restores a
+terminal journal after a join-write failure, preserving verdict/publication and
+unknown usage accurately. If the original recorded processes both exited before
+terminal journaling, it joins an interrupted/error attempt without inventing a
+verdict, publication, cost or usage. Exact input history and one-use recovery slots
+stay consumed. A corrected different head may then enter normal admission.
+
+No lease timeout or force-clear proves child join. Missing historical process
+provenance requires the existing qualified original native/process join receipt;
+`reconcile --from ABSOLUTE_LEGACY_RECEIPT` verifies it through the same original
+input/status/join contract before clearing only the matching flight. Missing proof
+remains explicitly blocked. Reconcile never calls the model or publishes/replaces
+a Check; actual current-head review/CI gates remain required. Repeated identical
+terminal joins are idempotent, while changed settings/input/repo/PR or a live
+original process are rejected.
+
+The private receipt commits a launch stage before OS spawn. A verified dead
+wrapper still in `admitted` proves no sampler was launched and can be reconciled
+without inventing a child PID. A crash after `launching` but before recording the
+actual child PID remains blocked on original child/native join provenance; wrapper
+absence alone cannot prove an orphan sampler ended. The runtime/adapter maintainer
+and installation owner own that bounded provenance qualification. Joined replay
+is idempotent and never refunds an exact-input or one-use recovery slot.

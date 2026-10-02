@@ -232,6 +232,10 @@
     "owner_started_at": {
       "type": "string",
       "minLength": 1
+    },
+    "controller_epoch": {
+      "type": "integer",
+      "minimum": 2
     }
   }
 }
