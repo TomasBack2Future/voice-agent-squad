@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"os/exec"
@@ -78,6 +79,7 @@ type TokenUsage struct {
 }
 
 type CLIAudit struct {
+	Terminal        *TerminalDiagnostics `json:"terminal_diagnostics,omitempty"`
 	AttemptID       string
 	BundleSHA256    string
 	RequestID       string
@@ -382,9 +384,38 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 
 	stdout := &cappedBuffer{limit: r.config.MaxOutputBytes}
 	stderr := &cappedBuffer{limit: r.config.MaxOutputBytes}
+	inputSum := sha256.Sum256(frozenBundle)
+	terminal := &TerminalDiagnostics{InputSHA256: hex.EncodeToString(inputSum[:]), SessionEvidence: "unavailable"}
+	audit.Terminal = terminal
+	defer func() {
+		terminal.FinishedAt = time.Now()
+		if terminal.ChildWaited {
+			terminal.JoinedAt = &terminal.FinishedAt
+		}
+		terminal.StdoutBytes, terminal.StderrBytes = stdout.total, stderr.total
+		terminal.StdoutSHA256, terminal.StderrSHA256 = stdout.digest(), stderr.digest()
+		terminal.OutputTruncated = stdout.overflow || stderr.overflow
+		if prepared.command.ProcessState != nil {
+			code := prepared.command.ProcessState.ExitCode()
+			terminal.ExitCode = &code
+		}
+
+		if audit.FailureKind == CLIFailureTimeout {
+			terminal.DeadlineProducer = "reviewer_timeout"
+			if ctx.Err() == context.DeadlineExceeded {
+				terminal.DeadlineProducer = "caller_deadline"
+			}
+		} else if audit.FailureKind == CLIFailureCanceled && callCtx.Err() == context.Canceled {
+			terminal.DeadlineProducer = "caller_cancel"
+		}
+		if terminal.ChildWaited && (audit.FailureKind == CLIFailureTimeout || audit.FailureKind == CLIFailureCanceled) {
+			terminal.Session, terminal.SessionEvidence = r.terminalSession(prepared.workDir, frozenBundle, terminal.StartedAt, terminal.FinishedAt)
+		}
+	}()
 	prepared.command.Stdout = stdout
 	prepared.command.Stderr = stderr
 	started := time.Now()
+	terminal.StartedAt = started
 	if r.launchObserver != nil {
 		if err = r.launchObserver(ctx); err != nil {
 			return FindingsResult{}, audit, fmt.Errorf("reviewer launch custody recording failed: %w", err)
@@ -392,16 +423,19 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 	}
 	err = prepared.command.Start()
 	if err == nil {
+		terminal.ChildStarted = true
 		if r.processObserver != nil {
 			if custodyErr := r.processObserver(ctx, prepared.command.Process.Pid); custodyErr != nil {
 				_ = prepared.command.Process.Kill()
 				_ = prepared.command.Wait()
+				terminal.ChildWaited = true
 				audit.FailureKind = CLIFailureCanceled
 				audit.Duration = time.Since(started)
 				return FindingsResult{}, audit, fmt.Errorf("reviewer process custody recording failed: %w", custodyErr)
 			}
 		}
 		err = prepared.command.Wait()
+		terminal.ChildWaited = true
 	}
 	duration := time.Since(started)
 	stderrSum := sha256.Sum256(stderr.Bytes())
@@ -431,6 +465,7 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 		audit.FailureKind = CLIFailureInvalidOutput
 		return FindingsResult{}, audit, fmt.Errorf("grok CLI returned invalid structured output")
 	}
+	parsedAudit.Terminal = terminal
 	parsedAudit.Duration = duration
 	parsedAudit.StderrSHA256 = audit.StderrSHA256
 	parsedAudit.RequestedModel = r.config.Model
@@ -704,6 +739,8 @@ func allowedSeverity(severity string) bool {
 }
 
 type cappedBuffer struct {
+	total    int64
+	sum      hash.Hash
 	buffer   bytes.Buffer
 	limit    int
 	overflow bool
@@ -711,6 +748,11 @@ type cappedBuffer struct {
 
 func (b *cappedBuffer) Write(data []byte) (int, error) {
 	written := len(data)
+	b.total += int64(written)
+	if b.sum == nil {
+		b.sum = sha256.New()
+	}
+	_, _ = b.sum.Write(data)
 	remaining := b.limit - b.buffer.Len()
 	if remaining > 0 {
 		if remaining > len(data) {
@@ -734,4 +776,12 @@ func (r *CLIRunner) SetProcessObserver(observer func(context.Context, int) error
 
 func (r *CLIRunner) SetLaunchObserver(observer func(context.Context) error) {
 	r.launchObserver = observer
+}
+
+func (b *cappedBuffer) digest() string {
+	if b.sum == nil {
+		sum := sha256.Sum256(nil)
+		return hex.EncodeToString(sum[:])
+	}
+	return hex.EncodeToString(b.sum.Sum(nil))
 }

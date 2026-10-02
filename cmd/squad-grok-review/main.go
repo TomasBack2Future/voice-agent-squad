@@ -96,6 +96,7 @@ type doctorOutput struct {
 }
 
 type commandOutput struct {
+	Terminal           *grokreview.TerminalDiagnostics     `json:"terminal_diagnostics,omitempty"`
 	RendererProvenance *grokreview.PatchRendererProvenance `json:"renderer_provenance,omitempty"`
 	ParentAttempt      string                              `json:"parent_attempt,omitempty"`
 	InputProvenance    string                              `json:"input_provenance,omitempty"`
@@ -655,6 +656,7 @@ func buildIdentity() (string, string) {
 
 func newCommandOutput(report grokreview.ReviewReport) commandOutput {
 	return commandOutput{
+		Terminal:   report.Audit.Terminal,
 		Repository: report.Snapshot.Repository, PullRequest: report.Snapshot.Number,
 		BaseSHA: report.Snapshot.BaseSHA, HeadSHA: report.Snapshot.HeadSHA,
 		Verdict: report.Result.Verdict, Summary: report.Result.Summary,

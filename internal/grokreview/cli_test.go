@@ -2,6 +2,7 @@ package grokreview
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -325,6 +326,10 @@ func TestCLIRunnerClassifiesCancellation(t *testing.T) {
 	if err == nil || audit.FailureKind != CLIFailureCanceled || audit.RequestedModel != config.Model {
 		t.Fatalf("audit=%#v err=%v", audit, err)
 	}
+	if audit.Terminal == nil || audit.Terminal.ChildStarted || audit.Terminal.ChildWaited || audit.Terminal.JoinedAt != nil || audit.Terminal.ExitCode != nil || audit.Terminal.DeadlineProducer != "caller_cancel" {
+		t.Fatalf("invented child join on prelaunch cancellation: %#v", audit.Terminal)
+	}
+
 }
 
 func TestCLIRunnerClassifiesFailureWithoutExposingStderr(t *testing.T) {
@@ -569,5 +574,47 @@ func TestCLIRunnerRecordsActualChildAndJoinsOnCustodyWriteFailure(t *testing.T) 
 	}
 	if err = absentProcess(pid); err != nil {
 		t.Fatal("owned failed child not joined", err)
+	}
+}
+
+func TestCLIRunnerTimeoutRetainsSafeTerminalDiagnostics(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "fake-grok")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'private-stdout'\nprintf 'private-stderr' >&2\nexec /bin/sleep 30\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := testCLIConfig(t)
+	config.Binary = binary
+	config.Timeout = 2 * time.Second
+	runner, err := NewCLIRunner(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, audit, err := runner.Review(context.Background(), []byte("private-input"))
+	if err == nil || audit.FailureKind != CLIFailureTimeout || result.Verdict != "" {
+		t.Fatalf("result=%v audit=%v err=%v", result, audit, err)
+	}
+	raw, err := json.Marshal(audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields["terminal_diagnostics"]) == 0 {
+		t.Fatalf("timeout discarded terminal diagnostics: %s", raw)
+	}
+	terminal := audit.Terminal
+	if terminal == nil || !terminal.ChildStarted || !terminal.ChildWaited || terminal.JoinedAt == nil || terminal.ExitCode == nil || *terminal.ExitCode != -1 || terminal.DeadlineProducer != "reviewer_timeout" || terminal.StdoutBytes != 14 || terminal.StderrBytes != 14 || terminal.OutputTruncated || terminal.SessionEvidence != "unavailable" {
+		t.Fatalf("incomplete timeout diagnostics: %#v", terminal)
+	}
+	stdout := sha256.Sum256([]byte("private-stdout"))
+	stderr := sha256.Sum256([]byte("private-stderr"))
+	if terminal.StdoutSHA256 != fmt.Sprintf("%x", stdout) || terminal.StderrSHA256 != fmt.Sprintf("%x", stderr) {
+		t.Fatal("output fingerprint lost")
+	}
+
+	if strings.Contains(string(raw), "private-") {
+		t.Fatalf("private input/output leaked: %s", raw)
 	}
 }

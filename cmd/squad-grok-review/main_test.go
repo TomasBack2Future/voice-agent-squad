@@ -219,6 +219,7 @@ func TestCommandOutputDoesNotExposeFrozenDiffOrHiddenThought(t *testing.T) {
 			Findings:      []grokreview.Finding{},
 		},
 		Audit: grokreview.CLIAudit{
+			Terminal:  &grokreview.TerminalDiagnostics{InputSHA256: "input-hash", ChildWaited: true, SessionEvidence: "qualified_local", Session: &grokreview.TerminalSession{LocalRequestID: "local-request", ReasoningNotifications: 2}},
 			RequestID: "request", SessionID: "session", RequestedModel: "grok-4.6",
 			ResolvedModel: "grok-4.6-build", Usage: grokreview.TokenUsage{TotalTokens: 22},
 			FailureKind: grokreview.CLIFailurePromptFileFormat,
@@ -235,7 +236,7 @@ func TestCommandOutputDoesNotExposeFrozenDiffOrHiddenThought(t *testing.T) {
 			t.Fatalf("output exposed %q: %s", forbidden, text)
 		}
 	}
-	for _, required := range []string{"head", "approved", "request", "session", "prompt_file_format"} {
+	for _, required := range []string{"head", "approved", "request", "session", "prompt_file_format", "terminal_diagnostics", "local_request_id", "reasoning_notifications"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("output lacks %q: %s", required, text)
 		}
