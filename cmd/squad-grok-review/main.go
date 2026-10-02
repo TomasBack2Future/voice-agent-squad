@@ -30,6 +30,7 @@ type config struct {
 	doctor            bool
 	reconcile         bool
 	recovery          bool
+	prospective       bool
 	recoveryFrom      string
 	admissionDir      string
 	repository        string
@@ -95,6 +96,8 @@ type doctorOutput struct {
 }
 
 type commandOutput struct {
+	ParentAttempt   string                    `json:"parent_attempt,omitempty"`
+	InputProvenance string                    `json:"input_provenance,omitempty"`
 	AttemptID       string                    `json:"attempt_id,omitempty"`
 	Provider        string                    `json:"provider,omitempty"`
 	RepositoryHost  string                    `json:"repository_host,omitempty"`
@@ -131,7 +134,30 @@ func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
 
+func currentReviewOwner() (grokreview.ReviewOwner, error) {
+	native := os.Getenv("CODEX_THREAD_ID")
+	session := os.Getenv("SQUAD_SESSION_ID")
+	if session != "" {
+		if !strings.HasPrefix(session, "codex:") {
+			return grokreview.ReviewOwner{}, fmt.Errorf("prospective admission requires the original Codex native owner")
+		}
+		selected := strings.TrimPrefix(session, "codex:")
+		if native != "" && native != selected {
+			return grokreview.ReviewOwner{}, fmt.Errorf("native delivery owner mismatch")
+		}
+		native = selected
+	}
+	owner := grokreview.ReviewOwner{Actor: os.Getenv("SQUAD_AGENT"), Native: native}
+	if owner.Actor == "" || owner.Native == "" {
+		return owner, fmt.Errorf("original review owner identity unavailable")
+	}
+	return owner, nil
+}
+
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "authorization-readback" {
+		return runAuthorizationReadback(args[1:], stdout, stderr)
+	}
 	configuration, err := parseConfig(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -238,7 +264,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		defer func() { _ = admission.Close() }()
 		if configuration.recovery && filepath.IsAbs(configuration.recoveryFrom) {
-			if err = admission.ImportLegacy(configuration.recoveryFrom); err != nil {
+			if configuration.prospective {
+				owner, ownerErr := currentReviewOwner()
+				if ownerErr != nil {
+					_, _ = fmt.Fprintln(stderr, ownerErr)
+					return 1
+				}
+				err = admission.ImportProspective(configuration.recoveryFrom, owner)
+			} else {
+				err = admission.ImportLegacy(configuration.recoveryFrom)
+			}
+			if err != nil {
 				_, _ = fmt.Fprintln(stderr, err)
 				return 1
 			}
@@ -266,6 +302,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		output := newCommandOutput(report)
 		if admission != nil {
 			output.AttemptID = admission.AttemptID()
+			output.ParentAttempt = admission.Receipt().Parent
+			output.InputProvenance = admission.Receipt().InputProvenance
 		}
 		if configuration.provider == "local-git" {
 			output.Provider = "local-git"
@@ -289,6 +327,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func runAuthorizationReadback(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("authorization-readback", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var request, receipt string
+	flags.StringVar(&request, "request", "", "absolute current exact review scope JSON")
+	flags.StringVar(&receipt, "receipt", "", "existing real disclosure receipt; omission reports unavailable")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return 1
+	}
+	owner, err := currentReviewOwner()
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	result, err := grokreview.ReadDisclosure(receipt, request, owner)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return encodeJSON(stdout, stderr, result)
 }
 
 func prepareRuntime(ctx context.Context, configuration config) (runtimeDependencies, error) {
@@ -347,15 +407,17 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 
 func parseConfig(args []string, output io.Writer) (config, error) {
 	var configuration config
-	if len(args) > 0 && args[0] == "reconcile" {
+	if len(args) > 0 && args[0] == "readmit" {
+		configuration.recovery = true
+		configuration.prospective = true
+		args = args[1:]
+	} else if len(args) > 0 && args[0] == "reconcile" {
 		configuration.reconcile = true
 		args = args[1:]
-	}
-	if len(args) > 0 && args[0] == "recover" {
+	} else if len(args) > 0 && args[0] == "recover" {
 		configuration.recovery = true
 		args = args[1:]
-	}
-	if len(args) > 0 && args[0] == "doctor" {
+	} else if len(args) > 0 && args[0] == "doctor" {
 		configuration.doctor = true
 		args = args[1:]
 	}
@@ -481,11 +543,14 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if !filepath.IsAbs(configuration.admissionDir) {
 		return config{}, fmt.Errorf("--admission-dir must be absolute")
 	}
-	if configuration.recovery && (configuration.recoveryFrom == "" || configuration.provider != "github" || configuration.mode != "required") {
-		return config{}, fmt.Errorf("recover requires --from, Github provider and required mode")
+	if configuration.recovery && (configuration.recoveryFrom == "" || configuration.provider != "github") {
+		return config{}, fmt.Errorf("recover requires --from and GitHub provider; original mode must be preserved")
 	}
-	if configuration.reconcile && (configuration.recoveryFrom == "" || configuration.provider != "github" || configuration.mode != "required") {
-		return config{}, fmt.Errorf("reconcile requires --from and required GitHub mode")
+	if configuration.prospective && !filepath.IsAbs(configuration.recoveryFrom) {
+		return config{}, fmt.Errorf("readmit requires an absolute prospective terminal-legacy custody/disclosure receipt")
+	}
+	if configuration.reconcile && (configuration.recoveryFrom == "" || configuration.provider != "github") {
+		return config{}, fmt.Errorf("reconcile requires --from and GitHub provider; original mode must be preserved")
 	}
 	if !configuration.recovery && !configuration.reconcile && configuration.recoveryFrom != "" {
 		return config{}, fmt.Errorf("--from requires recover")

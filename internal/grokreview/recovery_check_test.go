@@ -102,3 +102,46 @@ func TestLostPublicationReadbackBindsAttemptInputAppModeAndVerdict(t *testing.T)
 		})
 	}
 }
+
+func TestRecoveryRejectsOtherModeVerdictWithoutBlockingOrdinarySample(t *testing.T) {
+	for _, mode := range []string{"required", "shadow"} {
+		for _, state := range []string{"approved", "blocking", "active", "old-head"} {
+			t.Run(mode+"/"+state, func(t *testing.T) {
+				identity, _ := identityFor(admissionBundle())
+				r := AttemptReceipt{ID: "original", Identity: identity, Settings: admissionSettings(), Publication: Publication{CheckRunID: 3, Conclusion: "failure"}}
+				r.Settings.Mode = mode
+				original, other := "grok-review", "grok-review-shadow"
+				if mode == "shadow" {
+					original, other = other, original
+				}
+				failed := map[string]any{"id": 3, "name": original, "head_sha": "head", "status": "completed", "conclusion": "failure", "app": map[string]any{"id": 1}, "output": map[string]any{"title": "Grok review error"}}
+				competing := map[string]any{"id": 4, "name": other, "head_sha": "head", "status": "completed", "conclusion": "success", "app": map[string]any{"id": 1}, "output": map[string]any{"title": "Grok review approved"}}
+				if state == "blocking" {
+					competing["conclusion"] = "failure"
+					competing["output"] = map[string]any{"title": "Grok review blocking"}
+				}
+				if state == "active" {
+					competing["status"] = "in_progress"
+				}
+				if state == "old-head" {
+					competing["head_sha"] = "old-head"
+				}
+				g, _ := NewGitHubCLI("/fake/gh", 1, 1<<20)
+				g.execute = func(context.Context, []string, []byte, []string) ([]byte, error) {
+					return json.Marshal(map[string]any{"total_count": 2, "check_runs": []any{failed, competing}})
+				}
+				err := g.VerifyRecoveryCheck(context.Background(), "token", 1, r)
+				if (err == nil) != (state == "old-head") {
+					t.Fatalf("recovery other-mode verdict %s: %v", state, err)
+				}
+				r.ID = ""
+				g.execute = func(context.Context, []string, []byte, []string) ([]byte, error) {
+					return json.Marshal(map[string]any{"total_count": 1, "check_runs": []any{competing}})
+				}
+				if err = g.VerifyRecoveryCheck(context.Background(), "token", 1, r); err != nil {
+					t.Fatalf("ordinary sample poisoned by other mode: %v", err)
+				}
+			})
+		}
+	}
+}

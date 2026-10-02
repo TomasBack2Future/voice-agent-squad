@@ -17,6 +17,7 @@ import (
 // assertion of exit. The qualified format is the Codex exec/write_stdin/wait
 // chain; absent or unfamiliar formats fail closed without invented PIDs.
 type NativeJoinProof struct {
+	ToolSessionID        int    `json:"tool_session_id,omitempty"`
 	LaunchOutputSHA256   string `json:"launch_output_sha256"`
 	JoinOutputSHA256     string `json:"join_output_sha256"`
 	TerminalOutputSHA256 string `json:"terminal_output_sha256"`
@@ -151,7 +152,8 @@ func verifyNativeJoinAt(root string, proof NativeJoinProof, r AttemptReceipt) er
 	}
 	match := nativeCommandRE.FindAllStringSubmatch(launch.Payload.Input, -1)
 	selected := false
-	for _, m := range match {
+	selectedIndex := -1
+	for index, m := range match {
 		var command string
 		if err = json.Unmarshal([]byte(m[1]), &command); err != nil {
 			return err
@@ -164,7 +166,12 @@ func verifyNativeJoinAt(root string, proof NativeJoinProof, r AttemptReceipt) er
 			return fmt.Errorf("ambiguous native reviewer launch")
 		}
 		selected = true
-		if err = verifyLegacyArguments(args[1:], r); err != nil {
+		selectedIndex = index
+		arguments, parseErr := legacyManagedArguments(args)
+		if parseErr != nil {
+			return parseErr
+		}
+		if err = verifyLegacyArguments(arguments, r); err != nil {
 			return err
 		}
 	}
@@ -172,13 +179,28 @@ func verifyNativeJoinAt(root string, proof NativeJoinProof, r AttemptReceipt) er
 		return fmt.Errorf("native launch is not a qualified managed reviewer invocation")
 	}
 	session := 0
+	var launchResults []struct {
+		SessionID int
+		ExitCode  *int
+	}
 	for _, item := range outputs[proof.LaunchCall].Payload.Output {
 		var result struct {
-			SessionID int `json:"session_id"`
+			SessionID int  `json:"session_id"`
+			ExitCode  *int `json:"exit_code"`
 		}
-		if json.Unmarshal([]byte(item.Text), &result) == nil && result.SessionID > 0 {
-			session = result.SessionID
+		if json.Unmarshal([]byte(item.Text), &result) == nil && (result.SessionID > 0 || result.ExitCode != nil) {
+			launchResults = append(launchResults, struct {
+				SessionID int
+				ExitCode  *int
+			}{result.SessionID, result.ExitCode})
 		}
+	}
+	if len(launchResults) != len(match) || selectedIndex < 0 {
+		return fmt.Errorf("native launch result mapping is ambiguous")
+	}
+	session = launchResults[selectedIndex].SessionID
+	if session <= 0 || (proof.ToolSessionID != 0 && session != proof.ToolSessionID) {
+		return fmt.Errorf("native managed launch tool session mismatch")
 	}
 	join := calls[proof.JoinCall]
 	if join.Payload.Name != "exec" {
@@ -215,10 +237,13 @@ func verifyNativeJoinAt(root string, proof NativeJoinProof, r AttemptReceipt) er
 			continue
 		}
 		if *result.ExitCode != 1 || result.SessionID != 0 {
-			return fmt.Errorf("native reviewer tool is not terminal failed/joined")
+			continue // Other joined commands in this same orchestration are not the reviewer.
 		}
 		// Only allow the sanitized structured wrapper report followed by its error.
-		d := json.NewDecoder(strings.NewReader(result.Output))
+		output := result.Output
+		prefix := "local Grok review failed: grok CLI exceeded " + (time.Duration(r.Settings.TimeoutMS) * time.Millisecond).String() + "\n"
+		output = strings.TrimPrefix(output, prefix)
+		d := json.NewDecoder(strings.NewReader(output))
 		var report struct {
 			Repository      string         `json:"repository"`
 			PR              int            `json:"pull_request"`
@@ -237,6 +262,9 @@ func verifyNativeJoinAt(root string, proof NativeJoinProof, r AttemptReceipt) er
 			continue
 		}
 		if report.Repository == r.Identity.Repository && report.PR == r.Identity.PR && report.BaseSHA == r.Identity.BaseSHA && report.HeadSHA == r.Identity.HeadSHA && report.Verdict == VerdictError && report.FailureStage == "sampling" && report.FailureKind == CLIFailureTimeout && len(report.Findings) == 0 && report.Model == r.Settings.Model && report.Effort == r.Settings.Effort && report.CheckID == r.Publication.CheckRunID && report.CheckConclusion == "failure" {
+			if found {
+				return fmt.Errorf("ambiguous native terminal review report")
+			}
 			found = true
 		}
 	}
@@ -244,6 +272,27 @@ func verifyNativeJoinAt(root string, proof NativeJoinProof, r AttemptReceipt) er
 		return fmt.Errorf("native terminal output lacks the exact failed timeout report")
 	}
 	return nil
+}
+
+// The historical managed wrapper sometimes saved output then tailed that same
+// file, propagating its captured exit. Qualify only this exact bounded form;
+// arbitrary shell prefixes, pipelines, substitutions and exit fabrication fail.
+func legacyManagedArguments(args []string) ([]string, error) {
+	for i, arg := range args {
+		if arg != ">" {
+			continue
+		}
+		suffix := args[i:]
+		if len(suffix) != 9 || !filepath.IsAbs(suffix[1]) || strings.ContainsAny(suffix[1], ";&|`$\n") || suffix[2] != "2>&1;" || suffix[3] != "result=$?;" || suffix[4] != "tail" || suffix[6] != suffix[1]+";" || suffix[7] != "exit" || suffix[8] != "$result" {
+			return nil, fmt.Errorf("historical managed capture/exit wrapper not qualified")
+		}
+		count, err := strconv.Atoi(strings.TrimPrefix(suffix[5], "-"))
+		if err != nil || !strings.HasPrefix(suffix[5], "-") || count < 1 || count > 200 {
+			return nil, fmt.Errorf("historical output tail exceeds bound")
+		}
+		return args[1:i], nil
+	}
+	return args[1:], nil
 }
 func verifyLegacyArguments(args []string, r AttemptReceipt) error {
 	values := map[string]string{}
@@ -261,7 +310,7 @@ func verifyLegacyArguments(args []string, r AttemptReceipt) error {
 	if err != nil {
 		return err
 	}
-	if values["repo"] != r.Identity.Repository || values["pr"] != strconv.Itoa(r.Identity.PR) || values["mode"] != r.Settings.Mode || values["model"] != r.Settings.Model || values["reasoning-effort"] != r.Settings.Effort || timeout.Milliseconds() != r.Settings.TimeoutMS {
+	if values["repo"] != r.Identity.Repository || values["pr"] != strconv.Itoa(r.Identity.PR) || values["mode"] != r.Settings.Mode || (values["model"] != "" && values["model"] != r.Settings.Model) || values["reasoning-effort"] != r.Settings.Effort || timeout.Milliseconds() != r.Settings.TimeoutMS {
 		return fmt.Errorf("original native invocation settings mismatch")
 	}
 	for key, want := range map[string]int{"max-github-output": r.Settings.MaxGitHubOutput, "max-reviewer-output": r.Settings.MaxReviewerOutput} {

@@ -39,29 +39,35 @@ type ReviewIdentity struct {
 // AttemptReceipt is authoritative only in the private admission store. No diff,
 // prompt, findings prose, credentials or raw model output is persisted here.
 type AttemptReceipt struct {
-	LaunchStage          string         `json:"launch_stage,omitempty"`
-	SamplingFailureStage string         `json:"sampling_failure_stage,omitempty"`
-	SamplingCompleted    bool           `json:"sampling_completed"`
-	WrapperPID           int            `json:"wrapper_pid,omitempty"`
-	ReviewerPID          int            `json:"reviewer_pid,omitempty"`
-	CostKnown            bool           `json:"cost_known"`
-	RequestID            string         `json:"request_id,omitempty"`
-	SessionID            string         `json:"session_id,omitempty"`
-	ResolvedModel        string         `json:"resolved_model,omitempty"`
-	DurationMS           int64          `json:"duration_ms"`
-	ID                   string         `json:"id"`
-	Parent               string         `json:"parent,omitempty"`
-	Identity             ReviewIdentity `json:"identity"`
-	Settings             ReviewSettings `json:"settings"`
-	Joined               bool           `json:"joined"`
-	Verdict              Verdict        `json:"verdict"`
-	FailureStage         string         `json:"failure_stage"`
-	FailureKind          CLIFailureKind `json:"failure_kind"`
-	Publication          Publication    `json:"publication"`
-	Usage                TokenUsage     `json:"usage"`
-	UsageKnown           bool           `json:"usage_known"`
-	CostUSD              float64        `json:"cost_usd"`
-	CompletedAt          int64          `json:"completed_at"`
+	InputProvenance        string         `json:"input_provenance,omitempty"`
+	InputRecordedAt        int64          `json:"input_recorded_at,omitempty"`
+	AuthorizationSHA256    string         `json:"authorization_sha256,omitempty"`
+	AuthorizationReference string         `json:"authorization_reference,omitempty"`
+	OwnerActor             string         `json:"owner_actor,omitempty"`
+	OwnerNative            string         `json:"owner_native,omitempty"`
+	LaunchStage            string         `json:"launch_stage,omitempty"`
+	SamplingFailureStage   string         `json:"sampling_failure_stage,omitempty"`
+	SamplingCompleted      bool           `json:"sampling_completed"`
+	WrapperPID             int            `json:"wrapper_pid,omitempty"`
+	ReviewerPID            int            `json:"reviewer_pid,omitempty"`
+	CostKnown              bool           `json:"cost_known"`
+	RequestID              string         `json:"request_id,omitempty"`
+	SessionID              string         `json:"session_id,omitempty"`
+	ResolvedModel          string         `json:"resolved_model,omitempty"`
+	DurationMS             int64          `json:"duration_ms"`
+	ID                     string         `json:"id"`
+	Parent                 string         `json:"parent,omitempty"`
+	Identity               ReviewIdentity `json:"identity"`
+	Settings               ReviewSettings `json:"settings"`
+	Joined                 bool           `json:"joined"`
+	Verdict                Verdict        `json:"verdict"`
+	FailureStage           string         `json:"failure_stage"`
+	FailureKind            CLIFailureKind `json:"failure_kind"`
+	Publication            Publication    `json:"publication"`
+	Usage                  TokenUsage     `json:"usage"`
+	UsageKnown             bool           `json:"usage_known"`
+	CostUSD                float64        `json:"cost_usd"`
+	CompletedAt            int64          `json:"completed_at"`
 }
 
 type RecoveryCheck func(context.Context, AttemptReceipt) error
@@ -76,6 +82,7 @@ type Admission struct {
 	publicationLookup func(context.Context, AttemptReceipt) (Publication, error)
 	receipt           AttemptReceipt
 	legacy            *AttemptReceipt
+	prospective       *ProspectiveReadmission
 }
 
 // OpenAdmission never opens or migrates the Squad work ledger. All invocations
@@ -108,8 +115,13 @@ func OpenAdmission(dir string, settings ReviewSettings, from string, check Recov
 	}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS review_attempts(id TEXT PRIMARY KEY, identity TEXT NOT NULL, receipt TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS review_flights(repository TEXT NOT NULL, pr INTEGER NOT NULL, attempt TEXT NOT NULL UNIQUE, PRIMARY KEY(repository,pr));
- CREATE TABLE IF NOT EXISTS review_recoveries(parent TEXT PRIMARY KEY, child TEXT NOT NULL UNIQUE, identity TEXT NOT NULL UNIQUE);`)
+ CREATE TABLE IF NOT EXISTS review_recoveries(parent TEXT PRIMARY KEY, child TEXT NOT NULL UNIQUE, identity TEXT NOT NULL UNIQUE);
+ CREATE TABLE IF NOT EXISTS review_recovery_roots(tuple TEXT PRIMARY KEY, parent TEXT NOT NULL UNIQUE, child TEXT NOT NULL UNIQUE);`)
 	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := backfillRecoveryRoots(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -120,8 +132,9 @@ func OpenAdmission(dir string, settings ReviewSettings, from string, check Recov
 	}
 	return &Admission{db: db, dir: dir, processAbsent: absentProcess, settings: settings, from: from, check: check, receipt: AttemptReceipt{ID: id}}, nil
 }
-func (a *Admission) Close() error      { return a.db.Close() }
-func (a *Admission) AttemptID() string { return a.receipt.ID }
+func (a *Admission) Close() error            { return a.db.Close() }
+func (a *Admission) AttemptID() string       { return a.receipt.ID }
+func (a *Admission) Receipt() AttemptReceipt { return a.receipt }
 
 func identityFor(bundle []byte) (ReviewIdentity, error) {
 	var b FrozenReviewBundle
@@ -164,11 +177,28 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 		if !recoverable(prior) {
 			return fmt.Errorf("recovery requires a joined sampling timeout with no valid verdict and a failed published Check")
 		}
-		if prior.Identity != identity || prior.Settings != a.settings || a.settings.Mode != "required" {
+		if prior.Settings != a.settings || (a.settings.Mode != "required" && a.settings.Mode != "shadow") {
+			return fmt.Errorf("recovery input or settings changed")
+		}
+		if a.prospective != nil {
+			if err := a.verifyProspectiveBundle(bundle, identity); err != nil {
+				return err
+			}
+			candidate.InputProvenance = "prospective-legacy-new-input"
+			candidate.InputRecordedAt = time.Now().Unix()
+			authority, err := json.Marshal(a.prospective)
+			if err != nil {
+				return err
+			}
+			candidate.AuthorizationSHA256 = receiptHash(authority)
+			candidate.AuthorizationReference = a.prospective.Disclosure.Reference
+			candidate.OwnerActor = a.prospective.Owner.Actor
+			candidate.OwnerNative = a.prospective.Owner.Native
+		} else if prior.Identity != identity {
 			return fmt.Errorf("recovery input or settings changed")
 		}
 		if a.check == nil {
-			return fmt.Errorf("current required Check verification unavailable")
+			return fmt.Errorf("current original-mode Check verification unavailable")
 		}
 		if err = a.check(ctx, prior); err != nil {
 			return err
@@ -198,12 +228,26 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 			return err
 		}
 		if candidate.Parent != "" {
+			var verdicts int
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM review_attempts WHERE
+ json_extract(identity,'$.repository')=? AND json_extract(identity,'$.pr')=? AND
+ json_extract(identity,'$.base_ref')=? AND json_extract(identity,'$.base_sha')=? AND json_extract(identity,'$.head_sha')=? AND
+ json_extract(receipt,'$.verdict') IN ('approved','blocking')`, identity.Repository, identity.PR, identity.BaseRef, identity.BaseSHA, identity.HeadSHA).Scan(&verdicts); err != nil {
+				return err
+			}
+			if verdicts != 0 {
+				return fmt.Errorf("current tuple already has a valid managed verdict")
+			}
 			if a.legacy != nil {
 				legacyRaw, err := json.Marshal(prior)
 				if err != nil {
 					return err
 				}
-				if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO review_attempts(id,identity,receipt) VALUES(?,?,?)", prior.ID, string(identityRaw), string(legacyRaw)); err != nil {
+				priorIdentity, err := json.Marshal(prior.Identity)
+				if err != nil {
+					return err
+				}
+				if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO review_attempts(id,identity,receipt) VALUES(?,?,?)", prior.ID, string(priorIdentity), string(legacyRaw)); err != nil {
 					return err
 				}
 			}
@@ -220,10 +264,19 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 			if stored != prior {
 				return fmt.Errorf("original custody changed")
 			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO review_recovery_roots(tuple,parent,child) VALUES(?,?,?)", tupleKey(prior.Identity), prior.ID, id); err != nil {
+				return fmt.Errorf("original attempt/tuple one-use slot already reserved: %w", err)
+			}
 			if _, err := tx.ExecContext(ctx, "INSERT INTO review_recoveries(parent,child,identity) VALUES(?,?,?)", prior.ID, id, string(identityRaw)); err != nil {
 				return fmt.Errorf("one-use recovery already reserved: %w", err)
 			}
 		} else {
+			var root string
+			if err := tx.QueryRowContext(ctx, "SELECT parent FROM review_recovery_roots WHERE tuple=?", tupleKey(identity)).Scan(&root); err == nil {
+				return fmt.Errorf("original tuple recovery slot already consumed; no ordinary retry or mode switch")
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
 			var count int
 			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM review_attempts WHERE identity=? AND json_extract(receipt, '$.settings.mode')=?", string(identityRaw), a.settings.Mode).Scan(&count); err != nil {
 				return err
