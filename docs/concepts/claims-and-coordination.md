@@ -186,3 +186,56 @@ active clients before enabling scoped automation.
 Scope policy does not confer deployment authority and is local to one ledger.
 Use a consistent ordering for multi-resource acquisition; no automatic scope
 upgrade, multi-item atomic acquisition or shared read-lock protocol is provided.
+
+## Replacing stopped clients
+
+This legacy operation is rejected atomically once the repository has any
+controller binding or retirement record. It must not bypass the current
+controller actor/native/epoch or move one reservation out of a bound cohort.
+Use the existing complete-inventory controller handoff for Dispatcher custody;
+that operation deliberately preserves Worker claims and sessions. A new native
+Worker replacement under that protocol still needs its own qualified execution
+fence and supported transition. Do not use a legacy takeover as a fallback.
+
+`dispatch takeover --request handoff.json` is an operator recovery operation,
+not ordinary scheduling. The JSON supplies `reservation`, `expected_dispatcher`,
+`dispatcher_session`, `expected_worker_session`, `expected_generation`,
+`new_dispatcher`, `confirm_dispatcher_stopped`, `reason` and `evidence`.
+A Worker replacement additionally supplies `new_worker_session`,
+`expected_holder`, `expected_claim_generation`, `new_holder` and
+`confirm_worker_stopped`. MCP exposes the same object as `squad_dispatch_takeover`.
+
+First independently stop the exact old native clients and their lease supervisors,
+and inspect their external operations. A model quota error is not stopped-client
+proof. Recent registered heartbeats or claim renewals reject replacement. Protected
+resource custody must first be resolved through `recover`; active execution pins
+also block the claim transition. Never impersonate the old agent or edit the DB.
+
+The transaction compares the expected reservation and ordinary claim fences,
+transfers the canonical claim without a free interval, increments both generations,
+and preserves the current decision (including a hold) in the new epoch. Old
+heartbeats, event publications and reservation closure are rejected. Worktree,
+intent and canonical item remain unchanged. The result includes an audit message
+and pending old events requiring explicit handoff reconciliation; it does not
+acknowledge them or declare the work complete. A replay with the old fence fails;
+after a lost response inspect the reservation and audit before retrying.
+
+Without the replacement fields this transfers only Dispatcher custody. It keeps
+the still-running Worker's generation/session intact and reroutes unprocessed
+Dispatcher receipts. The operator must inventory all affected reservations and
+keep a new writer inactive until every necessary binding is read back.
+### Session identity isolation
+
+An explicit `SQUAD_AGENT` takes precedence. Otherwise, a session selected by
+`SQUAD_SESSION_ID` or the supported terminal session variables reads only its
+own persisted identity. A missing or unreadable per-session file derives a new
+session actor; it must not borrow the legacy unscoped `agent-id.txt`. Sessions
+without a session key retain that legacy behavior. This applies equally to
+Claude, Codex and Muse; launchers still supply explicit sanitized native/actor
+bindings. Native provider variables are not an ownership transfer mechanism.
+
+This changes identity resolution only. It does not migrate or recover an existing
+claim, reservation or environment. A session that previously relied on the global
+fallback must resolve its actual custody before writing under a new identity;
+use explicit existing actor binding only when its ownership is independently
+verified. Never copy an actor name merely to make a failed ownership check pass.

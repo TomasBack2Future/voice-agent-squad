@@ -105,7 +105,7 @@ Formal handoff events and terminal callbacks remain required and deduplicated.
    park with `claim --wait`; do not poll or search for other work.
 3. Keep this Issue claim through implementation, PR corrections, guarded merge,
    exact-revision staging verification, and final Issue disposition.
-4. Use a clean isolated Codex/git worktree and `codex/issue-<number>-<slug>`
+4. Use a clean isolated git worktree and `codex/issue-<number>-<slug>`
    branch. Preserve all unrelated dirty worktrees.
 
 ## Studio boundaries
@@ -135,7 +135,7 @@ Formal handoff events and terminal callbacks remain required and deduplicated.
 
 ## External Grok reviewer
 
-The owning Codex Worker remains the only code-changing role. Grok is an
+The owning Worker remains the only code-changing role. Grok is an
 untrusted local reviewer; the external GitHub App is only its publication
 identity, and neither is a Squad Worker. Never create a reviewer task, invoke raw
 Grok, manually publish a same-name status/Check, use `--admin`, or push a no-op

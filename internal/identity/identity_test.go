@@ -59,6 +59,41 @@ func TestPersistedAgentID_PerSessionFile(t *testing.T) {
 	}
 }
 
+func TestSessionIdentityDoesNotInheritLegacyActor(t *testing.T) {
+	for _, runtime := range []string{"claude", "codex", "muse"} {
+		t.Run(runtime, func(t *testing.T) {
+			clearSessionEnv(t)
+			t.Setenv("SQUAD_HOME", t.TempDir())
+			if err := WritePersistedAgentID("legacy-owner"); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("SQUAD_SESSION_ID", runtime+":new-session")
+			if got := PersistedAgentID(); got != "" {
+				t.Fatalf("new session borrowed persisted actor %q", got)
+			}
+			got, err := AgentID()
+			if err != nil || got != "agent-"+SessionSuffix() {
+				t.Fatalf("new session identity = %q, %v", got, err)
+			}
+			if err := WritePersistedAgentID("scoped-owner"); err != nil {
+				t.Fatal(err)
+			}
+			if got := PersistedAgentID(); got != "scoped-owner" {
+				t.Fatalf("scoped identity lost: %q", got)
+			}
+			t.Setenv("SQUAD_AGENT", "explicit-owner")
+			if got, err := AgentID(); err != nil || got != "explicit-owner" {
+				t.Fatalf("explicit identity = %q, %v", got, err)
+			}
+			t.Setenv("SQUAD_AGENT", "")
+			t.Setenv("SQUAD_SESSION_ID", "")
+			if got := PersistedAgentID(); got != "legacy-owner" {
+				t.Fatalf("unscoped legacy identity changed: %q", got)
+			}
+		})
+	}
+}
+
 func TestAgentID_HonorsEnvOverride(t *testing.T) {
 	clearSessionEnv(t)
 	t.Setenv("SQUAD_AGENT", "from-env")

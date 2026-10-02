@@ -40,12 +40,12 @@ class WorkerPreflightTests(unittest.TestCase):
     def check(self):
         self.path.write_text(json.dumps(self.assignment))
         with patch("worker_preflight.shutil.which", return_value="/qualified/tool"):
-            return preflight.check(self.path, self.profile, "claude", [self.skill], ["squad"])
+            return preflight.check(self.path, self.profile, "claude", [self.skill], ["squad"], context_only=True)
 
     def test_isolated_pilot_reads_identity_without_mutation(self):
         before = self.git("status", "--porcelain")
         receipt = self.check()
-        self.assertEqual(receipt["status"], "ready")
+        self.assertEqual(receipt["status"], "context-checked")
         self.assertEqual(receipt["ownership"], "not_checked")
         self.assertEqual(receipt["runtime_approval"], "not_checked")
         self.assertEqual(before, self.git("status", "--porcelain"))
@@ -71,7 +71,7 @@ class WorkerPreflightTests(unittest.TestCase):
         self.select_importer()
         before = self.git("status", "--porcelain")
         receipt = self.check()
-        self.assertEqual(receipt["status"], "ready")
+        self.assertEqual(receipt["status"], "context-checked")
         self.assertEqual(receipt["ownership"], "not_checked")
         self.assertEqual(before, self.git("status", "--porcelain"))
         self.assertLessEqual(len(json.dumps(self.assignment, separators=(",", ":")).encode()), 2048)
@@ -94,7 +94,7 @@ class WorkerPreflightTests(unittest.TestCase):
     def test_wrong_runtime_discovery_path_fails(self):
         self.path.write_text(json.dumps(self.assignment))
         with self.assertRaises(preflight.ValidationError):
-            preflight.check(self.path, self.profile, "codex", [self.skill], [])
+            preflight.check(self.path, self.profile, "codex", [self.skill], [], context_only=True)
 
     def test_codex_requires_qualified_launcher_not_executable_presence(self):
         self.path.write_text(json.dumps(self.assignment))
@@ -104,6 +104,41 @@ class WorkerPreflightTests(unittest.TestCase):
         with patch('worker_preflight.shutil.which', return_value='/qualified/tool'):
             with self.assertRaisesRegex(preflight.ValidationError, 'Codex launch config required'):
                 preflight.check(self.path, self.profile, 'codex', [skill], [])
+
+    def test_unknown_runtime_fails_before_reading_inputs(self):
+        with self.assertRaisesRegex(preflight.ValidationError, 'unsupported runtime'):
+            preflight.check(Path('/missing'), Path('/missing'), 'not-a-runtime', [], [])
+
+    def test_claude_requires_launcher_for_execution_preflight(self):
+        self.path.write_text(json.dumps(self.assignment))
+        with patch('worker_preflight.shutil.which', return_value='/qualified/tool'):
+            with self.assertRaisesRegex(preflight.ValidationError, 'Claude launch config required'):
+                preflight.check(self.path, self.profile, 'claude', [self.skill], [])
+
+    def test_context_only_is_explicit_and_not_execution_ready(self):
+        self.path.write_text(json.dumps(self.assignment))
+        with patch('worker_preflight.shutil.which', return_value='/qualified/tool'):
+            for runtime in ('claude', 'codex', 'muse'):
+                with self.subTest(runtime=runtime):
+                    directory = '.claude' if runtime == 'claude' else '.agents'
+                    skill = self.root / directory / 'skills/agent-loop-worker/SKILL.md'
+                    if not skill.exists():
+                        skill.parent.mkdir(parents=True, exist_ok=True)
+                        skill.symlink_to(ROOT / 'roles/worker/SKILL.md')
+                    receipt = preflight.check(self.path, self.profile, runtime, [skill], [], context_only=True)
+                    self.assertEqual(receipt['status'], 'context-checked')
+                    self.assertEqual(receipt['launcher']['status'], 'not_checked')
+                    self.assertEqual(receipt['ownership'], 'not_checked')
+
+    def test_muse_config_never_falls_through_to_claude(self):
+        with patch('claude_worker_launcher.check_launch') as launch:
+            with self.assertRaisesRegex(preflight.ValidationError, 'Muse launch adapter unavailable'):
+                preflight.check(Path('/missing'), Path('/missing'), 'muse', [], [], Path('/config'))
+            launch.assert_not_called()
+
+    def test_context_only_cannot_hide_a_launch_config(self):
+        with self.assertRaisesRegex(preflight.ValidationError, 'context-only.*launch config'):
+            preflight.check(Path('/missing'), Path('/missing'), 'claude', [], [], Path('/config'), context_only=True)
 
     def test_changed_base_branch_repository_and_dirty_tree_fail(self):
         for field, value in [("base_sha", "0" * 40), ("branch", "wrong")]:
@@ -124,13 +159,13 @@ class WorkerPreflightTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.assignment))
         with patch("worker_preflight.shutil.which", return_value=None):
             with self.assertRaises(preflight.ValidationError):
-                preflight.check(self.path, self.profile, "claude", [self.skill], [])
+                preflight.check(self.path, self.profile, "claude", [self.skill], [], context_only=True)
 
     def test_cli_does_not_echo_invalid_assignment_data(self):
         self.path.write_text('{"private":"DO_NOT_ECHO"}')
         result = subprocess.run([sys.executable, str(ROOT / "worker_preflight.py"),
                                  "--assignment", str(self.path), "--profile", str(self.profile),
-                                 "--runtime", "claude", "--skill", str(self.skill)],
+                                 "--runtime", "claude", "--skill", str(self.skill), "--context-only"],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertNotIn("DO_NOT_ECHO", result.stdout + result.stderr)

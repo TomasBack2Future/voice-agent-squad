@@ -17,7 +17,7 @@ Pre-flight checklist (invoke each skill explicitly):
 
 1. **`squad-evidence-requirement`** — Paste the actual output of every verification gate (tests, type-check, build, manual verification) into the conversation. Bare assertions do not count.
 2. **`squad-quality-bar`** — Walk the checklist over the diff: no commented-out code, no TODOs, no PM traces, no defensive checks for impossible cases, no half-finished work, AC literally checked off.
-3. **`squad-code-review-mandatory`** — Spawn `superpowers:code-reviewer` on the diff. Verify each finding (do not perform-agree). Address blocking findings before proceeding.
+3. **`squad-code-review-mandatory`** — Use the repository-approved independent reviewer on the diff; client-specific agent names are optional adapters. Verify each finding (do not perform-agree). Address blocking findings before proceeding.
 
 Once all three gates are clean, run:
 

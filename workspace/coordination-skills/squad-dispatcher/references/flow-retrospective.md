@@ -36,7 +36,9 @@ prompt is not proof that its instructions were loaded. Record the selected path
 and revision/hash with the existing startup/checkpoint evidence, together with
 native session, actor, reservation generation and actual runtime policy.
 
-A Claude launcher, callback or process assumption is not a Codex capability.
+Apply [runtime-independent roles](../../../agent-loop/runtime-compatibility.md).
+A launcher, callback or process assumption from one runtime is not a capability
+of another runtime or execution surface.
 Verify the effective client/model/permission mode and a supported callback route
 before claiming readiness. A startup/provider failure is a runtime failure until
 evidence shows a skill violation; preserve the same assignment/native identity

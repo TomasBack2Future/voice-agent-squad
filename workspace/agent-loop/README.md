@@ -8,6 +8,15 @@ collect usage, dispatch work, approve releases or activate the proposed loop. Th
 [context contracts](../../docs/proposals/agent-loop-context-contracts.md) remain
 proposals beyond the implemented surfaces listed here.
 
+## Role and runtime contract
+
+[Runtime-independent roles](runtime-compatibility.md) defines equal operational
+requirements for Muse, Claude and Codex across Dispatcher, Worker, Deployer,
+Reviewer and Investigator. It is a normative contract, not a claim that every
+adapter is implemented or qualified. The Worker schema below stays Worker-only.
+Qualify executable/version, client surface, effective policy and each required
+operation separately; use existing repair owners for missing capabilities.
+
 ## Portable Worker context package
 
 The package separates four concerns that the first Studio pilot carried in one
@@ -129,8 +138,14 @@ env -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u SQUAD_SESSION_ID -u SQUAD_AGENT \
 `--check` performs one read-only coordination query with the same child identity
 used at launch. A valid reserved/unbound entry passes with `binding: pending`;
 that is preparation, not ownership or permission to execute work. It never
-starts a model, claims, binds or mutates an environment. Preflight without
-`--launch-config` explicitly reports `launcher.status: not_checked`.
+starts a model, claims, binds or mutates an environment. Execution preflight
+requires a checked launch config for both Claude and Codex. Use `--context-only`
+explicitly for portable input checks without a launcher; the receipt reports
+`status: context-checked` and `launcher.status: not_checked`, never `ready`.
+Do not use that receipt to admit a session. Muse supports this context check via
+its shared `.agents/skills` discovery path, but execution preflight fails with an
+explicit unavailable-adapter error until a reviewed Muse launcher is integrated.
+Unknown runtimes are rejected by both the CLI and the importable Python API.
 
 Use the same command without `--check` as the new cmux workspace command, then
 bind the returned native id to the reservation. Only a successful, well-formed
@@ -156,7 +171,10 @@ wrapper or live Worker is changed by adding this source capability.
 `post-rewrite` hooks. A pull/merge, checkout or completed rebase in the selected
 checkout and branch refreshes committed skills into **one versioned snapshot**.
 `.codex/skills`, `.claude/skills` and Codex's `.agents/skills` discovery entries
-all link to that snapshot. It needs Python 3 on macOS/Linux and does not use
+all link to that snapshot. Muse may discover the shared `.agents/skills` entries;
+verify discovery and actual loading in the selected installed client before use.
+Do not create an independent Muse skill copy merely for its runtime name.
+It needs Python 3 on macOS/Linux and does not use
 client-specific hook support, the Squad daemon, an MCP connection or network.
 
 Install deliberately, while the source checkout is on the selected branch:
@@ -224,13 +242,14 @@ new MCP coordination surface.
 
 ## Worker startup probe
 
-From an installed or reviewed package, before creating the session:
+From an installed or reviewed package, prepare portable inputs before execution
+preflight (this command does not authorize creating the session):
 
 ```bash
 python3 worker_preflight.py --assignment /absolute/assignment.json \
   --profile /absolute/selected/profile.json --runtime claude \
   --skill /absolute/workspace/.claude/skills/agent-loop-worker/SKILL.md \
-  --tool squad --tool squad-grok-review
+  --tool squad --tool squad-grok-review --context-only
 ```
 
 Supply each required client-visible skill with another `--skill`. Relative
@@ -312,7 +331,7 @@ than inheriting an independently drifting profile's model selection.
 | Codex / sub2api | Actual upstream model, Responses compatibility, output/resume/tool behavior, gateway quota/limits and account-pool semantics |
 | Claude / existing approved gateway | Resolved model, permission boundaries, structured output/resume, distinction between launches, turns and API requests |
 | Grok / existing subscription | Read-only review contract, session identity, usage semantics and required publisher policy |
-| Muse | Deferred; excluded from initial selection/fallback and launch prerequisites |
+| Muse | Eligible under the common role contract; this package has no merged qualified Muse launcher. Verify the native CLI/MSP surface, skill loading, explicit model/permissions, custody and both event directions before unattended adoption |
 
 Codex's two entries are one runtime with distinct service routes, not necessarily
 two independent quota pools. Do not add their balances or apply the OpenAI account
@@ -379,6 +398,62 @@ The rolling planner now returns `review_next` independently of merge holds and
 CI/ENV waits. Only verified complete-diff admissions can enter it; in-flight or
 already-attempted tuples reconcile instead of sampling again. See the
 [review lane contract](../coordination-skills/squad-dispatcher/references/rolling-delivery.md#independent-review-lane).
+
+### Muse lifecycle qualification and execution boundary
+
+`muse_session_host.py` is a bounded MSP lifecycle probe, **not an admitted
+unattended task executor**. The previous renewal-only host has been disabled:
+stopping heartbeats does not prevent a native tool or descendant from continuing
+to write after losing ownership. Neither `turn/interrupt` nor
+`session/setApprovalMode` is a persistent Squad-generation execution fence.
+Worker and Dispatcher task starts fail before spawning a server or receiver;
+Deployer, Reviewer and Investigator execution has no adapter here. This does not
+exclude Muse from interactive roles under their ordinary operation authority.
+
+Probe configuration requires absolute client/coordination/ledger/workspace/state
+and prompt paths, a native UUID, `agent_id`, `role: "probe"`,
+`model: "muse-spark-1.3-contributor"`, `provider: "meta"`,
+`permission_mode: "yolo"`, and an explicit catalog-supported `reasoning_effort`.
+No defaults, alternative models, legacy approval/sandbox config or task prompt
+are accepted for execution. `environment` permits only PATH, GH_CONFIG_DIR and
+SQUAD_HOME routing paths. Do not put secrets in config or evidence.
+
+The pinned adapter checks Muse `1.4.2-R4684.1` and its exported stable schema
+fingerprint. MSP `serve` explicitly receives `--provider meta --model
+muse-spark-1.3-contributor --disable-sandbox --trust-workspace`; it has no
+`--yolo` option. `session/start` explicitly selects model/provider/`allowAll`.
+The host reads back exact session/workspace/model/provider/approval and catalog
+effort. Sandbox posture is fixed by the host's process arguments, not a fabricated
+wire field. Resume first reads the retained session and rejects a mismatched or
+non-idle selection before loading, then verifies the resumed reply. It never
+silently repairs permissions or switches models. Unknown versions, schemas,
+models and permission states fail closed.
+
+`--prepare` creates one no-turn probe session; `--check` verifies its no-turn
+resume. Normal invocation rejects managed execution; there is no arbitrary
+`/rpc`, user prompt or event-turn escape. Evidence says `lifecycle-verified` and
+`task_execution: blocked`, never unattended-ready. Native duplicate-session
+admission is separate from, and does not prove, claim-loss write exclusion.
+
+Opt-in native tests use temporary workspaces with no Squad claim/controller:
+
+```sh
+MUSE_NATIVE_EXECUTABLE=/absolute/path/to/muse \
+MUSE_NATIVE_EVIDENCE=/absolute/private/evidence \
+python3 -m unittest discover -s workspace/agent-loop/tests -p test_muse_native.py
+```
+
+They verify explicit 1.3/YOLO readback, a bounded text-only provider response,
+same-native resume, wrong permission/model rejection and duplicate native
+loading rejection. Ordinary CI skips these account-dependent tests. Recorded
+permissions and model catalog alone are not successful provider execution.
+
+The remaining native adapter requirement is a persistent per-tool execution gate
+bound atomically to current controller actor/native/epoch and Worker/claim
+generation, including descendant and in-flight operation custody. Until that
+capability is implemented and independently qualified, keep managed execution
+blocked and preserve the original owners, external operations and receipts.
+Source tests do not authorize installing the adapter or migrating live sessions.
 
 ## Qualified Codex control plane
 
