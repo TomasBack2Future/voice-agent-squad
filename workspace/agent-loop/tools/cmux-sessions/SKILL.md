@@ -5,6 +5,10 @@ description: Launch, observe and narrowly control cmux terminal or agent session
 
 # cmux sessions
 
+Apply [runtime-independent roles](../../runtime-compatibility.md). Verify each
+role/runtime/client tuple; a terminal or skill catalog entry is not launch,
+resume, callback or execution-fence qualification.
+
 Use cmux as live-session transport. Squad remains authoritative for work
 ownership, reservations, dependencies and environment locks.
 

@@ -84,7 +84,7 @@ only the existing materially repaired pre-sampling exception allows retry.
    Do not restart an existing review or resample a timed-out head merely to use
    the longer cap.
    Do not change the user's global Grok configuration or
-   the owning Codex Worker's model/effort.
+   the owning Worker's runtime/model/effort.
 3. After doctor succeeds, launch one local wrapper invocation for that frozen
    input as a managed asynchronous process, keeping its process/session handle.
    While it runs, execute/watch full required CI and integration tests on the

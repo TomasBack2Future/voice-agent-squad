@@ -1,9 +1,13 @@
 ---
 name: squad-dispatcher
-description: "Run one bounded central-dispatch reconciliation cycle for Squad: own product/design admission, discover current GitHub Issues, map canonical Squad items and explicit dependencies, reconcile existing Worker Codex tasks and durable dispatch reservations, and create only missing independent Worker tasks. Use only for the dedicated recurring Dispatcher task or when explicitly asked to dispatch/reconcile Squad work; never implement product changes, claim environments, merge, deploy, recover locks, or close Issues."
+description: "Run one bounded central-dispatch reconciliation cycle for Squad: own product/design admission, discover current GitHub Issues, map canonical Squad items and explicit dependencies, reconcile existing Worker sessions and durable dispatch reservations, and create only missing independent Worker tasks. Use only for the dedicated recurring Dispatcher task or when explicitly asked to dispatch/reconcile Squad work; never implement product changes, claim environments, merge, deploy, recover locks, or close Issues."
 ---
 
 # Squad Dispatcher
+
+Apply [runtime-independent roles](../../agent-loop/runtime-compatibility.md).
+The Dispatcher and each assigned role may use Muse, Claude or Codex; require
+equivalent operation-specific capabilities and preserve current custody.
 
 For installed versioned decisions and verified recovery, use
 [current decisions](../../agent-loop/roles/worker/references/decision-recovery.md).
@@ -230,7 +234,7 @@ request. A released claim is not proof that the Worker cannot resume.
 Never wait for Worker termination to answer its blocking design question.
 
 1. Resolve the Dispatcher identity once. Read Squad `status`, `who`, `doctor`,
-   and `dispatch list --active --json`; list existing Codex tasks compactly.
+   and `dispatch list --active --json`; inspect existing sessions through their recorded runtime/client adapter compactly.
 2. Fetch current open GitHub Issues with `gh`, including number, title, labels,
    assignees, body, state, linked PRs, and blocking relationships. GitHub and
    the live Squad ledger are authoritative; do not use a cached queue.
@@ -357,7 +361,7 @@ and read-only work performed during it are not notification-worthy.
 
 ## Recovery candidates
 
-When an `ENV-*` claim appears stale, identify the holder's actual Codex task.
+When an `ENV-*` claim appears stale, identify the holder's actual runtime/native session.
 Absence from Squad `who` is not proof of death. If the task is running, leave it
 alone. If task identity/status or external state is ambiguous, report the
 blocker. Only when the task is confirmed stopped should you create at most one

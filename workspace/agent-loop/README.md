@@ -8,6 +8,15 @@ collect usage, dispatch work, approve releases or activate the proposed loop. Th
 [context contracts](../../docs/proposals/agent-loop-context-contracts.md) remain
 proposals beyond the implemented surfaces listed here.
 
+## Role and runtime contract
+
+[Runtime-independent roles](runtime-compatibility.md) defines equal operational
+requirements for Muse, Claude and Codex across Dispatcher, Worker, Deployer,
+Reviewer and Investigator. It is a normative contract, not a claim that every
+adapter is implemented or qualified. The Worker schema below stays Worker-only.
+Qualify executable/version, client surface, effective policy and each required
+operation separately; use existing repair owners for missing capabilities.
+
 ## Portable Worker context package
 
 The package separates four concerns that the first Studio pilot carried in one
@@ -156,7 +165,10 @@ wrapper or live Worker is changed by adding this source capability.
 `post-rewrite` hooks. A pull/merge, checkout or completed rebase in the selected
 checkout and branch refreshes committed skills into **one versioned snapshot**.
 `.codex/skills`, `.claude/skills` and Codex's `.agents/skills` discovery entries
-all link to that snapshot. It needs Python 3 on macOS/Linux and does not use
+all link to that snapshot. Muse may discover the shared `.agents/skills` entries;
+verify discovery and actual loading in the selected installed client before use.
+Do not create an independent Muse skill copy merely for its runtime name.
+It needs Python 3 on macOS/Linux and does not use
 client-specific hook support, the Squad daemon, an MCP connection or network.
 
 Install deliberately, while the source checkout is on the selected branch:
@@ -312,7 +324,7 @@ than inheriting an independently drifting profile's model selection.
 | Codex / sub2api | Actual upstream model, Responses compatibility, output/resume/tool behavior, gateway quota/limits and account-pool semantics |
 | Claude / existing approved gateway | Resolved model, permission boundaries, structured output/resume, distinction between launches, turns and API requests |
 | Grok / existing subscription | Read-only review contract, session identity, usage semantics and required publisher policy |
-| Muse | Deferred; excluded from initial selection/fallback and launch prerequisites |
+| Muse | Eligible under the common role contract; this package has no merged qualified Muse launcher. Verify the native CLI/MSP surface, skill loading, explicit model/permissions, custody and both event directions before unattended adoption |
 
 Codex's two entries are one runtime with distinct service routes, not necessarily
 two independent quota pools. Do not add their balances or apply the OpenAI account

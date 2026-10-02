@@ -48,6 +48,20 @@ must be reconciled before any database rollback. Connection addresses, aliases
 and network rules belong in the canonical reference, not inferred from old
 reports or another environment.
 
+## Runtime-independent role compatibility
+
+Muse, Claude and Codex are eligible for every authorized role, including
+Dispatcher, Worker, Deployer, Reviewer and Investigator. Apply the same capability
+requirements to the same role/operation/custody mode; client names do not grant
+or remove authority. Verify the actual execution surface and installed adapter,
+not just skill visibility or executable presence. Use the maintained
+`voice-agent-squad/workspace/agent-loop/runtime-compatibility.md` contract.
+Missing support is a repairable capability gap with an owner; do not silently
+substitute a different model, weaker permission/custody rule, or another role.
+Existing review requirements, runtime guards, pauses and installation boundaries
+remain in force. Generic auto-pick loops and client-specific hooks cannot override
+a dedicated role's assignment or prove unattended progress.
+
 ## Session control plane
 
 Squad is durable authority for assignment, ownership, dependency and environment
