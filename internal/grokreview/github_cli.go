@@ -307,7 +307,7 @@ func (g *GitHubCLI) PublishReview(ctx context.Context, token, checkName string, 
 	checkInput, err := json.Marshal(map[string]any{
 		"name": checkName, "head_sha": snapshot.HeadSHA, "status": "completed",
 		"conclusion":  conclusion,
-		"external_id": "local-grok:" + snapshot.Repository + ":" + strconv.Itoa(snapshot.Number) + ":" + snapshot.HeadSHA,
+		"external_id": publicationExternalID(snapshot.Repository, snapshot.Number, snapshot.HeadSHA, audit.AttemptID, audit.BundleSHA256),
 		"details_url": comment.HTMLURL,
 		"output": map[string]string{
 			"title":   "Grok review " + string(result.Verdict),
@@ -513,4 +513,74 @@ func (g *GitHubCLI) VerifyRecoveryCheck(ctx context.Context, token string, appID
 		}
 	}
 	return fmt.Errorf("current Check inventory exceeds bounded verification")
+}
+
+func publicationExternalID(repo string, pr int, head, id, bundleHash string) string {
+	if id != "" {
+		return "local-grok-attempt:" + id + ":" + bundleHash
+	}
+	return "local-grok:" + repo + ":" + strconv.Itoa(pr) + ":" + head
+}
+
+// FindAttemptPublication is read-only. A crash can lose a POST response, so the
+// Check carries the exact admitted attempt and complete frozen-input hash. Never
+// infer timeout from failure alone or select a Check from another attempt.
+func (g *GitHubCLI) FindAttemptPublication(ctx context.Context, token string, appID int64, r AttemptReceipt) (Publication, error) {
+	var found Publication
+	if !validAttemptID(r.ID) || !r.SamplingCompleted || len(r.Identity.BundleSHA256) != 64 {
+		return found, fmt.Errorf("joined sampling and exact attempt/input required")
+	}
+	name := "grok-review"
+	if r.Settings.Mode == "shadow" {
+		name = "grok-review-shadow"
+	}
+	expected := publicationExternalID(r.Identity.Repository, r.Identity.PR, r.Identity.HeadSHA, r.ID, r.Identity.BundleSHA256)
+	for page := 1; page <= 10; page++ {
+		raw, err := g.call(ctx, token, []string{"api", fmt.Sprintf("repos/%s/commits/%s/check-runs?per_page=100&page=%d", r.Identity.Repository, r.Identity.HeadSHA, page)}, nil)
+		if err != nil {
+			return found, err
+		}
+		var response struct {
+			Total  int `json:"total_count"`
+			Checks []struct {
+				ID         int64  `json:"id"`
+				Name       string `json:"name"`
+				Head       string `json:"head_sha"`
+				External   string `json:"external_id"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+				URL        string `json:"html_url"`
+				Details    string `json:"details_url"`
+				App        struct {
+					ID int64 `json:"id"`
+				} `json:"app"`
+				Output struct {
+					Title string `json:"title"`
+				} `json:"output"`
+			} `json:"check_runs"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			return found, err
+		}
+		for _, c := range response.Checks {
+			if c.Name != name || c.App.ID != appID {
+				continue
+			}
+			if c.External != expected {
+				continue
+			}
+			conclusion := "failure"
+			if r.Verdict == VerdictApproved {
+				conclusion = "success"
+			}
+			if c.ID <= 0 || c.Head != r.Identity.HeadSHA || c.Status != "completed" || c.Conclusion != conclusion || c.Output.Title != "Grok review "+string(r.Verdict) || found.CheckRunID != 0 {
+				return Publication{}, fmt.Errorf("original publication is ambiguous, unresolved or mismatched")
+			}
+			found = Publication{CheckRunID: c.ID, CheckURL: c.URL, CommentURL: c.Details, Conclusion: c.Conclusion}
+		}
+		if page*100 >= response.Total {
+			return found, nil
+		}
+	}
+	return Publication{}, fmt.Errorf("original publication inventory exceeds bound")
 }

@@ -17,6 +17,7 @@ from codex_rpc import RPC
 from codex_worker_launcher import child_environment, check_qualification, live_target, save, server_identity
 from codex_heartbeat import heartbeat, CustodyRejected, require_execution_fence
 from validate_context_package import ROOT, ValidationError, validate_file
+from codex_writer_fence import writer_intent, writer_record
 
 EVENT = re.compile(r'worker-terminal-v1/([A-Za-z0-9_-]+)/([1-9][0-9]*)/([A-Za-z0-9_-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed)/([1-9][0-9]*)\Z')
 
@@ -224,25 +225,38 @@ def supervise(argv, assignment, c, env, config_path, owner):
         require_execution_fence(c)
     state = Path(c['state_directory'])
     path = state / (c['native_session_id'] + '.receiver.json')
-    with subprocess.Popen(argv, cwd=assignment['worktree'] if assignment else c['worktree'], env=env) as child:
+    journal = writer_intent(c)
+    lease = dict(c, role='worker' if assignment else 'dispatcher', incarnation=str(uuid.uuid4()))
+    controller_receiver(lease)  # Global controller receiver custody precedes any new native client.
+    try:
+        client = subprocess.Popen(argv, cwd=assignment['worktree'] if assignment else c['worktree'], env=env)
+    except OSError:
+        controller_receiver(lease, release=True)
+        writer_record(c, journal, state='not-started')  # Popen joined its failed exec; no PID invented.
+        raise
+    with client as child:
+        writer_record(c, journal, state='running', writer_pid=child.pid, writer_started_at=process_start(child.pid))
         receiver = dict(c, role='worker' if assignment else 'dispatcher',
                         worktree=assignment['worktree'] if assignment else c['worktree'], owner_pid=child.pid,
                         owner_started_at=process_start(child.pid),
-                        incarnation=str(uuid.uuid4()), max_seconds=82800, server_identity=owner)
+                        incarnation=lease['incarnation'], max_seconds=82800, server_identity=owner)
         if assignment:
             receiver.update(reservation=assignment['reservation']['key'],
                             generation=assignment['reservation']['generation'], item=assignment['item'])
         save(path, receiver)
         with subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--config', str(path)],
                               cwd=receiver['worktree'], env=env) as helper:
+            writer_record(c, journal, helper_pid=helper.pid, helper_started_at=process_start(helper.pid))
             previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            client_exit = None
             try:
                 renewing = True
                 heartbeat_reported = False
                 receiver_reported = False
                 while True:
                     try:
-                        return child.wait(timeout=30)
+                        client_exit = child.wait(timeout=30)
+                        return client_exit
                     except subprocess.TimeoutExpired:
                         if renewing and assignment:
                             try:
@@ -268,7 +282,9 @@ def supervise(argv, assignment, c, env, config_path, owner):
                 # external operation as a response to a transport failure.
                 if helper.poll() is None:
                     helper.terminate()
-                helper.wait(timeout=10)
+                helper_exit = helper.wait(timeout=10)
+                if client_exit is not None:
+                    writer_record(c, journal, state='joined', writer_exit=client_exit, helper_exit=helper_exit)
 
 
 def main():

@@ -76,29 +76,30 @@ func (a *Admission) Reconcile(ctx context.Context, id, repository string, pr int
 			if loadErr != nil {
 				return loadErr
 			}
+
 			if stored.Joined {
-				if stored.Identity.Repository != repository || stored.Identity.PR != pr || stored.Settings != a.settings {
-					return fmt.Errorf("terminal join identity/settings mismatch")
+				r = stored
+			} else {
+				if stored.WrapperPID <= 0 || (stored.ReviewerPID <= 0 && stored.LaunchStage != "admitted") {
+					return fmt.Errorf("original process provenance unavailable; terminal/native join proof required")
 				}
-				return nil
-			}
-			if stored.WrapperPID <= 0 || (stored.ReviewerPID <= 0 && stored.LaunchStage != "admitted") {
-				return fmt.Errorf("original process provenance unavailable; terminal/native join proof required")
-			}
-			if err = a.processAbsent(stored.WrapperPID); err != nil {
-				return err
-			}
-			if stored.ReviewerPID > 0 {
-				if err = a.processAbsent(stored.ReviewerPID); err != nil {
+				if err = a.processAbsent(stored.WrapperPID); err != nil {
 					return err
 				}
+				if stored.ReviewerPID > 0 {
+					if err = a.processAbsent(stored.ReviewerPID); err != nil {
+						return err
+					}
+				}
+				r = stored
+				r.Joined = true
+				if !stored.SamplingCompleted {
+					r.Verdict = VerdictError
+					r.FailureStage = "sampling"
+					r.FailureKind = CLIFailureCanceled
+				}
+				r.CompletedAt = time.Now().Unix()
 			}
-			r = stored
-			r.Joined = true
-			r.Verdict = VerdictError
-			r.FailureStage = "sampling"
-			r.FailureKind = CLIFailureCanceled
-			r.CompletedAt = time.Now().Unix()
 		} else {
 			if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 				return fmt.Errorf("terminal join journal is not private")
@@ -122,6 +123,30 @@ func (a *Admission) Reconcile(ctx context.Context, id, repository string, pr int
 	if r.ID != id || r.Identity.Repository != repository || r.Identity.PR != pr || !r.Joined || r.CompletedAt <= 0 || r.Settings != a.settings {
 		return fmt.Errorf("terminal join identity/settings mismatch")
 	}
+
+	beforeReadback := r
+	lookupApplied := false
+	if r.SamplingCompleted && r.Publication.CheckRunID == 0 {
+		if a.publicationLookup == nil {
+			return fmt.Errorf("original publication outcome unavailable; qualified original terminal/Check proof required")
+		}
+		if r.WrapperPID > 0 {
+			if err := a.processAbsent(r.WrapperPID); err != nil {
+				return err
+			}
+		}
+		publication, err := a.publicationLookup(ctx, r)
+		if err != nil {
+			return err
+		}
+		if publication.CheckRunID > 0 {
+			r.Publication = publication
+			lookupApplied = true
+			if r.SamplingFailureStage == "sampling" && r.Verdict == VerdictError && r.FailureKind == CLIFailureTimeout {
+				r.FailureStage = "sampling"
+			}
+		}
+	}
 	return store.WithTxRetry(ctx, a.db, func(tx *sql.Tx) error {
 		var raw string
 		if err := tx.QueryRowContext(ctx, "SELECT receipt FROM review_attempts WHERE id=?", id).Scan(&raw); err != nil {
@@ -135,10 +160,18 @@ func (a *Admission) Reconcile(ctx context.Context, id, repository string, pr int
 			return fmt.Errorf("terminal join input custody changed")
 		}
 		if old.Joined {
-			if old != r {
+			if old == r {
+				return nil
+			}
+			if !lookupApplied || old != beforeReadback {
 				return fmt.Errorf("terminal join receipt conflicts with durable history")
 			}
-			return nil
+			encoded, err := json.Marshal(r)
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, "UPDATE review_attempts SET receipt=? WHERE id=?", string(encoded), id)
+			return err
 		}
 		result, err := tx.ExecContext(ctx, "DELETE FROM review_flights WHERE repository=? AND pr=? AND attempt=?", r.Identity.Repository, r.Identity.PR, id)
 		if err != nil {

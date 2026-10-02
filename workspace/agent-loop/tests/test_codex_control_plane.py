@@ -276,9 +276,10 @@ class CodexControlPlaneTests(unittest.TestCase):
         child=Mock(pid=os.getpid())
         child.__enter__=Mock(return_value=child);child.__exit__=Mock(return_value=False)
         child.wait.side_effect=[subprocess.TimeoutExpired('client',30),subprocess.TimeoutExpired('client',30),0]
-        helper=Mock()
+        helper=Mock(pid=os.getpid())
         helper.__enter__=Mock(return_value=helper);helper.__exit__=Mock(return_value=False)
         helper.poll.return_value=None
+        helper.wait.return_value=0
         with patch.object(receiver,'require_execution_fence'), patch.object(receiver.subprocess,'Popen',side_effect=[child,helper]), \
              patch.object(receiver,'process_start',return_value='start'), \
              patch.object(receiver,'heartbeat',side_effect=[failure,None]) as renew:

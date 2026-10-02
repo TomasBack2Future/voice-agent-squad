@@ -250,3 +250,18 @@ actual child PID remains blocked on original child/native join provenance; wrapp
 absence alone cannot prove an orphan sampler ended. The runtime/adapter maintainer
 and installation owner own that bounded provenance qualification. Joined replay
 is idempotent and never refunds an exact-input or one-use recovery slot.
+
+Shadow and required publication are separate lanes: a shadow sample never
+satisfies or consumes the required Check. Exact-input dedupe includes mode,
+while single-flight remains repository/PR-wide across both modes. Changing
+model/effort within a mode does not grant another normal sample.
+
+Before any publication, admission durably checkpoints the synchronously joined
+sampling result. Failure to record that custody prevents publishing. Publication
+checkpoints its actual response independently. If the response or terminal
+journal is lost, `reconcile` reads the configured App's actual Check, matching
+mode, head, attempt ID, complete frozen-input hash and expected verdict. This is
+read-only GitHub access and does not initialize Grok. A uniquely matched failed
+no-verdict timeout restores the one-use recovery prerequisite; ambiguous, live,
+wrong-input or wrong-verdict evidence fails closed. Original terminal artifacts
+and every actual review/CI gate remain intact; no approval is synthesized.

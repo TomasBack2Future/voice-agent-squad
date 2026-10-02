@@ -341,6 +341,12 @@ func TestLegacyImportPreservesValidDifferentHeadHistory(t *testing.T) {
 	}
 	old.CompletedAt = 1
 	old.HeadSHA = status.HeadSHA
+	old.Mode = "shadow"
+	write(filepath.Join(statusDir, "old-valid.json"), old)
+	if err := a.ImportLegacy(path); err != nil {
+		t.Fatal("valid shadow poisoned required timeout recovery", err)
+	}
+	old.Mode = status.Mode
 	write(filepath.Join(statusDir, "old-valid.json"), old)
 	if err := a.ImportLegacy(path); err == nil {
 		t.Fatal("valid current-head verdict ignored")
@@ -496,5 +502,143 @@ func TestAdmissionInterruptedBeforeLaunchAndSpawnGap(t *testing.T) {
 				t.Fatal("prelaunch interruption wedges corrected head", err)
 			}
 		})
+	}
+}
+
+func TestAdmissionShadowDoesNotConsumeRequiredSample(t *testing.T) {
+	dir := t.TempDir()
+	shadow := admissionSettings()
+	shadow.Mode = "shadow"
+	a := openTestAdmission(t, dir, "", shadow)
+	if err := a.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
+	}
+	if err := openTestAdmission(t, dir, "", admissionSettings()).Start(context.Background(), admissionBundle()); err == nil {
+		t.Fatal("overlapping modes admitted")
+	}
+	report := timeoutReport()
+	report.Result.Verdict = VerdictApproved
+	if err := a.Finish(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	required := openTestAdmission(t, dir, "", admissionSettings())
+	if err := required.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal("shadow blocked required gate", err)
+	}
+	if err := required.Finish(context.Background(), timeoutReport()); err != nil {
+		t.Fatal(err)
+	}
+	if err := openTestAdmission(t, dir, "", admissionSettings()).Start(context.Background(), admissionBundle()); err == nil {
+		t.Fatal("required sample repeated")
+	}
+}
+
+func TestAdmissionPublishedTimeoutWithoutJoinJournal(t *testing.T) {
+	for _, postPublication := range []bool{false, true} {
+		t.Run(fmt.Sprint(postPublication), func(t *testing.T) {
+			dir := t.TempDir()
+			a := openTestAdmission(t, dir, "", admissionSettings())
+			if err := a.Start(context.Background(), admissionBundle()); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.ReviewerStarted(context.Background(), os.Getpid()); err != nil {
+				t.Fatal(err)
+			}
+			report := timeoutReport()
+			if checkpoint, ok := any(a).(interface {
+				Checkpoint(context.Context, ReviewReport) error
+			}); ok {
+				sampling := report
+				sampling.Publication = Publication{}
+				if err := checkpoint.Checkpoint(context.Background(), sampling); err != nil {
+					t.Fatal(err)
+				}
+				if postPublication {
+					if err := checkpoint.Checkpoint(context.Background(), report); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			// Actual remote Check has committed, but the process dies before recording
+			// its response, or Finish cannot create the terminal journal.
+			if err := os.WriteFile(filepath.Join(dir, "joins"), []byte("not a directory"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Finish(context.Background(), report); err == nil {
+				t.Fatal("journal failure not reproduced")
+			}
+			if err := os.Remove(filepath.Join(dir, "joins")); err != nil {
+				t.Fatal(err)
+			}
+			resumed := openTestAdmission(t, dir, "", admissionSettings())
+			resumed.processAbsent = func(int) error { return nil }
+			if lookup, ok := any(resumed).(interface {
+				SetPublicationLookup(func(context.Context, AttemptReceipt) (Publication, error))
+			}); ok {
+				lookup.SetPublicationLookup(func(_ context.Context, r AttemptReceipt) (Publication, error) {
+					if r.FailureKind != CLIFailureTimeout {
+						t.Fatal("timeout outcome lost")
+					}
+					return report.Publication, nil
+				})
+			}
+			if err := resumed.Reconcile(context.Background(), a.AttemptID(), "owner/repo", 9); err != nil {
+				t.Fatal(err)
+			}
+			r, err := resumed.load(context.Background(), a.AttemptID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !recoverable(r) {
+				t.Fatal("published timeout rewritten to unrecoverable cancellation", r)
+			}
+			if err := openTestAdmission(t, dir, r.ID, admissionSettings()).Start(context.Background(), admissionBundle()); err != nil {
+				t.Fatal("proven timeout recovery blocked", err)
+			}
+		})
+	}
+}
+
+func TestReconcileLostPublicationResponsePreservesJoinedTimeout(t *testing.T) {
+	dir := t.TempDir()
+	a := openTestAdmission(t, dir, "", admissionSettings())
+	if err := a.Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
+	}
+	sampling := timeoutReport()
+	sampling.Publication = Publication{}
+	if err := a.Checkpoint(context.Background(), sampling); err != nil {
+		t.Fatal(err)
+	}
+	lost := sampling
+	lost.FailureStage = "publishing"
+	if err := a.Finish(context.Background(), lost); err != nil {
+		t.Fatal(err)
+	}
+	resumed := openTestAdmission(t, dir, "", admissionSettings())
+	resumed.processAbsent = func(int) error { return nil }
+	lookup := func(_ context.Context, r AttemptReceipt) (Publication, error) {
+		if r.SamplingFailureStage != "sampling" || r.FailureKind != CLIFailureTimeout {
+			t.Fatal("original sampling evidence lost")
+		}
+		return timeoutReport().Publication, nil
+	}
+	resumed.SetPublicationLookup(lookup)
+	if err := resumed.Reconcile(context.Background(), a.AttemptID(), "owner/repo", 9); err != nil {
+		t.Fatal(err)
+	}
+	// Refined actual publication and immutable original journal coexist.
+	if err := resumed.Reconcile(context.Background(), a.AttemptID(), "owner/repo", 9); err != nil {
+		t.Fatal("replay", err)
+	}
+	r, err := resumed.load(context.Background(), a.AttemptID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recoverable(r) {
+		t.Fatal("actual failed timeout Check not recovered", r)
+	}
+	if err := openTestAdmission(t, dir, r.ID, admissionSettings()).Start(context.Background(), admissionBundle()); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -628,3 +628,20 @@ aliases/tags, unknown action/command effects or unsupported triggers fail closed
 for independent qualification rather than creating a weaker environment lane.
 Manual source merge remains independent of fixture access once actual routing
 and Dispatcher admission are verified.
+
+Native client supervision persists a private per-native writer journal before
+OS spawn and records the actual client/helper PIDs. The session lock alone is
+insufficient after launcher death. Every launcher checks the retained journal
+before RPC or native resume; an unjoined intent blocks replacement even if the
+configured original writer PID has exited. Normal supervision records `joined`
+only after both owned processes have returned. A failed exec records
+`not-started` without inventing PIDs. Dispatcher receiver custody is acquired in
+the ledger before starting the new client, so another incarnation cannot start a
+second writer by choosing a different local state directory.
+
+Retain the same journal/state directory across adoption and rollback. Unknown
+spawn/PID-record windows and interrupted client/helper joins remain blocked on
+actual original native tool/process completion and external-operation custody.
+The native/runtime adapter maintainer and installer own that bounded qualification;
+there is no force-clear, lease expiry or automatic client/server kill. Source
+preparation never clears an existing live writer record to force adoption.

@@ -9,16 +9,20 @@ import (
 )
 
 type fakeModelReviewer struct {
-	result FindingsResult
-	audit  CLIAudit
-	err    error
-	bundle []byte
-	calls  int
+	result      FindingsResult
+	audit       CLIAudit
+	err         error
+	bundle      []byte
+	calls       int
+	afterReview func()
 }
 
 func (f *fakeModelReviewer) Review(_ context.Context, bundle []byte) (FindingsResult, CLIAudit, error) {
 	f.calls++
 	f.bundle = append([]byte(nil), bundle...)
+	if f.afterReview != nil {
+		f.afterReview()
+	}
 	return f.result, f.audit, f.err
 }
 
@@ -250,5 +254,23 @@ func TestLocalReviewServiceRejectsBaseChangeEvenWithSameHeadAndPatch(t *testing.
 	report, err := service.ReviewPullRequest(context.Background(), "token", "grok-review", "owner/repo", 9)
 	if err == nil || report.FailureStage != "identity" || github.published != 0 || model.calls != 1 {
 		t.Fatalf("report=%#v err=%v published=%d calls=%d", report, err, github.published, model.calls)
+	}
+}
+
+func TestSamplingCustodyFailurePreventsAnyPublication(t *testing.T) {
+	a := openTestAdmission(t, t.TempDir(), "", admissionSettings())
+	snapshot := PullRequestSnapshot{Repository: "owner/repo", Number: 9, BaseRef: "main", BaseSHA: "base", HeadSHA: "head", Title: "fix", Diff: "+fixed"}
+	model := &fakeModelReviewer{result: approvedFindings(), afterReview: func() { _ = a.db.Close() }}
+	github := &fakePullRequestGateway{snapshot: snapshot, current: snapshot}
+	service, err := NewLocalReviewService(model, github, "core", "policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetAdmission(a)
+	if _, err := service.ReviewPullRequest(context.Background(), "token", "grok-review", "owner/repo", 9); err == nil {
+		t.Fatal("failed sampling custody accepted")
+	}
+	if github.published != 0 {
+		t.Fatal("publication before joined-sampling checkpoint", github.published)
 	}
 }

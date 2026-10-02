@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+import tempfile
 from unittest.mock import Mock, patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import codex_dispatcher_adoption as adoption
@@ -11,7 +12,8 @@ from validate_context_package import ValidationError
 NATIVE='00000000-0000-0000-0000-000000000002'
 class DispatcherAdoptionTests(unittest.TestCase):
     def setUp(self):
-        self.c=dict(native_session_id=NATIVE,agent_id='new',dispatcher_agent_id='new',client='cli',
+        self.state=tempfile.TemporaryDirectory();self.addCleanup(self.state.cleanup)
+        self.c=dict(state_directory=self.state.name,native_session_id=NATIVE,agent_id='new',dispatcher_agent_id='new',client='cli',
                     coordination_executable='/fixture/squad',ledger_directory='/fixture/ledger',
                     controller_epoch=2,handoff_request_id='handoff-1',inactive_writer_pid=999999,
                     inactive_writer_joined=True,server_pid=123,endpoint='unix:///fixture/server',worktree='/fixture/worktree')

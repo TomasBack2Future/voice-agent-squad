@@ -48,3 +48,57 @@ func TestRecoveryCheckRequiresExactFailedAppGateAndRejectsVerdicts(t *testing.T)
 		})
 	}
 }
+
+func TestLostPublicationReadbackBindsAttemptInputAppModeAndVerdict(t *testing.T) {
+	for _, kind := range []string{"exact", "other-attempt", "other-input", "other-app", "other-mode", "active", "wrong-verdict", "duplicate", "missing"} {
+		t.Run(kind, func(t *testing.T) {
+			identity, _ := identityFor(admissionBundle())
+			r := AttemptReceipt{ID: "0123456789abcdef", Identity: identity, Settings: admissionSettings(), SamplingCompleted: true, Verdict: VerdictError, FailureKind: CLIFailureTimeout, FailureStage: "sampling"}
+			c := map[string]any{"id": 3, "name": "grok-review", "head_sha": r.Identity.HeadSHA, "external_id": publicationExternalID(r.Identity.Repository, r.Identity.PR, r.Identity.HeadSHA, r.ID, r.Identity.BundleSHA256), "status": "completed", "conclusion": "failure", "app": map[string]any{"id": 1}, "output": map[string]any{"title": "Grok review error"}}
+			switch kind {
+			case "other-attempt":
+				c["external_id"] = publicationExternalID(r.Identity.Repository, r.Identity.PR, r.Identity.HeadSHA, "fedcba9876543210", r.Identity.BundleSHA256)
+			case "other-input":
+				c["external_id"] = publicationExternalID(r.Identity.Repository, r.Identity.PR, r.Identity.HeadSHA, r.ID, strings.Repeat("0", 64))
+			case "other-app":
+				c["app"] = map[string]any{"id": 2}
+			case "other-mode":
+				c["name"] = "grok-review-shadow"
+			case "active":
+				c["status"] = "in_progress"
+			case "wrong-verdict":
+				c["output"] = map[string]any{"title": "Grok review blocking"}
+			}
+			checks := []any{c}
+			if kind == "duplicate" {
+				checks = append(checks, c)
+			}
+			if kind == "missing" {
+				checks = nil
+			}
+			g, err := NewGitHubCLI("/fake/gh", 1, 1<<20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g.execute = func(_ context.Context, args []string, _ []byte, _ []string) ([]byte, error) {
+				if !strings.Contains(strings.Join(args, " "), "commits/head/check-runs") {
+					t.Fatal("wrong head readback")
+				}
+				return json.Marshal(map[string]any{"total_count": len(checks), "check_runs": checks})
+			}
+			publication, err := g.FindAttemptPublication(context.Background(), "token", 1, r)
+			if kind == "active" || kind == "wrong-verdict" || kind == "duplicate" {
+				if err == nil {
+					t.Fatal("unqualified publication accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (publication.CheckRunID > 0) != (kind == "exact") {
+				t.Fatal("another invocation consumed", kind, publication)
+			}
+		})
+	}
+}

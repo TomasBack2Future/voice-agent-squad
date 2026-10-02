@@ -14,6 +14,7 @@ from codex_worker_launcher import (check_delivery_runtime, check_effective, chec
                                    child_environment, live_target, server_identity)
 from codex_receiver import supervise
 from validate_context_package import ROOT, ValidationError, validate_file
+from codex_writer_fence import check_writer_fence
 
 
 def controller_fence(c):
@@ -36,6 +37,7 @@ def controller_fence(c):
 
 
 def check_launch(c):
+    check_writer_fence(c)
     if (str(uuid.UUID(c['native_session_id'])) != c['native_session_id']
             or c['agent_id'] != c['dispatcher_agent_id'] or c['client'] != 'cli'):
         raise ValidationError('exact fresh native and legitimate new Dispatcher actor required')

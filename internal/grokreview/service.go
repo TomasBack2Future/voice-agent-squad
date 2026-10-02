@@ -2,6 +2,7 @@ package grokreview
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,6 +87,8 @@ type LocalReviewService struct {
 type ReviewAdmission interface {
 	Start(context.Context, []byte) error
 	Finish(context.Context, ReviewReport) error
+	Checkpoint(context.Context, ReviewReport) error
+	AttemptID() string
 }
 
 func (s *LocalReviewService) SetAdmission(a ReviewAdmission) { s.admission = a }
@@ -203,9 +206,25 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 		s.observe(ReviewObservation{State: ReviewStateStale, FailureStage: "identity", Snapshot: snapshot, Result: result, Audit: audit})
 		return ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: "identity"}, fmt.Errorf("pull request base or head changed during review; result was not published")
 	}
+	if s.admission != nil {
+		audit.AttemptID = s.admission.AttemptID()
+		audit.BundleSHA256 = fmt.Sprintf("%x", sha256.Sum256(bundle))
+		report = ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, FailureStage: failureStage}
+		if err := s.admission.Checkpoint(ctx, report); err != nil {
+			return report, fmt.Errorf("sampling custody checkpoint: %w", err)
+		}
+	}
 	s.observe(ReviewObservation{State: ReviewStatePublishing, Snapshot: snapshot, Result: result, Audit: audit})
 	publication, err := s.github.PublishReview(ctx, token, checkName, snapshot, result, audit)
-	report = ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, Publication: publication}
+	report = ReviewReport{Snapshot: snapshot, Result: result, Audit: audit, Publication: publication, FailureStage: failureStage}
+	if s.admission != nil {
+		checkpointCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		checkpointErr := s.admission.Checkpoint(checkpointCtx, report)
+		cancel()
+		if checkpointErr != nil {
+			return report, errors.Join(err, fmt.Errorf("publication custody checkpoint: %w", checkpointErr))
+		}
+	}
 	if err != nil {
 		report.FailureStage = "publishing"
 		s.observe(ReviewObservation{State: ReviewStateError, FailureStage: "publishing", Snapshot: snapshot, Result: result, Audit: audit, Publication: publication})

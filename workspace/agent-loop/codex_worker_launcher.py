@@ -14,6 +14,7 @@ import uuid
 
 from codex_rpc import RPC
 from validate_context_package import ROOT, ValidationError, validate_file
+from codex_writer_fence import check_writer_fence
 from worker_preflight import check_profile, check_worktree, git, repository_name
 from claude_worker_launcher import IDENTITY_ENV, binding, check_heartbeat_runtime
 from codex_heartbeat import heartbeat, require_execution_fence
@@ -155,6 +156,7 @@ def server_identity(c):
 def check_launch(assignment, config_path):
     check_profile(assignment)
     c = config_file(config_path)
+    check_writer_fence(c)
     checkpoint = resume_worktree(assignment, c)
     delivery = selected_readiness(assignment, c)
     if delivery['selected_phase'] not in ('source', 'merge'):

@@ -39,40 +39,43 @@ type ReviewIdentity struct {
 // AttemptReceipt is authoritative only in the private admission store. No diff,
 // prompt, findings prose, credentials or raw model output is persisted here.
 type AttemptReceipt struct {
-	LaunchStage   string         `json:"launch_stage,omitempty"`
-	WrapperPID    int            `json:"wrapper_pid,omitempty"`
-	ReviewerPID   int            `json:"reviewer_pid,omitempty"`
-	CostKnown     bool           `json:"cost_known"`
-	RequestID     string         `json:"request_id,omitempty"`
-	SessionID     string         `json:"session_id,omitempty"`
-	ResolvedModel string         `json:"resolved_model,omitempty"`
-	DurationMS    int64          `json:"duration_ms"`
-	ID            string         `json:"id"`
-	Parent        string         `json:"parent,omitempty"`
-	Identity      ReviewIdentity `json:"identity"`
-	Settings      ReviewSettings `json:"settings"`
-	Joined        bool           `json:"joined"`
-	Verdict       Verdict        `json:"verdict"`
-	FailureStage  string         `json:"failure_stage"`
-	FailureKind   CLIFailureKind `json:"failure_kind"`
-	Publication   Publication    `json:"publication"`
-	Usage         TokenUsage     `json:"usage"`
-	UsageKnown    bool           `json:"usage_known"`
-	CostUSD       float64        `json:"cost_usd"`
-	CompletedAt   int64          `json:"completed_at"`
+	LaunchStage          string         `json:"launch_stage,omitempty"`
+	SamplingFailureStage string         `json:"sampling_failure_stage,omitempty"`
+	SamplingCompleted    bool           `json:"sampling_completed"`
+	WrapperPID           int            `json:"wrapper_pid,omitempty"`
+	ReviewerPID          int            `json:"reviewer_pid,omitempty"`
+	CostKnown            bool           `json:"cost_known"`
+	RequestID            string         `json:"request_id,omitempty"`
+	SessionID            string         `json:"session_id,omitempty"`
+	ResolvedModel        string         `json:"resolved_model,omitempty"`
+	DurationMS           int64          `json:"duration_ms"`
+	ID                   string         `json:"id"`
+	Parent               string         `json:"parent,omitempty"`
+	Identity             ReviewIdentity `json:"identity"`
+	Settings             ReviewSettings `json:"settings"`
+	Joined               bool           `json:"joined"`
+	Verdict              Verdict        `json:"verdict"`
+	FailureStage         string         `json:"failure_stage"`
+	FailureKind          CLIFailureKind `json:"failure_kind"`
+	Publication          Publication    `json:"publication"`
+	Usage                TokenUsage     `json:"usage"`
+	UsageKnown           bool           `json:"usage_known"`
+	CostUSD              float64        `json:"cost_usd"`
+	CompletedAt          int64          `json:"completed_at"`
 }
 
 type RecoveryCheck func(context.Context, AttemptReceipt) error
 
 type Admission struct {
-	db            *sql.DB
-	dir           string
-	processAbsent func(int) error
-	settings      ReviewSettings
-	from          string
-	check         RecoveryCheck
-	receipt       AttemptReceipt
-	legacy        *AttemptReceipt
+	db                *sql.DB
+	dir               string
+	processAbsent     func(int) error
+	settings          ReviewSettings
+	from              string
+	check             RecoveryCheck
+	publicationLookup func(context.Context, AttemptReceipt) (Publication, error)
+	receipt           AttemptReceipt
+	legacy            *AttemptReceipt
 }
 
 // OpenAdmission never opens or migrates the Squad work ledger. All invocations
@@ -222,7 +225,7 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 			}
 		} else {
 			var count int
-			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM review_attempts WHERE identity=?", string(identityRaw)).Scan(&count); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM review_attempts WHERE identity=? AND json_extract(receipt, '$.settings.mode')=?", string(identityRaw), a.settings.Mode).Scan(&count); err != nil {
 				return err
 			}
 			if count != 0 {
@@ -246,19 +249,8 @@ func (a *Admission) Finish(ctx context.Context, report ReviewReport) error {
 	if r.ID == "" {
 		return fmt.Errorf("no admitted review to join")
 	}
+	r = receiptForReport(r, report)
 	r.Joined = true
-	r.Verdict = report.Result.Verdict
-	r.FailureStage = report.FailureStage
-	r.FailureKind = report.Audit.FailureKind
-	r.Publication = report.Publication
-	r.Usage = report.Audit.Usage
-	r.UsageKnown = report.Audit.Usage.TotalTokens > 0
-	r.CostUSD = report.Audit.CostUSD
-	r.CostKnown = report.Audit.CostUSD > 0
-	r.RequestID = report.Audit.RequestID
-	r.SessionID = report.Audit.SessionID
-	r.ResolvedModel = report.Audit.ResolvedModel
-	r.DurationMS = report.Audit.Duration.Milliseconds()
 	r.CompletedAt = time.Now().Unix()
 	if err := a.writeJoinJournal(r); err != nil {
 		return err
@@ -290,4 +282,52 @@ func (a *Admission) finishReceipt(ctx context.Context, r AttemptReceipt) error {
 		a.receipt = r
 	}
 	return err
+}
+
+func receiptForReport(r AttemptReceipt, report ReviewReport) AttemptReceipt {
+	r.Verdict = report.Result.Verdict
+	r.FailureStage = report.FailureStage
+	r.FailureKind = report.Audit.FailureKind
+	r.Publication = report.Publication
+	r.Usage = report.Audit.Usage
+	r.UsageKnown = report.Audit.Usage.TotalTokens > 0
+	r.CostUSD = report.Audit.CostUSD
+	r.CostKnown = report.Audit.CostUSD > 0
+	r.RequestID = report.Audit.RequestID
+	r.SessionID = report.Audit.SessionID
+	r.ResolvedModel = report.Audit.ResolvedModel
+	r.DurationMS = report.Audit.Duration.Milliseconds()
+
+	return r
+}
+
+// Checkpoint records the synchronously joined sampling outcome BEFORE publishing.
+// The publication response is separately checkpointed; the exact attempt-bound
+// remote Check can reconcile a crash between remote commit and response storage.
+func (a *Admission) Checkpoint(ctx context.Context, report ReviewReport) error {
+	r := receiptForReport(a.receipt, report)
+	if !a.receipt.SamplingCompleted {
+		r.SamplingFailureStage = report.FailureStage
+	}
+	r.SamplingCompleted = true
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	result, err := a.db.ExecContext(ctx, `UPDATE review_attempts SET receipt=? WHERE id=? AND EXISTS(SELECT 1 FROM review_flights WHERE attempt=?)`, string(raw), r.ID, r.ID)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("sampling checkpoint custody rejected")
+	}
+	a.receipt = r
+	return nil
+}
+func (a *Admission) SetPublicationLookup(lookup func(context.Context, AttemptReceipt) (Publication, error)) {
+	a.publicationLookup = lookup
 }

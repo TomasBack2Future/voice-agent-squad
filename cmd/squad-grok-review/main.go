@@ -148,6 +148,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		defer func() { _ = admission.Close() }()
+		admission.SetPublicationLookup(func(ctx context.Context, r grokreview.AttemptReceipt) (grokreview.Publication, error) {
+			github, token, err := prepareGitHubReadback(ctx, configuration)
+			if err != nil {
+				return grokreview.Publication{}, err
+			}
+			return github.FindAttemptPublication(ctx, token, configuration.appID, r)
+		})
 		id := configuration.recoveryFrom
 		if filepath.IsAbs(id) {
 			if err := admission.ImportLegacy(id); err != nil {
@@ -618,4 +625,27 @@ func safeProcessEnvironment() map[string]string {
 		}
 	}
 	return environment
+}
+
+// Reconcile only authenticates GitHub if an actual publication response was
+// lost. It never resolves/initializes Grok or loads a model runtime.
+func prepareGitHubReadback(ctx context.Context, c config) (*grokreview.GitHubCLI, string, error) {
+	binary, err := resolveBinary(c.githubBinary)
+	if err != nil {
+		return nil, "", err
+	}
+	key, err := os.ReadFile(c.appPrivateKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("read GitHub App key: %w", err)
+	}
+	jwt, err := grokreview.MintAppJWT(c.appID, key, time.Now())
+	if err != nil {
+		return nil, "", err
+	}
+	github, err := grokreview.NewGitHubCLI(binary, time.Minute, c.maxGitHubOutput)
+	if err != nil {
+		return nil, "", err
+	}
+	token, err := github.MintInstallationToken(ctx, jwt, c.installationID)
+	return github, token, err
 }

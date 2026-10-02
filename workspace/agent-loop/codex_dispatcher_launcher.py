@@ -14,6 +14,7 @@ from codex_worker_launcher import (check_delivery_runtime, check_effective, chec
                                    digest, live_target, qualify, selection, server_identity)
 from codex_receiver import supervise
 from validate_context_package import ROOT, ValidationError, validate_file
+from codex_writer_fence import check_writer_fence
 
 
 def config_file(path):
@@ -68,6 +69,7 @@ def fence(c):
 
 
 def check_launch(c):
+    check_writer_fence(c)
     receipt = fence(c)
     check_delivery_runtime(c, child_environment(c))
     binary = check_qualification(c)

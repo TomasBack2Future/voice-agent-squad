@@ -78,6 +78,8 @@ type TokenUsage struct {
 }
 
 type CLIAudit struct {
+	AttemptID       string
+	BundleSHA256    string
 	RequestID       string
 	SessionID       string
 	RequestedModel  string

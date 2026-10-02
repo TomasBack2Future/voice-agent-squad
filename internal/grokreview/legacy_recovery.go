@@ -160,7 +160,7 @@ func (a *Admission) ImportLegacy(path string) error {
 				return fmt.Errorf("legacy review custody has an unresolved invocation")
 			}
 			sameTuple := other.HeadSHA == r.Identity.HeadSHA && other.BaseSHA == r.Identity.BaseSHA && other.BaseRef == r.Identity.BaseRef
-			if sameTuple && (other.Verdict == VerdictApproved || other.Verdict == VerdictBlocking) {
+			if sameTuple && other.Mode == r.Settings.Mode && (other.Verdict == VerdictApproved || other.Verdict == VerdictBlocking) {
 				return fmt.Errorf("legacy review custody has a valid exact-tuple verdict")
 			}
 		}
