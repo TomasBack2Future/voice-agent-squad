@@ -189,6 +189,10 @@ upgrade, multi-item atomic acquisition or shared read-lock protocol is provided.
 
 ## Replacing stopped clients
 
+Successful takeover receipts and audit messages describe only the committed
+transaction. Events observed by a rolled-back attempt are discarded before a
+retry, including events acknowledged or replaced between attempts.
+
 This legacy operation is rejected atomically once the repository has any
 controller binding or retirement record. It must not bypass the current
 controller actor/native/epoch or move one reservation out of a bound cohort.
