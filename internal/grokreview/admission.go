@@ -40,6 +40,7 @@ type ReviewIdentity struct {
 // AttemptReceipt is authoritative only in the private admission store. No diff,
 // prompt, findings prose, credentials or raw model output is persisted here.
 type AttemptReceipt struct {
+	HumanGrantID           string                   `json:"human_grant_id,omitempty"`
 	Terminal               *TerminalDiagnostics     `json:"terminal_diagnostics,omitempty"`
 	RendererProvenance     *PatchRendererProvenance `json:"renderer_provenance,omitempty"`
 	InputProvenance        string                   `json:"input_provenance,omitempty"`
@@ -76,6 +77,7 @@ type AttemptReceipt struct {
 type RecoveryCheck func(context.Context, AttemptReceipt) error
 
 type Admission struct {
+	humanRestart              *humanRestartBinding
 	db                        *sql.DB
 	dir                       string
 	processAbsent             func(int) error
@@ -124,6 +126,7 @@ func OpenAdmission(dir string, settings ReviewSettings, from string, check Recov
  CREATE TABLE IF NOT EXISTS review_flights(repository TEXT NOT NULL, pr INTEGER NOT NULL, attempt TEXT NOT NULL UNIQUE, PRIMARY KEY(repository,pr));
  CREATE TABLE IF NOT EXISTS review_recoveries(parent TEXT PRIMARY KEY, child TEXT NOT NULL UNIQUE, identity TEXT NOT NULL UNIQUE);
  CREATE TABLE IF NOT EXISTS review_recovery_roots(tuple TEXT PRIMARY KEY, parent TEXT NOT NULL UNIQUE, child TEXT NOT NULL UNIQUE);
+ CREATE TABLE IF NOT EXISTS review_human_restarts(grant_id TEXT PRIMARY KEY, human_message TEXT NOT NULL, tuple TEXT NOT NULL, attempt TEXT NOT NULL UNIQUE, grant_sha256 TEXT NOT NULL, lineage TEXT NOT NULL, UNIQUE(human_message,tuple));
  CREATE TABLE IF NOT EXISTS review_completion_seals(attempt TEXT PRIMARY KEY, digest TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL, publisher_pid INTEGER NOT NULL DEFAULT 0, publication TEXT NOT NULL DEFAULT '{}');`)
 	if err != nil {
 		_ = db.Close()
@@ -169,6 +172,9 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 	identity, err := identityFor(bundle)
 	if err != nil {
 		return err
+	}
+	if a.humanRestart != nil {
+		return a.startHumanRestart(ctx, bundle, identity)
 	}
 	id := a.receipt.ID
 	candidate := AttemptReceipt{ID: id, Identity: identity, Settings: a.settings, WrapperPID: os.Getpid(), LaunchStage: "admitted"}

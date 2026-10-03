@@ -20,6 +20,8 @@ import (
 )
 
 type config struct {
+	humanRestart           bool
+	humanGrantPath         string
 	provider               string
 	repositoryHost         string
 	cloneLayout            string
@@ -99,6 +101,7 @@ type doctorOutput struct {
 }
 
 type commandOutput struct {
+	HumanGrantID       string                              `json:"human_grant_id,omitempty"`
 	Terminal           *grokreview.TerminalDiagnostics     `json:"terminal_diagnostics,omitempty"`
 	RendererProvenance *grokreview.PatchRendererProvenance `json:"renderer_provenance,omitempty"`
 	ParentAttempt      string                              `json:"parent_attempt,omitempty"`
@@ -302,6 +305,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				return grokreview.VerifyCompletionCustody(ctx, c, owner)
 			})
 		}
+		if configuration.humanRestart {
+			owner, ownerErr := currentReviewOwner()
+			if ownerErr != nil {
+				_, _ = fmt.Fprintln(stderr, ownerErr)
+				return 1
+			}
+			if err := admission.ImportHumanRestart(configuration.humanGrantPath, owner); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
 		if statusWriter != nil {
 			if err = statusWriter.BindAttempt(admission.AttemptID()); err != nil {
 				_, _ = fmt.Fprintln(stderr, err)
@@ -325,6 +339,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		output := newCommandOutput(report)
 		if admission != nil {
 			output.AttemptID = admission.AttemptID()
+			output.HumanGrantID = admission.Receipt().HumanGrantID
 			output.RendererProvenance = admission.Receipt().RendererProvenance
 			output.ParentAttempt = admission.Receipt().Parent
 			output.InputProvenance = admission.Receipt().InputProvenance
@@ -431,7 +446,10 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 
 func parseConfig(args []string, output io.Writer) (config, error) {
 	var configuration config
-	if len(args) > 0 && args[0] == "readmit" {
+	if len(args) > 0 && args[0] == "restart" {
+		configuration.humanRestart = true
+		args = args[1:]
+	} else if len(args) > 0 && args[0] == "readmit" {
 		configuration.recovery = true
 		configuration.prospective = true
 		args = args[1:]
@@ -450,6 +468,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	flags := flag.NewFlagSet("squad-grok-review", flag.ContinueOnError)
 	flags.SetOutput(output)
+	flags.StringVar(&configuration.humanGrantPath, "human-grant", "", "absolute attributable human ONE-use restart scope receipt")
 	flags.StringVar(&configuration.recoveryFrom, "from", "", "joined timeout attempt ID or absolute legacy custody receipt")
 	flags.StringVar(&configuration.admissionDir, "admission-dir", "", "canonical reviewer admission directory (shared by all invocations)")
 	flags.StringVar(&configuration.provider, "provider", "github", "review input: github or local-git (no publication)")
@@ -571,6 +590,12 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if !filepath.IsAbs(configuration.admissionDir) {
 		return config{}, fmt.Errorf("--admission-dir must be absolute")
+	}
+	if configuration.humanRestart && (configuration.provider != "github" || !filepath.IsAbs(configuration.humanGrantPath) || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
+		return config{}, fmt.Errorf("restart requires GitHub, absolute human grant and configured canonical store; no admission-dir override")
+	}
+	if !configuration.humanRestart && configuration.humanGrantPath != "" {
+		return config{}, fmt.Errorf("human grant requires explicit restart")
 	}
 	if configuration.completion && (configuration.provider != "github" || !validCompletionAttempt(configuration.recoveryFrom) || !filepath.IsAbs(configuration.completionCustodyPath)) {
 		return config{}, fmt.Errorf("complete requires original attempt ID, GitHub provider and absolute completion custody")

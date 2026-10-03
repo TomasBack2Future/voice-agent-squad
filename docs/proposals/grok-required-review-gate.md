@@ -505,3 +505,42 @@ active reasoning notifications followed by a deadline remain **no verdict**.
 Historical receipts and failed Checks are unchanged; diagnostics neither reset
 nor refund consumed recovery roots, admit another attempt, change settings, nor
 substitute for independent review or business acceptance.
+
+### Explicit attributable human restart
+
+`restart --human-grant /absolute/operator-scope.json --repo owner/repository
+--pr NUMBER` admits one exceptional sample after an explicit new human action.
+It uses the configured canonical admission directory; an invocation cannot
+substitute `--admission-dir`. Ordinary invocation, `recover` and `readmit` retain
+their existing no-resampling and one-use rules.
+
+The `squad.review-human-restart.v1` operator receipt binds `directive_path`, its
+`directive_sha256`, `human_message_id`, `previous_attempt`, the exact complete
+`identity` (including bundle hash), unchanged `settings`, and `custody` using
+`squad.review-completion.custody.v1`. The custody disclosure uses the existing
+`managed_review` authorization-readback contract. Prepare it from the genuine
+human directive under the existing local operator trust boundary; a JSON file
+is not a remote signature or proof of native platform execution.
+
+The retained `squad.human-review-restart.directive.v1` associates the original
+local `userMessage` ID/thread/turn/text hash and its evidence path with an exact
+scope: repository short name/PR, original actor/native, item/reservation,
+effective decision revision, base/head, mode, old attempt IDs, failed Check,
+title, body hash and complete patch hash. The command reads the current default
+work ledger without migration: held primary claim, dispatched native binding,
+proceed decision and the authorizing nonretired Dispatcher epoch must all match.
+Actual complete input and settings must match the canonical joined sampling
+timeout receipt; a valid verdict cannot be sampled again. Invalid scope fails
+before the provider call. No new issuer, signer, platform API or self-asserted
+`authorized=true` is introduced.
+
+The private admission transaction records a unique human-message/tuple grant
+use, immutable old receipt/root lineage, new attempt and per-PR flight together.
+It preserves old roots and failed Checks, including unknown remote completion
+and usage. `human_grant_id`, parent, authorization reference/hash, complete
+identity/settings, actual process handle and terminal/publication evidence remain
+in the managed receipt/output. Concurrent use, replay, cancellation and a lost
+commit response cannot open another slot. Custody is checked again before
+launch and publication. A second timeout gets no automatic retry or refund;
+retain the original flight/handle until supported join. Installer qualification
+and original-owner adoption are separate from source delivery.
