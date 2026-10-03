@@ -241,6 +241,65 @@ against a matching selected package/profile; running sessions are not assumed to
 reload skill instructions. These are local setup operations, not a ledger API or
 new MCP coordination surface.
 
+### Automatically publish merged main/master
+
+For a workspace that should follow merged changes independently of its current
+checkout, select a remote branch explicitly:
+
+```sh
+python3 workspace/agent-loop/skill_sync.py install \
+  --repo /absolute/path/to/voice-agent-squad \
+  --source . --target /absolute/path/to/workspace \
+  --remote origin --branch main --profiles workspace/agent-loop/projects \
+  --client-root /absolute/home/.codex/skills \
+  --client-root /absolute/home/.claude/skills \
+  --client-root /absolute/home/.agents/skills
+```
+
+Use `--branch master` for a repository whose merged branch is master. Source
+`.` preserves the complete repository snapshot, including plugin/reviewer skills,
+coordination skills and the agent-loop package. Workspace `.agents`, `.codex` and `.claude` skills are always included;
+additional client roots are explicit. Muse uses shared `.agents/skills` discovery.
+`--profiles` additionally publishes workspace project-profile links for all three
+roots. No client is considered to have loaded an updated instruction merely
+because its link changed.
+
+This mode reads only `refs/remotes/origin/main` (or the selected master), never
+the current branch or dirty files. A committed `reference-transaction` hook
+publishes after that tracking ref changes, including fetch or successful push.
+The original hook receives its original phase and stdin first; a rejected push
+cannot publish unmerged input. A remote rewind/divergence is rejected rather
+than rolling installed instructions backward. Existing checkout/merge hooks
+also reconcile the selected remote revision. No hook executes package scripts,
+builds binaries, changes credentials, restarts clients or rewrites assignments.
+The installed hook runner remains pinned until explicitly reinstalled.
+
+A GitHub merge does not invoke hooks on an offline local computer. Use a local
+scheduled invocation of the installed runner to discover merges and retry any
+failed publication even when the tracking ref is unchanged:
+
+```sh
+python3 /absolute/repository/git-hooks/squad-skill-sync.py run \
+  --config /absolute/repository/git-hooks/squad-skill-sync.json --fetch
+```
+
+The fetch has a timeout and never holds the publication lock while its own Git
+hook runs. A scheduler should report failures and meaningful installed revision
+changes, remaining quiet otherwise. This command does not register a scheduler.
+Obtain the actual shared hooks path with `git rev-parse --path-format=absolute
+--git-path hooks`; linked worktrees share this installation.
+
+For deliberate migration from a recorded legacy package layout, installation
+accepts `--adopt-manifest /absolute/install-manifest.json`. The manifest must
+contain `sources` with canonical `root` paths and `links` mapping absolute
+installed link paths to their prior targets. Every existing destination must be
+an exact manifest-matching symlink into a recorded source root. A directory,
+modified link or unrecorded target blocks the entire preflight. Only selected
+skills/profiles transfer to the new ownership receipt; other manifest entries
+and old snapshots remain untouched. Archive the old manifest and record this
+ownership transfer in the installation evidence; subsequent synchronization
+uses the new receipt, not the historical manifest. There is no force option.
+
 ## Worker startup probe
 
 From an installed or reviewed package, prepare portable inputs before execution

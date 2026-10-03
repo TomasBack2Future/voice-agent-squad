@@ -83,18 +83,19 @@ def link_text(path):
     return os.readlink(path) if path.is_symlink() else None
 
 
-def sync(config, check=False, hook=False):
+def sync(config, check=False, hook=False, adopt=None):
     repo, target = Path(config['repo']), Path(config['target'])
     # A linked worktree shares hooks but must never publish its feature branch.
-    if hook:
+    if hook and not config.get('remote'):
         actual = Path(git(Path.cwd(), 'rev-parse', '--show-toplevel').decode().strip()).resolve()
         if actual != repo:
             return {'status': 'skipped', 'reason': 'different worktree'}
     with locked(target) as state:
         branch = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').decode().strip()
-        if branch != config['branch']:
+        if not config.get('remote') and branch != config['branch']:
             return {'status': 'skipped', 'reason': 'different branch', 'branch': branch}
-        sha = git(repo, 'rev-parse', 'HEAD').decode().strip()
+        ref = f"refs/remotes/{config['remote']}/{config['branch']}" if config.get('remote') else 'HEAD'
+        sha = git(repo, 'rev-parse', ref + '^{commit}').decode().strip()
         files, skills = tracked_package(repo, config['source'], sha)
         owner = state / config['id']
         owner.mkdir(exist_ok=True)
@@ -107,10 +108,36 @@ def sync(config, check=False, hook=False):
                 if old_file.is_symlink() or not old_file.is_file() or hashlib.sha256(old_file.read_bytes()).hexdigest() != digest:
                     raise ValueError('installed snapshot modified; refusing to overwrite')
         links = {}
-        for client in CLIENTS:
+        roots = [target / client / 'skills' for client in CLIENTS]
+        roots += [Path(root) for root in config.get('client_roots', [])]
+        for root in roots:
             for name, relative in skills.items():
-                dest = target / client / 'skills' / name
+                dest = root / name
                 links[str(dest)] = os.path.relpath(owner / 'current' / relative, dest.parent)
+        if config.get('profiles'):
+            prefix = config['profiles'].rstrip('/') + '/'
+            for path in files:
+                relative = Path(path)
+                if path.startswith(prefix) and relative.name == 'profile.json' and len(relative.parts) == len(Path(prefix).parts) + 2:
+                    for client in CLIENTS:
+                        dest = target / client / 'project-profiles' / relative.parent.name
+                        links[str(dest)] = os.path.relpath(owner / 'current' / relative.parent, dest.parent)
+        if adopt and not receipt.exists():
+            manifest = json.loads(Path(adopt).read_text())
+            old_roots = [Path(value['root']).resolve() for value in manifest['sources'].values() if 'root' in value]
+            for dest in links:
+                path = Path(dest)
+                if not os.path.lexists(path):
+                    continue
+                expected = manifest['links'].get(dest)
+                if (not path.is_symlink() or not expected or path.resolve() != Path(expected).resolve()
+                        or not any(path.resolve().is_relative_to(root) for root in old_roots)):
+                    raise ValueError(f'legacy manifest conflict; left untouched: {path}')
+                previous['links'][dest] = os.readlink(path)
+        if config.get('remote') and previous.get('commit'):
+            ancestor = subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor', previous['commit'], sha], capture_output=True)
+            if ancestor.returncode:
+                raise ValueError('remote branch rewind/divergence; installed snapshot retained')
         # Check every destination before modifying any client entry. Never adopt
         # an existing unowned entry, even if its content happens to match.
         for dest in set(links) | set(previous['links']):
@@ -144,7 +171,7 @@ def sync(config, check=False, hook=False):
             finally:
                 if stage.exists():
                     shutil.rmtree(stage)
-        if git(repo, 'rev-parse', 'HEAD').decode().strip() != sha or git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').decode().strip() != branch:
+        if git(repo, 'rev-parse', ref + '^{commit}').decode().strip() != sha or (not config.get('remote') and git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').decode().strip() != branch):
             raise ValueError('source changed during synchronization; retry')
         # Record intended ownership before link creation so interrupted runs can
         # be retried. Keep stale links in the journal until cleanup succeeds.
@@ -173,12 +200,12 @@ def sync(config, check=False, hook=False):
         return result
 
 
-def install(repo, target, source, branch):
+def install(repo, target, source, branch, remote=None, client_roots=(), profiles=None, adopt=None):
     repo, target = repo.resolve(), target.resolve()
     if Path(git(repo, 'rev-parse', '--show-toplevel').decode().strip()).resolve() != repo:
         raise ValueError('--repo must be a repository root')
     source_path = Path(source)
-    if source_path.is_absolute() or '..' in source_path.parts or source in ('', '.'):
+    if source_path.is_absolute() or '..' in source_path.parts or source == '':
         raise ValueError('--source must be a relative package directory inside the repository')
     custom = subprocess.run(['git', '-C', str(repo), 'config', '--get', 'core.hooksPath'], capture_output=True)
     if custom.returncode == 0:
@@ -188,32 +215,51 @@ def install(repo, target, source, branch):
     config_path = hooks / 'squad-skill-sync.json'
     config = {'version': 1, 'repo': str(repo), 'target': str(target), 'source': str(source_path), 'branch': branch,
               'id': hashlib.sha256((str(repo) + '\0' + str(source_path)).encode()).hexdigest()[:16]}
+    if remote:
+        if remote.startswith('-') or '/' in remote or remote not in git(repo, 'remote').decode().splitlines():
+            raise ValueError('configured remote required')
+        if branch not in ('main', 'master'):
+            raise ValueError('remote publication requires main or master')
+        config['remote'] = remote
+    if client_roots:
+        if any(Path(root).is_symlink() or Path(root).parent.is_symlink() for root in client_roots):
+            raise ValueError('client directory is a symlink')
+        config['client_roots'] = sorted({str(Path(root).resolve()) for root in client_roots})
+    if profiles:
+        if Path(profiles).is_absolute() or '..' in Path(profiles).parts:
+            raise ValueError('profiles must be relative to the source package')
+        config['profiles'] = profiles
+    hook_names = (*HOOKS, 'reference-transaction') if remote else HOOKS
     with (hooks / 'squad-skill-sync.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if config_path.exists() and json.loads(config_path.read_text()) != config:
             raise ValueError('hook already configured for another source/target; refusing to replace')
-        for name in HOOKS:
+        for name in hook_names:
             path, backup = hooks / name, hooks / (name + '.before-squad-skill-sync')
             if path.is_symlink():
                 raise ValueError(f'hook is a symlink: {path}')
             managed = path.exists() and MARKER in path.read_text(errors='replace')
             if not managed and backup.exists():
                 raise ValueError(f'hook backup already exists: {backup}')
-        if sync(config, check=True)['status'] != 'checked':
+        if sync(config, check=True, adopt=adopt)['status'] != 'checked':
             raise ValueError('checkout must be on the configured branch for installation')
         runner = hooks / 'squad-skill-sync.py'
         atomic_write(runner, Path(__file__).read_bytes())
         write_json(config_path, config)
-        for name in HOOKS:
+        for name in hook_names:
             path, backup = hooks / name, hooks / (name + '.before-squad-skill-sync')
             managed = path.exists() and MARKER in path.read_text(errors='replace')
             if path.exists() and not managed:
                 path.rename(backup)
             body = f'#!/bin/sh\n{MARKER}\n'
+            if name == 'reference-transaction':
+                body += 'exec ' + ' '.join(shlex.quote(v) for v in (sys.executable, str(runner), 'transaction', '--config', str(config_path))) + ' "$1"\n'
+                atomic_write(path, body.encode(), 0o755)
+                continue
             body += f'if [ -x {shlex.quote(str(backup))} ]; then\n  {shlex.quote(str(backup))} "$@" || exit $?\nfi\n'
             body += 'exec ' + ' '.join(shlex.quote(v) for v in (sys.executable, str(runner), 'run', '--config', str(config_path), '--hook')) + '\n'
             atomic_write(path, body.encode(), 0o755)
-        return sync(config)
+        return sync(config, adopt=adopt)
 
 
 def uninstall(repo):
@@ -222,11 +268,13 @@ def uninstall(repo):
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not (hooks / 'squad-skill-sync.json').exists():
             raise ValueError('no skill sync hook installed')
-        for name in HOOKS:
+        config = json.loads((hooks / 'squad-skill-sync.json').read_text())
+        hook_names = (*HOOKS, 'reference-transaction') if config.get('remote') else HOOKS
+        for name in hook_names:
             path = hooks / name
             if path.exists() and (path.is_symlink() or MARKER not in path.read_text(errors='replace')):
                 raise ValueError(f'hook changed locally; left untouched: {path}')
-        for name in HOOKS:
+        for name in hook_names:
             path, backup = hooks / name, hooks / (name + '.before-squad-skill-sync')
             if path.exists():
                 path.unlink()
@@ -237,6 +285,29 @@ def uninstall(repo):
     return {'status': 'uninstalled', 'skills': 'retained at last installed snapshot'}
 
 
+def transaction(config_path, phase):
+    payload = sys.stdin.buffer.read()
+    backup = config_path.parent / 'reference-transaction.before-squad-skill-sync'
+    if os.access(backup, os.X_OK):
+        subprocess.run([str(backup), phase], input=payload, check=True)
+    config = json.loads(config_path.read_text())
+    selected = f"refs/remotes/{config['remote']}/{config['branch']}"
+    if phase != 'committed' or not any(line.split()[-1:] == [selected] for line in payload.decode().splitlines()):
+        return {'status': 'skipped', 'reason': 'unselected reference transaction'}
+    return sync(config)
+
+
+def fetch_and_sync(config):
+    if not config.get('remote'):
+        raise ValueError('fetch requires remote publication mode')
+    # Do not hold the target lock across fetch: its committed hook also syncs.
+    remote, branch = config['remote'], config['branch']
+    subprocess.run(['git', '-C', config['repo'], 'fetch', '--no-tags', remote,
+                    f'refs/heads/{branch}:refs/remotes/{remote}/{branch}'], check=True, timeout=120)
+    # An unchanged fetch has no transaction; retry failed publication explicitly.
+    return sync(config)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -245,23 +316,36 @@ def main():
     setup.add_argument('--target', type=Path, required=True)
     setup.add_argument('--source', required=True)
     setup.add_argument('--branch', default='main')
+    setup.add_argument('--remote')
+    setup.add_argument('--client-root', action='append', type=Path, default=[])
+    setup.add_argument('--profiles')
+    setup.add_argument('--adopt-manifest', type=Path)
     remove = sub.add_parser('uninstall')
     remove.add_argument('--repo', type=Path, required=True)
     run = sub.add_parser('run')
     run.add_argument('--config', type=Path, required=True)
     run.add_argument('--check', action='store_true')
     run.add_argument('--hook', action='store_true')
+    run.add_argument('--fetch', action='store_true')
+    event = sub.add_parser('transaction')
+    event.add_argument('--config', type=Path, required=True)
+    event.add_argument('phase')
     args = parser.parse_args()
     try:
         if args.command == 'install':
-            result = install(args.repo, args.target, args.source, args.branch)
+            result = install(args.repo, args.target, args.source, args.branch, args.remote, args.client_root, args.profiles, args.adopt_manifest)
         elif args.command == 'uninstall':
             result = uninstall(args.repo)
+        elif args.command == 'transaction':
+            result = transaction(args.config, args.phase)
         else:
-            result = sync(json.loads(args.config.read_text()), args.check, args.hook)
+            config = json.loads(args.config.read_text())
+            if args.fetch and (args.check or args.hook):
+                raise ValueError('--fetch cannot be combined with --check or --hook')
+            result = fetch_and_sync(config) if args.fetch else sync(config, args.check, args.hook)
         print(json.dumps({key: value for key, value in result.items() if key not in ('links', 'file_hashes')}, indent=2))
         return 0
-    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print(f'squad skill sync: {error}', file=sys.stderr)
         return 1
 

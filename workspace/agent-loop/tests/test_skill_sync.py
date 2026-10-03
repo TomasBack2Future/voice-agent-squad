@@ -204,6 +204,100 @@ class SkillSyncTests(unittest.TestCase):
         self.synchronize()
         self.assertIn('Version one', (self.target / '.codex' / 'skills' / 'example' / 'SKILL.md').read_text())
 
+    def test_repository_root_keeps_all_skill_packages_and_references(self):
+        extra = self.repo / 'plugin/skills/another'
+        extra.mkdir(parents=True)
+        (extra / 'SKILL.md').write_text('---\nname: another\n---\nPlugin skill\n')
+        self.commit()
+        result = sync.install(self.repo, self.target, '.', 'main')
+        self.assertEqual(result['skills'], ['another', 'example'])
+        self.assertTrue((self.target / '.agents/skills/another/SKILL.md').is_file())
+        self.assertIn('package/README.md', result['file_hashes'])
+
+    def remote_setup(self, branch='main'):
+        remote = self.root / 'remote.git'
+        if branch != 'main':
+            self.git('branch', '-m', branch)
+        self.git('init', '--bare', str(remote))
+        self.git('remote', 'add', 'origin', str(remote))
+        self.git('push', '-u', 'origin', branch)
+        return remote
+
+    def test_remote_fetch_publishes_from_feature_checkout_and_retries_unchanged(self):
+        remote = self.remote_setup()
+        upstream = self.root / 'other writer'
+        self.git('clone', '--branch', 'main', str(remote), str(upstream))
+        self.git('config', 'user.email', 'test@example.invalid', cwd=upstream)
+        self.git('config', 'user.name', 'Test', cwd=upstream)
+        self.git('checkout', '-b', 'dirty-feature')
+        (self.skill / 'SKILL.md').write_text('---\nname: example\n---\nUNMERGED\n')
+        sync.install(self.repo, self.target, 'package', 'main', remote='origin')
+        installed = self.target / '.agents/skills/example/SKILL.md'
+        self.assertIn('Version one', installed.read_text())
+        (upstream / 'package/tools/example/SKILL.md').write_text('---\nname: example\n---\nREMOTE MERGED\n')
+        self.git('add', '.', cwd=upstream)
+        self.git('commit', '-m', 'remote change', cwd=upstream)
+        self.git('push', 'origin', 'main', cwd=upstream)
+        self.git('fetch', 'origin', 'main')
+        self.assertIn('REMOTE MERGED', installed.read_text())
+        self.assertIn('UNMERGED', (self.skill / 'SKILL.md').read_text())
+        self.assertEqual(self.git('branch', '--show-current'), 'dirty-feature')
+        config = json.loads(self.config_path.read_text())
+        self.assertEqual(sync.fetch_and_sync(config)['commit'], self.git('rev-parse', 'origin/main'))
+
+    def test_master_remote_profiles_and_additional_client_roots(self):
+        profiles = self.repo / 'package/projects/example'
+        profiles.mkdir(parents=True)
+        (profiles / 'profile.json').write_text('{}')
+        self.commit()
+        self.remote_setup('master')
+        extra = self.root / 'home/.claude/skills'
+        result = sync.install(self.repo, self.target, 'package', 'master', remote='origin',
+                              client_roots=[extra], profiles='projects')
+        self.assertTrue((extra / 'example/SKILL.md').is_file())
+        for client in sync.CLIENTS:
+            self.assertTrue((self.target / client / 'project-profiles/example/profile.json').is_file())
+        self.assertEqual(result['commit'], self.git('rev-parse', 'origin/master'))
+
+    def test_manifest_adoption_checks_exact_links_and_retains_old_snapshot(self):
+        legacy = self.root / 'legacy'
+        legacy.mkdir()
+        (legacy / 'SKILL.md').write_text('legacy snapshot')
+        dest = self.target / '.agents/skills/example'
+        dest.parent.mkdir(parents=True)
+        dest.symlink_to(legacy)
+        manifest = self.root / 'manifest.json'
+        manifest.write_text(json.dumps({'sources': {'old': {'root': str(legacy)}},
+                                        'links': {str(dest.parent.resolve() / dest.name): str(self.root / 'wrong')}}))
+        with self.assertRaisesRegex(ValueError, 'manifest conflict'):
+            sync.install(self.repo, self.target, 'package', 'main', adopt=manifest)
+        self.assertEqual(dest.resolve(), legacy.resolve())
+        manifest.write_text(json.dumps({'sources': {'old': {'root': str(legacy)}},
+                                        'links': {str(dest.parent.resolve() / dest.name): str(legacy)}}))
+        sync.install(self.repo, self.target, 'package', 'main', adopt=manifest)
+        self.assertIn('Version one', (dest / 'SKILL.md').read_text())
+        self.assertEqual((legacy / 'SKILL.md').read_text(), 'legacy snapshot')
+
+    def test_remote_rewind_rejected_and_prior_transaction_hook_preserved(self):
+        self.remote_setup()
+        old = self.hooks / 'reference-transaction'
+        marker = self.root / 'transaction-input'
+        old.write_text('#!/bin/sh\ncat > ' + sync.shlex.quote(str(marker)) + '\n')
+        old.chmod(0o755)
+        first = sync.install(self.repo, self.target, 'package', 'main', remote='origin')['commit']
+        (self.skill / 'SKILL.md').write_text('---\nname: example\n---\nUpdated\n')
+        self.commit()
+        second = self.git('rev-parse', 'HEAD')
+        self.git('push', 'origin', 'main')
+        self.assertIn('refs/remotes/origin/main', marker.read_text())
+        self.assertIn('Updated', (self.target / '.agents/skills/example/SKILL.md').read_text())
+        self.git('update-ref', 'refs/remotes/origin/main', first)
+        with self.assertRaisesRegex(ValueError, 'rewind/divergence'):
+            self.synchronize()
+        self.assertEqual(json.loads((self.target / '.agents/squad-skill-sync' / json.loads(self.config_path.read_text())['id'] / 'receipt.json').read_text())['commit'], second)
+        sync.uninstall(self.repo)
+        self.assertNotIn(sync.MARKER, old.read_text())
+
 
 if __name__ == '__main__':
     unittest.main()
