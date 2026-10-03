@@ -1054,6 +1054,15 @@ arguments after actual helper/client join. Controller `terminal-events listen`,
 `delivered` and `ack` require `--native-session NATIVE`. Delivery incarnation stays
 separate; binding another receiver without release fails. New native actor/epoch
 readback is mandatory before activation, not evidence that delivery was handled.
+The Claude `terminal_receiver.py` adapter passes its configured native session to
+both `listen` and the explicit `ack` instruction. Its hook session must match the
+config; the native session is never substituted with the receiver incarnation.
+An unbound legacy recipient does not require controller identity, so a missing
+native argument can remain unnoticed until controller binding or handoff. A
+failed incarnation remains faulted: install the corrected adapter and re-arm a
+fresh incarnation for the same native session, retaining pending events and
+controller custody. Verify actual native wake and reconciliation acknowledgement
+before reporting automatic delivery as available.
 MCP exposes matching `squad_dispatch_controller_bind`, `controller_status`,
 `handoff`, `handoff_get`, `receiver_bind` and `receiver_release` operations;
 mutations use the actual process actor, never a supplied impersonation field.
