@@ -303,6 +303,26 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		legacy = append(legacy, legacyRow{21, "dispatch_controller_handoff"})
 	}
 
+	var workerObjects int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE
+      (type='trigger' AND name IN ('worker_execution_reservation_update','worker_execution_reservation_delete','worker_execution_reservation_replace','worker_execution_controller_update','worker_execution_controller_delete','worker_execution_controller_replace','worker_execution_controller_retire')) OR
+      (type='index' AND name='worker_execution_one_native')`).Scan(&workerObjects); err != nil {
+		return err
+	}
+	if workerObjects > 0 {
+		if workerObjects != 8 {
+			return fmt.Errorf("incomplete Worker execution guards; refusing legacy bootstrap")
+		}
+		legacy = append(legacy, legacyRow{22, "worker_execution_custody"})
+	}
+	var workerOutcome int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('execution_authorizations') WHERE name='worker_outcome_id'`).Scan(&workerOutcome); err != nil {
+		return err
+	}
+	if workerOutcome > 0 {
+		legacy = append(legacy, legacyRow{23, "worker_execution_outcome"})
+	}
+
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {
 		if _, err := db.ExecContext(ctx,

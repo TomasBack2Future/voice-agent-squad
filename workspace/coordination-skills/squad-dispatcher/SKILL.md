@@ -8,6 +8,9 @@ description: "Run one bounded central-dispatch reconciliation cycle for Squad: o
 Apply [runtime-independent roles](../../agent-loop/runtime-compatibility.md).
 The Dispatcher and each assigned role may use Muse, Claude or Codex; require
 equivalent operation-specific capabilities and preserve current custody.
+For a bounded Muse source/test/handoff Worker, use the installed runtime-specific
+[launch route](references/muse-worker-launch.md); the lifecycle probe and an
+older package's generic unavailable-adapter guard do not select this route.
 
 For installed versioned decisions and verified recovery, use
 [current decisions](../../agent-loop/roles/worker/references/decision-recovery.md).
