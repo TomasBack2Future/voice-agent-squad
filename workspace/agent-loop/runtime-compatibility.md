@@ -74,3 +74,13 @@ repair owner and verification needed. Reuse existing Issue/PR owners before
 filing. Distinguish source, reviewed/merged, installed, session-adopted and effective
 states. Installation and takeover remain separate authorized operations; a skill
 link refresh does not change a running session. Pauses and existing custody persist.
+
+## Muse source Worker adapter
+
+The bounded `muse_worker_launcher.py` lane qualifies source/test/handoff work
+with Meta 1.3 Contributor and YOLO. It uses fixed native shell/write denial,
+exact-session MCP mutations, owned Linux containers, immutable custody pins and
+actual decision/outcome handling. Read the [launch contract](README.md#muse-source-worker-execution)
+before selecting it. Other roles and environment execution retain their existing
+operation-specific qualification boundaries. New admission does not migrate
+already-running sessions or change the current controller.

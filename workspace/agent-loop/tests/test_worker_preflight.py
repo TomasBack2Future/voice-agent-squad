@@ -131,10 +131,17 @@ class WorkerPreflightTests(unittest.TestCase):
                     self.assertEqual(receipt['ownership'], 'not_checked')
 
     def test_muse_config_never_falls_through_to_claude(self):
-        with patch('claude_worker_launcher.check_launch') as launch:
-            with self.assertRaisesRegex(preflight.ValidationError, 'Muse launch adapter unavailable'):
-                preflight.check(Path('/missing'), Path('/missing'), 'muse', [], [], Path('/config'))
-            launch.assert_not_called()
+        self.path.write_text(json.dumps(self.assignment))
+        skill = self.root / '.agents/skills/agent-loop-worker/SKILL.md'
+        skill.parent.mkdir(parents=True)
+        skill.symlink_to(ROOT / 'roles/worker/SKILL.md')
+        with patch('claude_worker_launcher.check_launch') as claude, \
+             patch('muse_worker_launcher.check_launch', return_value={'status': 'ready'}) as muse, \
+             patch('worker_preflight.shutil.which', return_value='/qualified/tool'):
+            receipt = preflight.check(self.path, self.profile, 'muse', [skill], [], Path('/config'))
+            self.assertEqual(receipt['status'], 'ready')
+            muse.assert_called_once_with(self.assignment, Path('/config'))
+            claude.assert_not_called()
 
     def test_context_only_cannot_hide_a_launch_config(self):
         with self.assertRaisesRegex(preflight.ValidationError, 'context-only.*launch config'):
