@@ -13,7 +13,7 @@ import sys
 import time
 import uuid
 
-from codex_rpc import RPC
+from codex_rpc import RPC, OwnedStdioRPC, OwnedStdioNotSent
 from codex_worker_launcher import child_environment, check_qualification, live_target, save, server_identity
 from codex_heartbeat import heartbeat, CustodyRejected, require_execution_fence
 from validate_context_package import ROOT, ValidationError, validate_file
@@ -78,7 +78,7 @@ def pointer(event):
     return {key: event[key] for key in ('event_id', 'item_id', 'kind', 'outcome_id', 'source_message_id')}
 
 
-def native_contains(rpc, thread, text):
+def native_contains(rpc, thread, text, client_id=None):
     # A lost reply is not license to submit again. Inspect native queue and
     # persisted input once; unavailable/truncated history remains uncertain.
     pending = rpc.call('thread/queue/list', {'threadId': thread, 'limit': 100})
@@ -93,10 +93,43 @@ def native_contains(rpc, thread, text):
         return isinstance(value, list) and any(contains(child) for child in value)
     inputs = [item.get('content', []) for turn in history.get('turns', []) for item in turn.get('items', [])
               if item.get('type') == 'userMessage']
+    if client_id is not None:
+        exact_input = [{'type': 'text', 'text': text, 'text_elements': []}]
+        matches = [item for item in pending.get('data', [])
+                   if item.get('clientUserMessageId') == client_id and item.get('input') == exact_input]
+        matches += [item for turn in history.get('turns', []) for item in turn.get('items', [])
+                    if item.get('type') == 'userMessage' and item.get('clientId') == client_id
+                    and item.get('content') == exact_input]
+        if len(matches) > 1:
+            raise ValidationError('stdio native association ambiguous; no resubmission')
+        if len(matches) == 1:
+            from codex_rpc import OwnedStdioRPC
+            expected = {'threadId': thread, 'clientUserMessageId': client_id, 'input': exact_input}
+            if isinstance(rpc, OwnedStdioRPC) and rpc.pending_queue == expected:
+                rpc.check_owner()
+                rpc.queue_uncertain = False
+                rpc.uncertain = False
+                rpc.pending_queue = None
+        return len(matches) == 1
     return contains(pending.get('data', [])) or contains(inputs)
 
 
 def deliver(rpc, event, c, journal_path):
+    journal_path = Path(journal_path)
+    if c.get('transport') == 'owned-stdio' and isinstance(rpc, OwnedStdioRPC):
+        rpc.check_owner()
+        # Serialize the complete owning journal comparison/transition. A
+        # second writer cannot interleave a different event's marker save.
+        with journal_path.with_name(journal_path.name + '.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValidationError('owning stdio journal writer already active') from None
+            return _deliver(rpc, event, c, journal_path)
+    return _deliver(rpc, event, c, journal_path)
+
+
+def _deliver(rpc, event, c, journal_path):
     journal_path = Path(journal_path)
     journal = json.loads(journal_path.read_text()) if journal_path.exists() else {}
     key = event['event_id']
@@ -104,26 +137,71 @@ def deliver(rpc, event, c, journal_path):
     previous = journal.get(key)
     identity = {'native_session_id': c['native_session_id'], 'recipient': c['agent_id'],
                 'event': pointer(event)}
+    if c.get('transport') == 'owned-stdio':
+        from codex_stdio_contract import PROOF_SHA
+        identity.update(transport='owned-stdio', contract_sha256=PROOF_SHA)
     if previous and previous['identity'] != identity:
         raise ValidationError('delivery journal identity changed; reconcile without resubmission')
-    if previous:
-        if previous['state'] == 'accepted':
-            return
-        if previous['state'] != 'intent' or not native_contains(rpc, c['native_session_id'], text):
+    stdio = c.get('transport') == 'owned-stdio'
+    owned = stdio and isinstance(rpc, OwnedStdioRPC)
+    if owned and previous and previous['state'] == 'prepared' and previous.get('transport_owner') != json.loads(json.dumps(rpc.identity())):
+        raise ValidationError('prepared stdio owner/incarnation changed; reconcile without replay')
+    if previous and previous['state'] == 'accepted':
+        return
+    if previous and previous['state'] == 'intent':
+        if not native_contains(rpc, c['native_session_id'], text, key if stdio else None):
             raise ValidationError('native submission uncertain; no duplicate or automatic retry')
+    elif previous and (not stdio or previous['state'] != 'prepared'):
+        raise ValidationError('delivery journal phase unavailable; no resubmission')
     else:
-        journal[key] = {'identity': identity, 'submitted_endpoint': c['endpoint'], 'state': 'intent'}
-        save(journal_path, journal)
-        # Codex 0.159.2 does NOT dedupe clientUserMessageId. Persist intent first
-        # and never blindly retry a lost response, even after an incarnation change.
-        result = rpc.call('thread/queue/add', {'threadId': c['native_session_id'],
-                          'clientUserMessageId': key,
-                          'input': [{'type': 'text', 'text': text, 'text_elements': []}]})
+        if not previous:
+            journal[key] = {'identity': identity, 'submitted_endpoint': c.get('endpoint', 'owned-stdio'),
+                            'state': 'prepared' if stdio else 'intent'}
+            if owned:
+                journal[key]['transport_owner'] = json.loads(json.dumps(rpc.identity()))
+            save(journal_path, journal)
+        params = {'threadId': c['native_session_id'], 'clientUserMessageId': key,
+                  'input': [{'type': 'text', 'text': text, 'text_elements': []}]}
+        if stdio:
+            def write_intent():
+                if owned:
+                    rpc.check_owner()
+                    if json.loads(journal_path.read_text()) != journal:
+                        raise ValidationError('original prepared journal CAS rejected')
+                journal[key]['state'] = 'intent'
+                save(journal_path, journal)
+            # Readiness failures precede this durable boundary. Once it executes,
+            # interruption/lost reply remains uncertain and can only be read back.
+            try:
+                result = rpc.call('thread/queue/add', params, before_send=write_intent)
+            except OwnedStdioNotSent as witness:
+                # Only the exact owning prepared record may retain replay
+                # eligibility. A marker exception or unknown journal never
+                # produces this transport-local witness.
+                current_journal = json.loads(journal_path.read_text())
+                if current_journal != journal or current_journal.get(key, {}).get('state') != 'prepared':
+                    raise ValidationError('not-sent journal custody changed; reconcile without replay') from None
+                rpc.consume_not_sent(witness, params)
+                raise
+        else:
+            result = rpc.call('thread/queue/add', params)
         accepted = result.get('queuedSubmission', {})
-        if accepted.get('clientUserMessageId') != key or not accepted.get('id'):
+        if (accepted.get('clientUserMessageId') != key or not accepted.get('id')
+                or (stdio and accepted.get('input') != params['input'])):
             raise ValidationError('native queue acceptance not confirmed')
+        if stdio:
+            journal[key]['native_acceptance'] = accepted
     journal[key]['state'] = 'accepted'
     save(journal_path, journal)
+
+
+def deliver_owned_stdio(rpc, event, c, owner, worktree, journal_path):
+    """In-process exclusive pipe owner only; no standalone receiver activation."""
+    from codex_worker_launcher import check_owned_stdio
+    check_owned_stdio(rpc.config, rpc, owner, worktree)
+    if c.get('native_session_id') != rpc.config['native_session_id'] or c.get('transport') != 'owned-stdio':
+        raise ValidationError('stdio receiver target/transport mismatch')
+    deliver(rpc, event, c, journal_path)
 
 
 def listen(c, path, seconds):

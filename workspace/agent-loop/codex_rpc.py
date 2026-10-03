@@ -10,6 +10,7 @@ import socket
 import stat
 import struct
 import time
+import threading
 
 from validate_context_package import ValidationError
 
@@ -155,3 +156,303 @@ class RPC:
             elif len(self.notifications) < 256:
                 self.notifications.append(value)
         raise ValidationError('native RPC deadline expired; delivery uncertain')
+
+
+class OwnedStdioNotSent(ValidationError):
+    """Single-use local witness issued before intent or any possible os.write."""
+    def __init__(self, owner, operation):
+        super().__init__('owned stdio request definitely not sent; fresh readiness required')
+        self.owner = owner
+        self.identity = owner.identity()
+        self.operation = operation
+
+
+class OwnedStdioStartupError(ValidationError):
+    """Sanitized failure with the acquired original adapter's cleanup custody."""
+    def __init__(self, owner):
+        super().__init__('owned stdio startup failed; retain original owner for bounded join')
+        self.owner = owner
+
+
+class OwnedStdioRPC(RPC):
+    """Single parent/thread owns this child and all JSONL pipe IO; never attaches."""
+    _owners = {}
+    _owners_lock = threading.Lock()
+
+    def __init__(self, child, config):
+        import subprocess
+        import threading
+        import uuid
+        from codex_worker_launcher import check_qualification
+        check_qualification(config)  # Historical contract does not admit a live native.
+        try:
+            with self._owners_lock:
+                if (not isinstance(child, subprocess.Popen) or child.poll() is not None
+                        or child.stdin is None or child.stdout is None or child.stderr is None
+                        or child in self._owners):
+                    raise ValidationError('exclusive live owned stdio child required')
+                argv = child.args
+                if (not isinstance(argv, list) or not argv or argv[0] != config['client_executable']
+                        or argv[-3:] != ['app-server', '--listen', 'stdio://']):
+                    raise ValidationError('stdio child executable/transport owner mismatch')
+                self.child = child
+                self.owner_pid = os.getpid()
+                self.owner_thread = threading.get_ident()
+                self.incarnation = str(uuid.uuid4())
+                self._pipes = (child.stdin, child.stdout, child.stderr)
+                self.pipe_identity = [os.fstat(pipe.fileno()) for pipe in self._pipes]
+                self.pipe_identity = [(info.st_dev, info.st_ino) for info in self.pipe_identity]
+                self.config = dict(config)
+                self.sequence = 0
+                self.notifications = []
+                self.buffer = b''
+                self.stderr_open = True
+                self.reply_bytes = 0
+                self.stderr_bytes = 0
+                self.stderr_sha = hashlib.sha256()
+                self.uncertain = False
+                self.closed = False
+                self.native_ready = False
+                self.queue_uncertain = False
+                self.pending_queue = None
+                self.startup_failed = False
+                self._not_sent = None
+                self._owners[child] = self
+            for pipe in (child.stdin, child.stdout, child.stderr):
+                os.set_blocking(pipe.fileno(), False)
+            # Only this exclusive owner initializes and reads this connection.
+            self.call('initialize', {'clientInfo': {'name': 'squad_owned_stdio', 'version': '1'},
+                                    'capabilities': {'experimentalApi': True}})
+            self.send({'method': 'initialized'})
+        except BaseException as error:
+            # Check the actual atomic publication, including an interruption
+            # immediately after it. Never borrow a different wrapper's lease.
+            with self._owners_lock:
+                acquired = isinstance(child, subprocess.Popen) and self._owners.get(child) is self
+            if not acquired:
+                raise
+            self.startup_failed = True
+            self.uncertain = True
+            if isinstance(error, Exception):
+                raise OwnedStdioStartupError(self) from None
+            error.owner = self  # Preserve KeyboardInterrupt/SystemExit semantics.
+            raise
+
+    def identity(self):
+        return {'parent_pid': self.owner_pid, 'child_pid': self.child.pid,
+                'incarnation': self.incarnation, 'pipes': self.pipe_identity}
+
+    def check_owner(self, identity=None):
+        import threading
+        if (self.startup_failed or self.closed or os.getpid() != self.owner_pid or threading.get_ident() != self.owner_thread
+                or self._owners.get(self.child) is not self or self.child.poll() is not None):
+            raise ValidationError('owned stdio child lifetime/IO owner changed')
+        if any(current is not original for current, original in zip(
+                (self.child.stdin, self.child.stdout, self.child.stderr), self._pipes)):
+            raise ValidationError('owned stdio original pipe objects changed')
+        pipes = [(os.fstat(p.fileno()).st_dev, os.fstat(p.fileno()).st_ino)
+                 for p in (self.child.stdin, self.child.stdout, self.child.stderr)]
+        if pipes != self.pipe_identity or (identity is not None and identity != self.identity()):
+            raise ValidationError('owned stdio child incarnation/pipes changed')
+
+    def consume_not_sent(self, witness, operation):
+        # Object identity is transport-local provenance; caller-authored values
+        # cannot manufacture or reuse a witness after reconnect/another request.
+        if not isinstance(witness, OwnedStdioNotSent):
+            raise ValidationError('original typed not-sent witness required')
+        self.check_owner(witness.identity)
+        if (witness.owner is not self
+                or self._not_sent is not witness or witness.operation != operation):
+            raise ValidationError('exact original not-sent witness unavailable')
+        self._not_sent = None
+
+    def send(self, value, before_write=None):
+        import select
+        import copy
+        self.check_owner()
+        queue = value.get('method') == 'thread/queue/add'
+        self._not_sent = None
+        try:
+            raw = (json.dumps(value, separators=(',', ':')) + '\n').encode()
+            if len(raw) > LIMIT:
+                raise ValidationError('stdio request exceeds bounded input')
+            deadline = time.monotonic() + 10
+            # Perform the first writable check before the intent boundary.
+            _, ready, _ = select.select([], [self.child.stdin.fileno()], [], 10)
+            if not ready:
+                raise ValidationError('stdio first write not ready')
+            self.check_owner()
+        except (ValueError, TypeError, OSError):
+            # Proven current custody is required even for zero-wire evidence.
+            # Ownership loss is never a witness that permits journal recovery.
+            self.check_owner()
+            if queue:
+                witness = OwnedStdioNotSent(self, copy.deepcopy(value['params']))
+                self._not_sent = witness
+                raise witness from None
+            raise
+        if queue:
+            self.pending_queue = copy.deepcopy(value['params'])
+            self.queue_uncertain = True
+        # Mark uncertain BEFORE the callback: an exception may occur after its
+        # durable commit. No witness or absence-based journal rollback then.
+        if before_write is not None:
+            before_write()
+        self.check_owner()
+        offset = 0
+        first_write = True
+        while offset < len(raw):
+            if not first_write:
+                _, ready, _ = select.select([], [self.child.stdin.fileno()], [], max(0, deadline-time.monotonic()))
+                if not ready:
+                    self.uncertain = True
+                    raise ValidationError('stdio write deadline; delivery uncertain')
+            first_write = False
+            try:
+                # Crossing this call boundary is uncertainty even if an
+                # interruption reports no counted bytes. Never infer not-sent.
+                written = os.write(self.child.stdin.fileno(), raw[offset:offset+4096])
+            except (BlockingIOError, InterruptedError):
+                continue
+            except OSError:
+                self.uncertain = True
+                raise ValidationError('stdio write closed; delivery uncertain') from None
+            if written <= 0:
+                raise ValidationError('stdio write did not progress; delivery uncertain')
+            offset += written
+
+    def receive(self, deadline):
+        import select
+        self.check_owner()
+        while True:
+            if b'\n' in self.buffer:
+                raw, self.buffer = self.buffer.split(b'\n', 1)
+                if len(raw) > LIMIT:
+                    raise ValidationError('stdio response exceeds bound')
+                try:
+                    value = json.loads(raw)
+                except (ValueError, UnicodeError):
+                    raise ValidationError('invalid stdio JSONL; delivery uncertain') from None
+                if not isinstance(value, dict):
+                    raise ValidationError('invalid stdio RPC envelope')
+                return value
+            if len(self.buffer) > LIMIT:
+                raise ValidationError('stdio response exceeds bound')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValidationError('stdio deadline; delivery uncertain')
+            ready, _, _ = select.select([self.child.stdout.fileno()] + ([self.child.stderr.fileno()] if self.stderr_open else []), [], [], remaining)
+            if not ready:
+                raise ValidationError('stdio deadline; delivery uncertain')
+            for fd in ready:
+                data = os.read(fd, 4096)
+                self.reply_bytes += len(data)
+                if self.reply_bytes > LIMIT:
+                    raise ValidationError('stdio response stream exceeds bound')
+                if fd == self.child.stderr.fileno():
+                    if not data:
+                        self.stderr_open = False
+                        continue
+                    self.stderr_bytes += len(data)
+                    self.stderr_sha.update(data)
+                    if self.stderr_bytes > LIMIT:
+                        raise ValidationError('stdio stderr exceeds bound; values withheld')
+                else:
+                    if not data:
+                        raise ValidationError('stdio ended with incomplete reply; delivery uncertain')
+                    self.buffer += data
+
+    def call(self, method, params, timeout=10, before_send=None):
+        self.check_owner()
+        allowed = ('initialize', 'thread/loaded/list', 'thread/read', 'thread/resume', 'thread/queue/list', 'thread/queue/add')
+        if method not in allowed:
+            raise ValidationError('stdio method outside qualified transport contract')
+        if method.startswith('thread/') and method != 'thread/loaded/list' and params.get('threadId') != self.config['native_session_id']:
+            raise ValidationError('stdio request belongs to another native')
+        if method == 'thread/resume':
+            if params != {'threadId': self.config['native_session_id'], 'excludeTurns': True}:
+                raise ValidationError('stdio selection overrides unavailable')
+            loaded = self.call('thread/loaded/list', {})
+            if self.config['native_session_id'] not in loaded.get('data', []):
+                raise ValidationError('stdio cannot resume an unloaded native')
+        if method == 'thread/queue/add':
+            if self.queue_uncertain:
+                raise ValidationError('stdio original queue outcome uncertain; no new write')
+            if not self.native_ready:
+                raise ValidationError('stdio queue requires fresh loaded-owner readiness')
+            from codex_worker_launcher import live_target
+            live_target(self, self.config, self.native_worktree)
+            self.native_ready = False
+        if self.uncertain and method not in ('thread/read', 'thread/queue/list', 'thread/loaded/list', 'thread/resume'):
+            raise ValidationError('stdio uncertain; only exact readback allowed, no resubmission')
+        self.reply_bytes = 0
+        self.sequence += 1
+        current = self.sequence
+        try:
+            frame = {'id': current, 'method': method, 'params': params}
+            if method == 'thread/queue/add':
+                self.send(frame, before_write=before_send)
+            else:
+                self.send(frame)
+            deadline = time.monotonic() + timeout
+            while True:
+                value = self.receive(deadline)
+                if value.get('id') == current and 'method' not in value:
+                    if 'error' in value or not isinstance(value.get('result'), dict):
+                        raise ValidationError('stdio RPC rejected ' + method)
+                    result = value['result']
+                    if method == 'thread/queue/add':
+                        accepted = result.get('queuedSubmission')
+                        if (not isinstance(accepted, dict) or not isinstance(accepted.get('id'), str)
+                                or not accepted['id'] or accepted.get('clientUserMessageId') != params.get('clientUserMessageId')
+                                or accepted.get('input') != params.get('input')):
+                            raise ValidationError('stdio exact queue acceptance malformed')
+                        self.queue_uncertain = False
+                        self.pending_queue = None
+                    return result
+                if 'id' in value and 'method' in value:
+                    raise ValidationError('stdio host request requires original owner; no automatic approval')
+                if 'method' in value:
+                    if len(self.notifications) >= 256:
+                        raise ValidationError('stdio notification bound exceeded')
+                    self.notifications.append(value)
+        except BaseException:
+            self.uncertain = True
+            raise
+
+    def close(self, timeout=5):
+        """EOF and join only this child. Timeout retains handle; no kill/retry claim."""
+        import threading
+        if os.getpid() != self.owner_pid or threading.get_ident() != self.owner_thread:
+            raise ValidationError('only original stdio parent may join child')
+        if not self.closed and self._owners.get(self.child) is not self:
+            raise ValidationError('original stdio cleanup lease unavailable')
+        if any(current is not original for current, original in zip(
+                (self.child.stdin, self.child.stdout, self.child.stderr), self._pipes)):
+            raise ValidationError('original stdio cleanup pipes changed; retain custody')
+        for pipe, expected in zip(self._pipes, self.pipe_identity):
+            if pipe.closed:
+                continue
+            try:
+                info = os.fstat(pipe.fileno())
+            except (OSError, ValueError):
+                raise ValidationError('original stdio cleanup pipes changed; retain custody') from None
+            if (info.st_dev, info.st_ino) != expected:
+                raise ValidationError('original stdio cleanup pipes changed; retain custody')
+        if not self.child.stdin.closed:
+            self.child.stdin.close()
+        import subprocess
+        try:
+            exit_code = self.child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise ValidationError('owned stdio child still in flight; retain original custody') from None
+        for pipe in (self.child.stdout, self.child.stderr):
+            pipe.close()
+        self.closed = True
+        with self._owners_lock:
+            if self._owners.get(self.child) is self:
+                self._owners.pop(self.child)
+        return {'child_pid': self.child.pid, 'incarnation': self.incarnation,
+                'joined_exit': exit_code, 'observed_stderr_bytes': self.stderr_bytes,
+                'observed_stderr_sha256': self.stderr_sha.hexdigest(),
+                'pipes_closed': True, 'provider_join': 'not_inferred'}

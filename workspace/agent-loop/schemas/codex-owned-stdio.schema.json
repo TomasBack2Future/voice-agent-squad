@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Installer-owned CLI stdio transport contract (not Worker adoption)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["transport", "client", "client_executable", "native_session_id", "model", "provider", "effort", "service_tier", "sandbox", "approval_policy", "approvals_reviewer", "qualification_file", "qualification_sha256", "protocol_directory"],
+  "properties": {
+    "transport": {"const": "owned-stdio"},
+    "client": {"const": "cli"},
+    "client_executable": {"type": "string", "pattern": "^/"},
+    "native_session_id": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+    "model": {"const": "gpt-6.1-sol"},
+    "provider": {"const": "openai"},
+    "effort": {"const": "medium"},
+    "service_tier": {"const": "priority"},
+    "sandbox": {"const": "read-only"},
+    "approval_policy": {"const": "never"},
+    "approvals_reviewer": {"const": "user"},
+    "qualification_file": {"type": "string", "pattern": "^/"},
+    "qualification_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "protocol_directory": {"type": "string", "pattern": "^/"},
+    "evidence_directory": {"type": "string", "pattern": "^/"}
+  }
+}
