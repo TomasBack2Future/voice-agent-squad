@@ -20,7 +20,7 @@ from validate_context_package import ROOT, ValidationError, validate_file
 from worker_preflight import check_profile, check_worktree
 
 IDENTITY_ENV = ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'SQUAD_SESSION_ID',
-                'SQUAD_AGENT', 'CLAUDE_SESSION_ID')
+                'SQUAD_AGENT', 'CLAUDE_SESSION_ID', 'MUSE_SESSION_ID', 'SQUAD_NATIVE_SESSION_ID')
 
 
 def diagnostic(value: str) -> str:
@@ -34,6 +34,7 @@ def diagnostic(value: str) -> str:
 
 def config_file(path: Path) -> dict:
     c = validate_file(path, ROOT / 'schemas/claude-launch.schema.json')
+    selection_arguments(c)
     try:
         if str(uuid.UUID(c['native_session_id'])) != c['native_session_id']:
             raise ValueError()
@@ -59,7 +60,7 @@ def child_environment(c: dict) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in IDENTITY_ENV}
     suffix = hashlib.sha256(str(Path(c['ledger_directory']).resolve()).encode()).hexdigest()[:12]
     env.update(SQUAD_SESSION_ID=f"claude:{c['native_session_id']}:{suffix}",
-               SQUAD_AGENT=c['agent_id'], SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1')
+               SQUAD_AGENT=c['agent_id'], SQUAD_NATIVE_SESSION_ID=c['native_session_id'], SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1')
     if c['coordination_mode'] == 'codex-wrapper-compat':
         # Local squad-coordination -> squad-codex may require these even for Claude.
         # Derive both from the assigned child; never inherit the Dispatcher id.
@@ -153,11 +154,12 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
     check_worktree(assignment)
     c = config_file(config_path)
     authorization(c, assignment)
+    selection_arguments(c)
     env = child_environment(c)
     state = binding(assignment, c, env)
     resources = check_resources(assignment, c, env)
     check_heartbeat_runtime(c, env)
-    return {'status': 'ready', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
+    return {'status': 'launch-checked', 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed',
@@ -228,6 +230,12 @@ def supervise(argv: list[str], assignment: dict, c: dict, env: dict) -> int:
             signal.signal(signal.SIGINT, previous)
 
 
+def selection_arguments(c):
+    if bool(c.get('model')) != bool(c.get('effort')):
+        raise ValidationError('model and effort must be supplied together')
+    return ['--model', c['model'], '--effort', c['effort']] if c.get('model') else []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--assignment', type=Path, required=True)
@@ -259,7 +267,7 @@ def main() -> int:
         os.chdir(a['worktree'])
         return supervise([c['client_executable'], '--session-id',
                   c['native_session_id'], '--permission-mode', c['permission_mode'],
-                  *receiver_args, prompt], a, c, env)
+                  *selection_arguments(c), *receiver_args, prompt], a, c, env)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         reason = str(error) if isinstance(error, ValidationError) else 'launcher input or executable unavailable'
         print(json.dumps({'status': 'blocked', 'reason': reason}), file=sys.stderr)

@@ -18,6 +18,8 @@ import (
 
 // ReviewSettings contains the selected settings, never credentials or prompts.
 type ReviewSettings struct {
+	Backend string `json:"backend,omitempty"` // Empty retains historical Grok receipt identity.
+
 	Mode              string `json:"mode"`
 	Model             string `json:"model"`
 	Effort            string `json:"effort"`

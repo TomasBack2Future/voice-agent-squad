@@ -38,7 +38,7 @@
     ],
     "review": [
       "Start at the first complete stable diff after fast gates and self-review, independently of merge hold, full CI completion and ENV waits; record readiness and start times",
-      "one PR-wide managed Grok review admitted only for the final complete frozen diff",
+      "one PR-wide managed review using the explicitly selected repository-permitted backend (grok, claude, codex or muse), admitted only for the final complete frozen diff; a required App-pinned Check remains authoritative",
       "one in-flight review per PR with a freeze write barrier and deterministic join",
       "full deterministic CI joined with the review result"
     ],

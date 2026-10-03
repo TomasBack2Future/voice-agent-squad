@@ -322,6 +322,9 @@ func TestParseConfigShadowAndProspectivePreserveOriginalMode(t *testing.T) {
 }
 
 func TestAuthorizationReadbackUsesOnlyExactLocalReceipt(t *testing.T) {
+	for _, key := range []string{"SQUAD_NATIVE_SESSION_ID", "CODEX_SESSION_ID", "CLAUDE_SESSION_ID", "MUSE_SESSION_ID"} {
+		t.Setenv(key, "")
+	}
 	t.Setenv("SQUAD_AGENT", "worker")
 	t.Setenv("CODEX_THREAD_ID", "native")
 	t.Setenv("SQUAD_SESSION_ID", "codex:native")
@@ -437,5 +440,41 @@ func TestParseHumanRestartUsesCanonicalConfiguredStore(t *testing.T) {
 	}
 	if _, err := parseConfig(args[:len(args)-2], io.Discard); err == nil {
 		t.Fatal("missing grant accepted")
+	}
+}
+
+func TestReviewOwnerAcrossRuntimesAndLedgerSuffix(t *testing.T) {
+	for _, key := range []string{"SQUAD_SESSION_ID", "SQUAD_NATIVE_SESSION_ID", "SQUAD_AGENT", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_SESSION_ID", "MUSE_SESSION_ID"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("SQUAD_AGENT", "review-author")
+	for _, backend := range []string{"codex", "claude", "muse"} {
+		t.Setenv("SQUAD_SESSION_ID", backend+":native:012345abcdef")
+		owner, err := currentReviewOwner()
+		if err != nil || owner.Native != "native" || owner.Actor != "review-author" {
+			t.Fatalf("%+v %v", owner, err)
+		}
+	}
+	t.Setenv("CODEX_THREAD_ID", "foreign")
+	if _, err := currentReviewOwner(); err == nil {
+		t.Fatal("inherited foreign identity accepted")
+	}
+}
+
+func TestBackendSelectionIsExplicitAndKeepsGrokCheckSeparate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/private/app.pem","model":"grok-4.7"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--config", path, "--repo", "owner/repo", "--pr", "1"}
+	for _, backend := range []string{"claude", "codex", "muse"} {
+		if _, err := parseConfig(append(append([]string{}, args...), "--backend", backend), io.Discard); err == nil {
+			t.Fatal("inherited Grok model")
+		}
+		cfg, err := parseConfig(append(append([]string{}, args...), "--backend", backend, "--model", "selected"), io.Discard)
+		if err != nil || cfg.grokBinary != backend || cfg.checkName != "squad-review-"+backend+"-shadow" {
+			t.Fatalf("%+v %v", cfg, err)
+		}
 	}
 }

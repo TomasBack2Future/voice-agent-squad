@@ -184,11 +184,11 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 		result = FindingsResult{
 			SchemaVersion: FindingsSchemaVersion,
 			Verdict:       VerdictError,
-			Summary:       "Grok review did not complete; no valid review conclusion. Diagnose the operational failure before considering another attempt.",
+			Summary:       reviewTitle(audit.Backend) + " did not complete; no valid review conclusion. Diagnose the operational failure before considering another attempt.",
 			Findings:      []Finding{},
 		}
 		if audit.FailureKind == CLIFailureTimeout {
-			result.Summary = "Grok review timed out; no valid review conclusion. Do not treat timeout as approval or blindly resample this head."
+			result.Summary = reviewTitle(audit.Backend) + " timed out; no valid review conclusion. Do not treat timeout as approval or blindly resample this head."
 		}
 	}
 

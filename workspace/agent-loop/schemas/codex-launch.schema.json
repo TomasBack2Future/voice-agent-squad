@@ -157,7 +157,12 @@
           ],
           "properties": {
             "provider": {
-              "const": "grok"
+              "enum": [
+                "grok",
+                "claude",
+                "codex",
+                "muse"
+              ]
             },
             "destination": {
               "type": "string",

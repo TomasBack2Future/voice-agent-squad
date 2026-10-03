@@ -74,3 +74,25 @@ repair owner and verification needed. Reuse existing Issue/PR owners before
 filing. Distinguish source, reviewed/merged, installed, session-adopted and effective
 states. Installation and takeover remain separate authorized operations; a skill
 link refresh does not change a running session. Pauses and existing custody persist.
+
+## Portable command and review selection
+
+`runtime_entry.py` supplies a client-neutral CLI binding for all three runtimes.
+Pass the native Squad binary, selected ledger, actual actor and native session;
+it removes inherited foreign session identities. `capabilities` reports source
+support separately from native qualification. `listen` uses deferred delivery;
+`handled` consumes the recipient's explicit handling result and records delivery
+then ACK through the fenced Squad API. An exit code or wake alone is not a
+handling result. The helper neither generates model turns nor creates a scheduler.
+
+The `worker` entry selects the existing launch adapter. Claude's portable entry
+requires explicit model/effort and the event executable; its receipt is
+`launch-checked`, not proof of effective model/permissions or claim-loss write
+exclusion. Legacy direct configurations retain their existing invocation.
+Codex and Muse custody guards remain in force. A shared App is not a CLI target.
+
+The bounded reviewer supports explicit `--backend grok|claude|codex|muse`.
+Non-Grok selection requires an explicit model, uses distinct Check names and
+retains the shared PR admission history. Choosing another backend does not reset
+an attempt, refund a consumed input or impersonate a required Grok Check. See
+[the review command reference](../../docs/proposals/grok-required-review-gate.md#native-review-backends).

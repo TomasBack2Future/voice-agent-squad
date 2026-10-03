@@ -249,3 +249,12 @@ class HeartbeatSupervisorTests(unittest.TestCase):
         with patch.object(launcher.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'old CLI help','')):
             with self.assertRaisesRegex(ValueError, 'lacks fenced heartbeat'):
                 launcher.check_heartbeat_runtime({'coordination_executable':'/squad','ledger_directory':'/tmp'}, {})
+
+class ExplicitSelectionTests(unittest.TestCase):
+    def test_selection_is_not_inherited_or_silently_defaulted(self):
+        self.assertEqual(launcher.selection_arguments({'model': 'selected', 'effort': 'high'}),
+                         ['--model', 'selected', '--effort', 'high'])
+        self.assertEqual(launcher.selection_arguments({}), [])  # legacy only
+        for value in ({'model': 'selected'}, {'effort': 'high'}):
+            with self.assertRaises(launcher.ValidationError):
+                launcher.selection_arguments(value)

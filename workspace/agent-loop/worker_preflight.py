@@ -143,7 +143,8 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         launch_receipt = check_launch(assignment, launch_config)
     return {
         "schema_version": "agent-loop.startup-receipt.v1",
-        "status": "context-checked" if context_only else "ready",
+        "status": "context-checked" if context_only else "launch-checked",
+        "native_qualified": False,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "assignment_id": assignment["assignment_id"],
         "assignment_sha256": hashlib.sha256(assignment_path.read_bytes()).hexdigest(),

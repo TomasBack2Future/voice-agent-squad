@@ -544,3 +544,59 @@ commit response cannot open another slot. Custody is checked again before
 launch and publication. A second timeout gets no automatic retry or refund;
 retain the original flight/handle until supported join. Installer qualification
 and original-owner adoption are separate from source delivery.
+
+## Native review backends
+
+The same command now accepts `--backend grok|claude|codex|muse`. Grok remains
+the default for compatibility. Build a neutral executable name if desired:
+
+```sh
+go build -o /absolute/output/squad-review ./cmd/squad-grok-review
+/absolute/output/squad-review --backend claude --reviewer-bin /absolute/claude \
+  --model SELECTED_MODEL --reasoning-effort medium --repo owner/repository --pr 123
+/absolute/output/squad-review --backend codex --reviewer-bin /absolute/codex \
+  --model SELECTED_MODEL --reasoning-effort medium --repo owner/repository --pr 123
+/absolute/output/squad-review --backend muse --reviewer-bin /absolute/muse \
+  --model muse-spark-1.3-contributor --reasoning-effort medium --repo owner/repository --pr 123
+```
+
+`backend` and `reviewer_bin` may be configured in the existing configuration.
+A non-Grok backend requires an explicit model or a model in a matching backend
+configuration. There is no automatic model/backend fallback. `--provider` still
+selects the **input host** (`github` or `local-git`), not the model runtime.
+All backends support the existing local Git mode without GitHub publication.
+
+Each child runs in a private temporary directory containing the frozen evidence,
+not the author's checkout. Claude uses safe mode, no tools, no custom MCP and
+structured output. Codex ignores user config/rules, selects a read-only sandbox,
+disables shell/patch/multi-agent/web/MCP configuration, and returns JSONL. Muse
+explicitly selects the model and YOLO, disables workspace shell/writes/web and
+foreign personal context, and limits execution to one model step. The adapters
+reject tool events, failed/incomplete native results, multiple answers and
+malformed findings. Native controls differ: these are bounded snapshot-review
+adapters, not a new Worker execution fence or a general adversarial OS sandbox.
+
+Only the selected provider's authentication/routing environment is inherited:
+Claude's `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`; Muse's
+`META_API_KEY`; Codex's `OPENAI_API_KEY`. Normal per-client HOME authentication
+remains available. GitHub/App credentials and foreign provider variables are not
+passed to the model child. Diagnostic output remains hashed/bounded, never
+published raw. Configure a dedicated reviewer home with `--grok-home` when the
+normal home is not the intended authentication boundary (the legacy flag name
+is retained). Do not change live credentials to make a qualification pass.
+
+Native `doctor` checks the selected executable version/options only; it reports
+model access and authentication as `not_checked`. An isolated real native test
+must qualify that selection. Optional tests use `SQUAD_NATIVE_REVIEW_BINARY`,
+`SQUAD_NATIVE_REVIEW_BACKEND`, and `SQUAD_NATIVE_REVIEW_MODEL` with
+`go test ./internal/grokreview -run '^TestNativeReviewerQualification$' -v`.
+Ordinary CI skips this account-dependent test. CLI presence and fixture tests
+alone are not native qualification.
+
+Non-Grok Checks are `squad-review-<backend>` or `squad-review-<backend>-shadow`.
+Their backend is recorded in command/status/admission output and publication;
+none can satisfy a branch rule requiring the Grok Check. The existing canonical
+admission directory and consumed input history are shared across backends.
+Changing backend cannot bypass single-flight or resample an already consumed
+input. Grok-specific recover/readmit/complete/restart operations remain Grok-only.
+Failures stay failures; switching tools does not fabricate a successful verdict.
