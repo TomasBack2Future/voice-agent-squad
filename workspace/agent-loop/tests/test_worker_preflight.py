@@ -139,7 +139,9 @@ class WorkerPreflightTests(unittest.TestCase):
              patch('muse_worker_launcher.check_launch', return_value={'status': 'ready'}) as muse, \
              patch('worker_preflight.shutil.which', return_value='/qualified/tool'):
             receipt = preflight.check(self.path, self.profile, 'muse', [skill], [], Path('/config'))
-            self.assertEqual(receipt['status'], 'ready')
+            self.assertEqual(receipt['status'], 'launch-checked')
+            self.assertFalse(receipt['native_qualified'])
+            self.assertEqual(receipt['launcher']['status'], 'ready')
             muse.assert_called_once_with(self.assignment, Path('/config'))
             claude.assert_not_called()
 

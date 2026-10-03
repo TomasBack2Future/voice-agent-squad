@@ -20,6 +20,9 @@ import (
 )
 
 type config struct {
+	backend        string
+	reviewerBinary string
+
 	humanRestart           bool
 	humanGrantPath         string
 	provider               string
@@ -57,6 +60,9 @@ type config struct {
 }
 
 type localConfig struct {
+	Backend        string `json:"backend,omitempty"`
+	ReviewerBinary string `json:"reviewer_bin,omitempty"`
+
 	AppID           int64  `json:"app_id"`
 	InstallationID  int64  `json:"installation_id"`
 	AppPrivateKey   string `json:"app_private_key"`
@@ -79,6 +85,9 @@ type runtimeDependencies struct {
 }
 
 type doctorOutput struct {
+	Backend     string `json:"backend"`
+	ModelAccess string `json:"model_access"`
+
 	Repository           string `json:"repository,omitempty"`
 	RepositoryAccess     string `json:"repository_access"`
 	Status               string `json:"status"`
@@ -101,6 +110,8 @@ type doctorOutput struct {
 }
 
 type commandOutput struct {
+	Backend string `json:"backend,omitempty"`
+
 	HumanGrantID       string                              `json:"human_grant_id,omitempty"`
 	Terminal           *grokreview.TerminalDiagnostics     `json:"terminal_diagnostics,omitempty"`
 	RendererProvenance *grokreview.PatchRendererProvenance `json:"renderer_provenance,omitempty"`
@@ -143,17 +154,35 @@ func main() {
 }
 
 func currentReviewOwner() (grokreview.ReviewOwner, error) {
-	native := os.Getenv("CODEX_THREAD_ID")
+	native := os.Getenv("SQUAD_NATIVE_SESSION_ID")
 	session := os.Getenv("SQUAD_SESSION_ID")
 	if session != "" {
-		if !strings.HasPrefix(session, "codex:") {
-			return grokreview.ReviewOwner{}, fmt.Errorf("prospective admission requires the original Codex native owner")
+		parts := strings.Split(session, ":")
+		if len(parts) < 2 || len(parts) > 3 || (parts[0] != "codex" && parts[0] != "claude" && parts[0] != "muse") || parts[1] == "" {
+			return grokreview.ReviewOwner{}, fmt.Errorf("explicit runtime/native owner required")
 		}
-		selected := strings.TrimPrefix(session, "codex:")
-		if native != "" && native != selected {
+		if len(parts) == 3 {
+			if len(parts[2]) != 12 {
+				return grokreview.ReviewOwner{}, fmt.Errorf("invalid ledger identity suffix")
+			}
+			for _, c := range parts[2] {
+				if !strings.ContainsRune("0123456789abcdef", c) {
+					return grokreview.ReviewOwner{}, fmt.Errorf("invalid ledger identity suffix")
+				}
+			}
+		}
+		if native != "" && native != parts[1] {
 			return grokreview.ReviewOwner{}, fmt.Errorf("native delivery owner mismatch")
 		}
-		native = selected
+		native = parts[1]
+	}
+	for _, name := range []string{"CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_SESSION_ID", "MUSE_SESSION_ID"} {
+		if value := os.Getenv(name); value != "" {
+			if native != "" && native != value {
+				return grokreview.ReviewOwner{}, fmt.Errorf("native delivery owner mismatch")
+			}
+			native = value
+		}
 	}
 	owner := grokreview.ReviewOwner{Actor: os.Getenv("SQUAD_AGENT"), Native: native}
 	if owner.Actor == "" || owner.Native == "" {
@@ -178,7 +207,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runCompletion(ctx, configuration, stdout, stderr)
 	}
 	if configuration.reconcile {
-		settings := grokreview.ReviewSettings{Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
+		settings := grokreview.ReviewSettings{Backend: configuration.backend, Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
 		admission, openErr := grokreview.OpenAdmission(configuration.admissionDir, settings, configuration.recoveryFrom, nil)
 		if openErr != nil {
 			_, _ = fmt.Fprintln(stderr, openErr)
@@ -235,15 +264,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		version, revision := buildIdentity()
 		return encodeJSON(stdout, stderr, doctorOutput{
-			Status: "ok", Version: version, Revision: revision,
+			Status: "ok", Version: version, Revision: revision, Backend: selectedBackend(configuration.backend), ModelAccess: "not_checked",
 			Repository: configuration.repository, RepositoryAccess: repositoryAccess,
 			ConfigPath: configuration.configPath, AppID: configuration.appID,
 			InstallationID: configuration.installationID,
 			GrokBinary:     dependencies.grokBinary, GitHubBinary: dependencies.githubBinary,
 			GrokHome: configuration.grokHome, Model: grokHealth.Model,
 			ReasoningEffort: grokHealth.ReasoningEffort,
-			GrokVersion:     grokHealth.Version, GrokAuthentication: "ok",
-			GrokCLIContract: "ok", GrokSessionStorage: "writable",
+			GrokVersion:     grokHealth.Version, GrokAuthentication: map[bool]string{true: "ok", false: "not_checked"}[configuration.backend == ""],
+			GrokCLIContract: "ok", GrokSessionStorage: map[bool]string{true: "writable", false: "not_checked"}[configuration.backend == ""],
 			GitHubAuthentication: map[bool]string{true: "ok", false: "not_applicable"}[configuration.provider == "github"], ReviewerBundle: "ok",
 		})
 	}
@@ -264,7 +293,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	var admission *grokreview.Admission
 	if configuration.provider == "github" {
-		settings := grokreview.ReviewSettings{Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
+		settings := grokreview.ReviewSettings{Backend: configuration.backend, Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
 		check := func(checkCtx context.Context, prior grokreview.AttemptReceipt) error {
 			return dependencies.github.(*grokreview.GitHubCLI).VerifyRecoveryCheck(checkCtx, dependencies.installationToken, configuration.appID, prior)
 		}
@@ -429,11 +458,11 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 		return runtimeDependencies{}, err
 	}
 	model, err := grokreview.NewCLIRunner(grokreview.CLIConfig{
-		Binary: grokBinary, HomeDir: configuration.grokHome,
+		Backend: configuration.backend, Binary: grokBinary, HomeDir: configuration.grokHome,
 		Model: configuration.model, ReasoningEffort: configuration.reasoningEffort,
 		Timeout: configuration.timeout, MaxOutputBytes: configuration.maxReviewerOutput,
 		Core: string(bundle.Core.Content), Policy: string(bundle.Policy.Content),
-		SafeEnvironment: safeProcessEnvironment(),
+		SafeEnvironment: safeProcessEnvironment(), ProviderEnvironment: grokreview.ProviderEnvironment(configuration.backend),
 	})
 	if err != nil {
 		return runtimeDependencies{}, err
@@ -484,6 +513,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.Int64Var(&configuration.appID, "app-id", 0, "GitHub App ID")
 	flags.Int64Var(&configuration.installationID, "installation-id", 0, "GitHub App installation ID")
 	flags.StringVar(&configuration.appPrivateKey, "app-private-key", "", "path to the GitHub App private key PEM")
+	flags.StringVar(&configuration.backend, "backend", "grok", "review runtime: grok, claude, codex or muse (no automatic fallback)")
+	flags.StringVar(&configuration.reviewerBinary, "reviewer-bin", "", "selected reviewer CLI executable")
 	flags.StringVar(&configuration.grokBinary, "grok-bin", "grok", "Grok CLI binary")
 	flags.StringVar(&configuration.githubBinary, "gh-bin", "gh", "GitHub CLI binary")
 	flags.StringVar(&configuration.grokHome, "grok-home", "", "home directory containing the dedicated Grok login")
@@ -529,14 +560,35 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if found {
 		applyLocalConfig(&configuration, fileConfiguration, visited)
 	}
+	if configuration.backend == "grok" {
+		configuration.backend = ""
+	}
+	if configuration.backend != "" && configuration.backend != "claude" && configuration.backend != "codex" && configuration.backend != "muse" {
+		return config{}, fmt.Errorf("unsupported review backend")
+	}
+	if configuration.backend != "" {
+		if !visited["model"] && (fileConfiguration.Backend != configuration.backend || fileConfiguration.Model == "") {
+			return config{}, fmt.Errorf("non-Grok backend requires an explicit --model or matching backend configuration")
+		}
+		if visited["grok-bin"] {
+			return config{}, fmt.Errorf("use --reviewer-bin for a non-Grok backend")
+		}
+		configuration.grokBinary = configuration.backend
+		if configuration.humanRestart || configuration.recovery || configuration.prospective || configuration.completion || configuration.completionCustodyPath != "" {
+			return config{}, fmt.Errorf("grok recovery cannot be applied to another backend; retain original attempt")
+		}
+	}
+	if configuration.reviewerBinary != "" {
+		configuration.grokBinary = configuration.reviewerBinary
+	}
 	if err := grokreview.ValidateReasoningEffort(configuration.reasoningEffort); err != nil {
 		return config{}, err
 	}
 	switch configuration.mode {
 	case "shadow":
-		configuration.checkName = "grok-review-shadow"
+		configuration.checkName = grokreview.ReviewCheckName(configuration.backend, "shadow")
 	case "required":
-		configuration.checkName = "grok-review"
+		configuration.checkName = grokreview.ReviewCheckName(configuration.backend, "required")
 	default:
 		return config{}, fmt.Errorf("mode must be shadow or required")
 	}
@@ -653,6 +705,13 @@ func loadLocalConfig(path string) (localConfig, bool, error) {
 }
 
 func applyLocalConfig(configuration *config, local localConfig, visited map[string]bool) {
+	if !visited["backend"] && local.Backend != "" {
+		configuration.backend = local.Backend
+	}
+	if !visited["reviewer-bin"] && local.ReviewerBinary != "" && selectedBackend(configuration.backend) == selectedBackend(local.Backend) {
+		configuration.reviewerBinary = local.ReviewerBinary
+	}
+
 	if !visited["app-id"] {
 		configuration.appID = local.AppID
 	}
@@ -714,8 +773,15 @@ func buildIdentity() (string, string) {
 	return version, revision
 }
 
+func selectedBackend(backend string) string {
+	if backend == "" {
+		return "grok"
+	}
+	return backend
+}
+
 func newCommandOutput(report grokreview.ReviewReport) commandOutput {
-	return commandOutput{
+	return commandOutput{Backend: report.Audit.Backend,
 		Terminal:   report.Audit.Terminal,
 		Repository: report.Snapshot.Repository, PullRequest: report.Snapshot.Number,
 		BaseSHA: report.Snapshot.BaseSHA, HeadSHA: report.Snapshot.HeadSHA,
@@ -834,7 +900,7 @@ func runCompletion(ctx context.Context, c config, stdout, stderr io.Writer) int 
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
-	settings := grokreview.ReviewSettings{Mode: c.mode, Model: c.model, Effort: c.reasoningEffort, TimeoutMS: c.timeout.Milliseconds(), MaxGitHubOutput: c.maxGitHubOutput, MaxReviewerOutput: c.maxReviewerOutput, AppID: c.appID, InstallationID: c.installationID}
+	settings := grokreview.ReviewSettings{Backend: c.backend, Mode: c.mode, Model: c.model, Effort: c.reasoningEffort, TimeoutMS: c.timeout.Milliseconds(), MaxGitHubOutput: c.maxGitHubOutput, MaxReviewerOutput: c.maxReviewerOutput, AppID: c.appID, InstallationID: c.installationID}
 	a, err := grokreview.OpenAdmission(c.admissionDir, settings, "", nil)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)

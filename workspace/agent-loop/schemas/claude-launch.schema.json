@@ -159,7 +159,12 @@
           ],
           "properties": {
             "provider": {
-              "const": "grok"
+              "enum": [
+                "grok",
+                "claude",
+                "codex",
+                "muse"
+              ]
             },
             "destination": {
               "type": "string",
@@ -171,6 +176,19 @@
           }
         }
       }
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "effort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     }
   }
 }

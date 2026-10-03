@@ -79,6 +79,8 @@ type TokenUsage struct {
 }
 
 type CLIAudit struct {
+	Backend string
+
 	Terminal        *TerminalDiagnostics `json:"terminal_diagnostics,omitempty"`
 	AttemptID       string
 	BundleSHA256    string
@@ -97,6 +99,10 @@ type CLIAudit struct {
 }
 
 type CLIConfig struct {
+	ProviderEnvironment map[string]string
+
+	Backend string
+
 	Binary          string
 	HomeDir         string
 	Model           string
@@ -153,6 +159,13 @@ type modelUsage struct {
 }
 
 func NewCLIRunner(config CLIConfig) (*CLIRunner, error) {
+	if config.Backend == "" {
+		config.Backend = "grok"
+	}
+	if !validBackend(config.Backend) {
+		return nil, fmt.Errorf("unsupported review backend")
+	}
+
 	if config.ReasoningEffort == "" {
 		config.ReasoningEffort = DefaultReasoningEffort
 	}
@@ -185,10 +198,19 @@ func NewCLIRunner(config CLIConfig) (*CLIRunner, error) {
 			return nil, fmt.Errorf("grok CLI child environment variable %q contains NUL", name)
 		}
 	}
+	for name, value := range config.ProviderEnvironment {
+		if !allowedProviderEnvironment(config.Backend, name) || strings.ContainsRune(value, '\x00') {
+			return nil, fmt.Errorf("unsupported reviewer provider environment")
+		}
+	}
 	return &CLIRunner{config: config}, nil
 }
 
 func (r *CLIRunner) Doctor(ctx context.Context) (CLIDoctor, error) {
+	if r.config.Backend != "grok" {
+		return r.nativeDoctor(ctx)
+	}
+
 	stateDir := filepath.Join(r.config.HomeDir, ".grok")
 	if err := probeWritableDirectory(stateDir); err != nil {
 		return CLIDoctor{}, fmt.Errorf(
@@ -370,7 +392,7 @@ func outputContainsModel(output []byte, model string) bool {
 }
 
 func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsResult, CLIAudit, error) {
-	audit := CLIAudit{RequestedModel: r.config.Model, ReasoningEffort: r.config.ReasoningEffort}
+	audit := CLIAudit{Backend: r.config.Backend, RequestedModel: r.config.Model, ReasoningEffort: r.config.ReasoningEffort}
 	if len(frozenBundle) == 0 {
 		return FindingsResult{}, audit, fmt.Errorf("frozen review bundle is empty")
 	}
@@ -408,7 +430,7 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 		} else if audit.FailureKind == CLIFailureCanceled && callCtx.Err() == context.Canceled {
 			terminal.DeadlineProducer = "caller_cancel"
 		}
-		if terminal.ChildWaited && (audit.FailureKind == CLIFailureTimeout || audit.FailureKind == CLIFailureCanceled) {
+		if r.config.Backend == "grok" && terminal.ChildWaited && (audit.FailureKind == CLIFailureTimeout || audit.FailureKind == CLIFailureCanceled) {
 			terminal.Session, terminal.SessionEvidence = r.terminalSession(prepared.workDir, frozenBundle, terminal.StartedAt, terminal.FinishedAt)
 		}
 	}()
@@ -460,11 +482,19 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 			audit.FailureKind, audit.StderrSHA256, err,
 		)
 	}
-	result, parsedAudit, err := ParseCLIEnvelope(stdout.Bytes())
+	var result FindingsResult
+	var parsedAudit CLIAudit
+	if r.config.Backend == "grok" {
+		result, parsedAudit, err = ParseCLIEnvelope(stdout.Bytes())
+	} else {
+		result, parsedAudit, err = parseNativeOutput(r.config.Backend, stdout.Bytes())
+	}
+
 	if err != nil {
 		audit.FailureKind = CLIFailureInvalidOutput
 		return FindingsResult{}, audit, fmt.Errorf("grok CLI returned invalid structured output")
 	}
+	parsedAudit.Backend = r.config.Backend
 	parsedAudit.Terminal = terminal
 	parsedAudit.Duration = duration
 	parsedAudit.StderrSHA256 = audit.StderrSHA256
@@ -474,6 +504,10 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 }
 
 func (r *CLIRunner) prepare(ctx context.Context, frozenBundle []byte) (preparedCommand, error) {
+	if r.config.Backend != "grok" {
+		return r.prepareNative(ctx, frozenBundle)
+	}
+
 	workDir, err := os.MkdirTemp("", "squad-grok-review-")
 	if err != nil {
 		return preparedCommand{}, fmt.Errorf("create Grok CLI work directory: %w", err)
@@ -548,6 +582,9 @@ func (r *CLIRunner) childEnvironment(workDir string) []string {
 	sort.Strings(names)
 	for _, name := range names {
 		environment = append(environment, name+"="+r.config.SafeEnvironment[name])
+	}
+	for name, value := range r.config.ProviderEnvironment {
+		environment = append(environment, name+"="+value)
 	}
 	return append(environment, "TMPDIR="+workDir)
 }

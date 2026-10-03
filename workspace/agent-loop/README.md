@@ -141,7 +141,7 @@ that is preparation, not ownership or permission to execute work. It never
 starts a model, claims, binds or mutates an environment. Execution preflight
 requires a checked launch config for Claude, Codex and Muse. Use `--context-only`
 explicitly for portable input checks without a launcher; the receipt reports
-`status: context-checked` and `launcher.status: not_checked`, never `ready`.
+`status: context-checked` and `launcher.status: not_checked`, never `launch-checked`.
 Do not use that receipt to admit a session. Muse source/test Workers use
 `muse_worker_launcher.py` with the checked Muse launch configuration and the
 shared `.agents/skills` discovery path. Environment execution remains a separate
@@ -754,7 +754,54 @@ The native/runtime adapter maintainer and installer own that bounded qualificati
 there is no force-clear, lease expiry or automatic client/server kill. Source
 preparation never clears an existing live writer record to force adoption.
 
-### Muse source Worker execution
+## Portable runtime entry
+
+Invoke the same installed-package entry for Claude, Codex or Muse:
+
+```sh
+python3 runtime_entry.py --runtime muse capabilities
+python3 runtime_entry.py --runtime muse --native-session NATIVE --agent ACTOR \
+  --ledger /absolute/coordination --squad /absolute/native/squad \
+  exec -- dispatch list --json
+python3 runtime_entry.py --runtime claude worker \
+  --assignment /absolute/assignment.json --config /absolute/launch.json --check
+```
+
+The `worker` entry delegates Muse to the custody-bound source/test/handoff
+launcher described below; its config, claim, reservation and container checks
+remain mandatory. Native adoption is not inferred from this routing capability.
+
+Use the actual native Squad binary, not a wrapper which derives Codex identity
+or switches ledger directories. No global wrapper, installation or live client
+is changed. `exec` forwards argument boundaries and exit codes unchanged, with
+explicit per-native/per-ledger identity and no inherited foreign actor.
+
+For portable in-turn or explicitly awaited event consumption, the same global
+identity arguments support `listen --delivery-session INCARNATION --max 30s`.
+This emits the existing `worker-terminal-delivery-v1` JSON without marking it
+delivered. It does not provide idle wake to an unsupported client. Native
+receivers still own their existing lifetime, controller bindings and journals.
+
+After the actual recipient reads current decisions and handles an event, save
+this bounded result with that delivery receipt:
+
+```json
+{"schema_version":"squad.handled-events.v1","runtime":"muse",
+ "native_session":"NATIVE","agent":"ACTOR","delivery_session":"INCARNATION",
+ "handled":[{"event_id":"EXACT_DELIVERED_EVENT_ID","note":"existing-checkpoint/reconciliation-reference"}]}
+```
+
+Then invoke `handled --delivery /absolute/delivery.json --receipt /absolute/handled.json`
+with the same global arguments. It validates the complete batch before writes,
+records native acceptance implied by that explicit recipient result, then ACKs
+only those events. ACK is also attempted when delivery reports an error, because
+delivery rejects an already processed event while ACK can confirm the same
+handling note idempotently. If ACK cannot confirm processing, the helper stops
+with a nonzero result. Partial success is safe to replay with the same notes. Never synthesize a handling result merely because a
+listener returned, a native turn ended or an operation remains unresolved. The
+Squad store independently rechecks recipient, generation and current decision.
+
+## Muse source Worker execution
 
 Use `muse_worker_launcher.py`, not the lifecycle probe, for a new bounded
 source/test/handoff assignment. The assignment must already have a primary

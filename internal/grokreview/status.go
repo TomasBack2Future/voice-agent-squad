@@ -16,6 +16,8 @@ import (
 const ReviewStatusSchemaVersion = "squad.local-review.status.v1"
 
 type ReviewStatus struct {
+	Backend string `json:"backend,omitempty"`
+
 	Terminal           *TerminalDiagnostics `json:"terminal_diagnostics,omitempty"`
 	SchemaVersion      string               `json:"schema_version"`
 	Attempt            string               `json:"attempt"`
@@ -107,7 +109,7 @@ func (w *ReviewStatusWriter) Observe(observation ReviewObservation) error {
 	defer w.mu.Unlock()
 	now := w.now()
 	snapshot := observation.Snapshot
-	status := ReviewStatus{
+	status := ReviewStatus{Backend: observation.Audit.Backend,
 		Terminal:      observation.Audit.Terminal,
 		SchemaVersion: ReviewStatusSchemaVersion,
 		Attempt:       w.attempt, Repository: snapshot.Repository, PullRequest: snapshot.Number,

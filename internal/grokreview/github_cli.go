@@ -273,7 +273,7 @@ func (g *GitHubCLI) PublishReview(ctx context.Context, token, checkName string, 
 	if token == "" {
 		return Publication{}, fmt.Errorf("github App installation token is required")
 	}
-	if checkName != "grok-review" && checkName != "grok-review-shadow" {
+	if checkName != ReviewCheckName(audit.Backend, "required") && checkName != ReviewCheckName(audit.Backend, "shadow") {
 		return Publication{}, fmt.Errorf("unsupported Grok review Check name %q", checkName)
 	}
 	if err := validateSnapshot(snapshot); err != nil {
@@ -310,7 +310,7 @@ func (g *GitHubCLI) PublishReview(ctx context.Context, token, checkName string, 
 		"external_id": publicationExternalID(snapshot.Repository, snapshot.Number, snapshot.HeadSHA, audit.AttemptID, audit.BundleSHA256),
 		"details_url": comment.HTMLURL,
 		"output": map[string]string{
-			"title":   "Grok review " + string(result.Verdict),
+			"title":   reviewTitle(audit.Backend) + " " + string(result.Verdict),
 			"summary": safeText(result.Summary),
 			"text":    renderFindings(result.Findings),
 		},
@@ -399,7 +399,7 @@ func renderComment(snapshot PullRequestSnapshot, result FindingsResult, audit CL
 	var body strings.Builder
 	body.WriteString("<!-- squad-grok-review:")
 	body.WriteString(snapshot.HeadSHA)
-	body.WriteString(" -->\n## Grok review: ")
+	body.WriteString(" -->\n## " + reviewTitle(audit.Backend) + ": ")
 	body.WriteString(safeText(string(result.Verdict)))
 	body.WriteString("\n\n")
 	body.WriteString(safeText(result.Summary))
@@ -539,10 +539,7 @@ func (g *GitHubCLI) FindAttemptPublication(ctx context.Context, token string, ap
 	if !validAttemptID(r.ID) || !r.SamplingCompleted || len(r.Identity.BundleSHA256) != 64 {
 		return found, fmt.Errorf("joined sampling and exact attempt/input required")
 	}
-	name := "grok-review"
-	if r.Settings.Mode == "shadow" {
-		name = "grok-review-shadow"
-	}
+	name := ReviewCheckName(r.Settings.Backend, r.Settings.Mode)
 	expected := publicationExternalID(r.Identity.Repository, r.Identity.PR, r.Identity.HeadSHA, r.ID, r.Identity.BundleSHA256)
 	for page := 1; page <= 10; page++ {
 		raw, err := g.call(ctx, token, []string{"api", fmt.Sprintf("repos/%s/commits/%s/check-runs?per_page=100&page=%d", r.Identity.Repository, r.Identity.HeadSHA, page)}, nil)
@@ -582,7 +579,7 @@ func (g *GitHubCLI) FindAttemptPublication(ctx context.Context, token string, ap
 			if r.Verdict == VerdictApproved {
 				conclusion = "success"
 			}
-			if c.ID <= 0 || c.Head != r.Identity.HeadSHA || c.Status != "completed" || c.Conclusion != conclusion || c.Output.Title != "Grok review "+string(r.Verdict) || found.CheckRunID != 0 {
+			if c.ID <= 0 || c.Head != r.Identity.HeadSHA || c.Status != "completed" || c.Conclusion != conclusion || c.Output.Title != reviewTitle(r.Settings.Backend)+" "+string(r.Verdict) || found.CheckRunID != 0 {
 				return Publication{}, fmt.Errorf("original publication is ambiguous, unresolved or mismatched")
 			}
 			found = Publication{CheckRunID: c.ID, CheckURL: c.URL, CommentURL: c.Details, Conclusion: c.Conclusion}
