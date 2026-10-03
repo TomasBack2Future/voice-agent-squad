@@ -2,6 +2,7 @@
 """Session-owned terminal-event receiver. No PTY input and no model scheduling."""
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 import fcntl
 import json
 import os
@@ -19,6 +20,47 @@ def settings(config_path: Path) -> dict:
              'asyncRewake': True, 'timeout': 86400}
     return {'hooks': {event: [{'hooks': [entry]}]
                       for event in ('SessionStart', 'PostToolUse', 'Stop')}}
+
+
+@contextmanager
+def controller_receiver(config, env, state):
+    if config.get('role', 'dispatcher') != 'dispatcher':
+        yield
+        return
+    def call(*args):
+        return subprocess.run([config['squad_executable'], 'dispatch', *args],
+                              cwd=config['ledger_directory'], env=env, capture_output=True,
+                              text=True, timeout=10, check=True)
+    current = json.loads(call('controller-status', '--actor', config['agent_id']).stdout)
+    if (current.get('actor') != config['agent_id'] or current.get('native_session') != config['native_session_id']
+            or type(current.get('epoch')) is not int or current['epoch'] < 1
+            or config.get('controller_epoch', current['epoch']) != current['epoch']):
+        raise ValueError('controller native/epoch changed; no receiver admitted')
+    journal = state / (config['native_session_id'] + '.receiver.json')
+    lease = dict(actor=config['agent_id'], native=config['native_session_id'], epoch=current['epoch'], incarnation=config['incarnation'])
+    def operation(action, owned):
+        call(action, '--native-session', owned['native'], '--epoch', str(owned['epoch']), '--incarnation', owned['incarnation'])
+    if journal.exists():
+        previous = json.loads(journal.read_text())
+        if previous.get('state') in ('binding', 'bound'):
+            if any(previous.get(k) != lease[k] for k in ('actor', 'native', 'epoch')):
+                raise ValueError('previous receiver custody changed; reconcile original journal')
+            # Reconcile a lost bind/release response idempotently. This only
+            # admits the recorded lease; a foreign incarnation still rejects it.
+            operation('receiver-bind', previous)
+            operation('receiver-release', previous)
+    def record(status):
+        temp = journal.with_suffix('.tmp')
+        temp.write_text(json.dumps(dict(lease, state=status)))
+        temp.replace(journal)
+    record('binding')
+    operation('receiver-bind', lease)
+    try:
+        record('bound')
+        yield
+    finally:
+        operation('receiver-release', lease)
+        record('released')
 
 
 def run(config_path: Path, event: dict) -> int:
@@ -39,15 +81,15 @@ def run(config_path: Path, event: dict) -> int:
         except BlockingIOError:
             return 0
         env = dict(os.environ)
-        for name in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'SQUAD_SESSION_ID', 'SQUAD_AGENT'):
+        for name in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDE_SESSION_ID', 'MUSE_SESSION_ID', 'SQUAD_NATIVE_SESSION_ID', 'SQUAD_SESSION_ID', 'SQUAD_AGENT'):
             env.pop(name, None)
-        env.update(SQUAD_AGENT=config['agent_id'],
+        env.update(SQUAD_AGENT=config['agent_id'], SQUAD_NATIVE_SESSION_ID=config['native_session_id'],
                    SQUAD_SESSION_ID='claude:' + config['native_session_id'],
                    SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1', SQUAD_NO_HYGIENE='1')
         max_seconds = config.get('max_seconds', 82800)
         if not 1 <= max_seconds <= 82800:
             raise ValueError('invalid receiver lifetime')
-        with subprocess.Popen([config['squad_executable'], 'terminal-events', 'listen',
+        with controller_receiver(config, env, state), subprocess.Popen([config['squad_executable'], 'terminal-events', 'listen',
                                '--native-session', config['native_session_id'],
                                '--delivery-session', config['incarnation'],
                                '--max', str(max_seconds) + 's'],
