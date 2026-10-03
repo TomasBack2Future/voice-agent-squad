@@ -410,3 +410,32 @@ func TestHistoricalPublicationReceiptCannotApproveCurrentInput(t *testing.T) {
 		t.Fatal("historical publication receipt lost attribution", err)
 	}
 }
+
+func TestParseHumanRestartUsesCanonicalConfiguredStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	canonical := filepath.Join(dir, "canonical")
+	raw, _ := json.Marshal(localConfig{AppID: 1, InstallationID: 2, AppPrivateKey: "/key", AdmissionDir: canonical})
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"restart", "--config", path, "--repo", "owner/repo", "--pr", "9", "--human-grant", filepath.Join(dir, "grant.json")}
+	c, err := parseConfig(args, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.humanRestart || c.admissionDir != canonical {
+		t.Fatal("restart missed canonical config")
+	}
+	for _, extra := range [][]string{{"--admission-dir", filepath.Join(dir, "other")}, {"--from", "old"}, {"--completion-custody", filepath.Join(dir, "custody")}} {
+		if _, err := parseConfig(append(append([]string(nil), args...), extra...), io.Discard); err == nil {
+			t.Fatal("conflicting restart bypass accepted", extra)
+		}
+	}
+	if _, err := parseConfig(append([]string(nil), args[1:]...), io.Discard); err == nil {
+		t.Fatal("grant on ordinary invocation accepted")
+	}
+	if _, err := parseConfig(args[:len(args)-2], io.Discard); err == nil {
+		t.Fatal("missing grant accepted")
+	}
+}
