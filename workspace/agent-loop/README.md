@@ -166,6 +166,53 @@ all credentials. This is a cold-start launcher, not a resume or owner-transfer
 tool; preserve existing session identities during resume. No existing local
 wrapper or live Worker is changed by adding this source capability.
 
+### Exact-worktree Claude trust
+
+The launch check includes `workspace_trust` with the canonical assigned path,
+configuration file, and `established` or `will-establish` status. It remains
+read-only. After binding, worktree validation and fenced heartbeat admission,
+launch records Claude's documented `projects[absolute-worktree].hasTrustDialogAccepted`
+entry before starting the client. It never trusts the parent, main checkout or
+home directory, and does not change permission mode or add bypass flags. Other
+project/configuration fields are preserved; malformed or symlinked configuration
+blocks startup. Writes are atomic and use the native `<config>.lock` directory protocol
+(qualified with Claude 2.1.288), including mtime renewal, ownership checks and
+concurrent configuration-change detection before replacement. A busy native
+lock blocks after a bounded wait; it is never stolen.
+
+The normal trust store is `~/.claude.json`; `CLAUDE_CONFIG_DIR` selects its
+`.claude.json` instead. Optional `client_config_directory` pins that same directory
+for both trust setup and the child. It is not a credential-copy or onboarding
+helper. The native readback probe uses a fresh temporary home, fake API key,
+linked Git worktree and no task prompt:
+
+```sh
+SQUAD_CLAUDE_TRUST_BINARY=/absolute/claude \
+  python3 -m unittest discover -s workspace/agent-loop/tests -p test_claude_workspace_trust.py
+```
+
+This reproduces the dialog without trust and verifies interactive startup with
+only the exact worktree trusted, while main-checkout trust stays false. Qualify
+the selected native version before installation: Claude's trust-path resolution
+can change between versions. See [Claude's trust contract](https://code.claude.com/docs/en/permissions#project-allow-rules-and-workspace-trust).
+
+### Claude Dispatcher receiver custody
+
+`terminal_receiver.py` reads the current controller actor/native/epoch and binds
+its delivery incarnation before listening. An optional `controller_epoch` pins
+an expected epoch; a mismatch fails closed. Native identity never comes from the
+incarnation. Worker receivers do not acquire controller custody.
+
+One local lock covers binding, listening and release. On replacement, owner exit,
+delivery or listener failure, the receiver releases only its exact native/epoch/
+incarnation. Its write-ahead local journal permits reconciliation of a prior owned binding
+intent or bound incarnation after the process exits, including a lost command
+response; a foreign receiver is never replaced. Failed
+release retains the journal for reconciliation. Delivery still produces a model
+reminder, not a handling ACK. Run `test_terminal_receiver_ledger.py` to exercise
+handoff, binding/replacement, foreign/stale rejection and actual delivery against
+an isolated built Squad CLI and SQLite ledger.
+
 ## Local repository skill synchronization
 
 `skill_sync.py` installs local Git `post-merge`, `post-checkout` and
@@ -809,10 +856,29 @@ claim and a dispatched reservation for its exact native UUIDv7. Its launch
 configuration follows [muse-launch.schema.json](schemas/muse-launch.schema.json):
 absolute native/Squad/settings/prompt/ledger/state paths, explicit coordination
 home, Worker/controller identities, primary claim generation and controller epoch, Meta 1.3 Contributor,
-YOLO, and an explicit supported reasoning effort. Keep configuration and state
+YOLO, and a resolved supported reasoning effort. Keep configuration and state
 private; credentials stay in the native client's existing environment. The
 launcher copies only endpoint/catalog settings into its isolated configuration.
 Project MCP servers and hooks require their own qualification and are rejected.
+
+The default `progress_view: live` is a passive first-class progress display in
+the launcher's cmux surface. It renders startup/native/effort identity, agent text,
+tool names/results, turn completion and periodic claim-renewal status while the
+same qualified MSP host and supervisor run. Output is bounded per item and
+terminal control sequences are removed; private reasoning is not rendered.
+`progress_view: quiet` is available for machine-only callers. Closing the display
+does not transfer custody or stop cleanup. This is a live viewer, not an interactive
+Muse TUI: do not interrupt it and resume via the naked CLI to obtain visibility,
+because that loses the mediated tool/pin/report contract.
+
+`reasoning_effort` in the task's launch config is an explicit assignment override.
+When absent, read `reasoning_effort` from the persisted native `settings_file`;
+when neither sets it, use `max`, matching the standing Muse launch preference.
+Invalid values block rather than silently downgrading. Do not guess `high` or
+write it into launch configs merely to satisfy an old schema. The check receipt
+and startup evidence record the effective value and its source. New runs and
+`--resume` use the same resolver and supply the result to every initial/decision
+turn; resume preserves task/native/custody identity, not a stale arbitrary effort.
 
 The native host receives `--disable-write --disable-shell` for its full lifetime,
 in addition to explicit model/provider, disabled sandbox and trusted workspace.

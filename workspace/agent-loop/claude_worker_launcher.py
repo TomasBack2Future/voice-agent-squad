@@ -14,6 +14,7 @@ import sys
 import time
 import uuid
 import terminal_receiver
+from claude_workspace_trust import workspace_trust
 from human_authorization import authorization, prompt_context
 
 from validate_context_package import ROOT, ValidationError, validate_file
@@ -61,6 +62,8 @@ def child_environment(c: dict) -> dict:
     suffix = hashlib.sha256(str(Path(c['ledger_directory']).resolve()).encode()).hexdigest()[:12]
     env.update(SQUAD_SESSION_ID=f"claude:{c['native_session_id']}:{suffix}",
                SQUAD_AGENT=c['agent_id'], SQUAD_NATIVE_SESSION_ID=c['native_session_id'], SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1')
+    if c.get('client_config_directory'):
+        env['CLAUDE_CONFIG_DIR'] = c['client_config_directory']
     if c['coordination_mode'] == 'codex-wrapper-compat':
         # Local squad-coordination -> squad-codex may require these even for Claude.
         # Derive both from the assigned child; never inherit the Dispatcher id.
@@ -163,6 +166,7 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed',
+            'workspace_trust': workspace_trust(assignment['worktree'], env),
             'authorization': authorization(c, assignment)}
 
 
@@ -259,6 +263,9 @@ def main() -> int:
         wait_for_binding(a, c, env, args.wait_seconds)
         check_profile(a)
         check_worktree(a)
+        heartbeat(a, c, env, check=True)
+        trust = workspace_trust(a['worktree'], env, establish=True)
+        print(json.dumps({'workspace_trust': trust}), file=sys.stderr, flush=True)
         # Read the prompt only after binding. Never echo it or the child environment.
         prompt = Path(c['prompt_file']).read_text()
         if c.get('human_authorization'):

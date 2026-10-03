@@ -63,6 +63,7 @@ assert 'CODEX_SESSION_ID' not in os.environ
                        'dispatcher_agent_id': 'dispatcher-test',
                        'coordination_executable': str(script), 'coordination_mode': mode,
                        'ledger_directory': str(self.ledger), 'client_executable': str(self.client),
+                       'client_config_directory': str(self.root / 'claude-config'),
                        'permission_mode': 'auto', 'prompt_file': str(prompt)}
         self.config_path = self.root / 'launch.json'
         self.config_path.write_text(json.dumps(self.config))
@@ -84,6 +85,8 @@ assert 'CODEX_SESSION_ID' not in os.environ
         result = self.run_launcher(check=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['binding'], 'pending')
+        self.assertEqual(json.loads(result.stdout)['workspace_trust']['status'], 'will-establish')
+        self.assertFalse((self.root / 'claude-config/.claude.json').exists())
         self.assertFalse(self.started.exists())
         self.assertEqual((self.ledger/'calls').read_text(), 'read\nread\n')
 
