@@ -33,12 +33,16 @@ def capabilities(runtime):
     return dict(schema_version='squad.runtime-capabilities.v1', runtime=runtime,
                 native_qualified=False, coordination='cli-with-explicit-identity',
                 managed_worker=dict(launcher={'claude': 'claude_worker_launcher.py',
-                                              'codex': 'codex_worker_launcher.py', 'muse': None}[runtime],
-                                    execution_fence='unavailable',
-                                    admission='legacy-supervision-only' if runtime == 'claude' else 'blocked'),
+                                              'codex': 'codex_worker_launcher.py',
+                                              'muse': 'muse_worker_launcher.py'}[runtime],
+                                    execution_fence='custody-pin-and-contained-tools' if runtime == 'muse' else 'unavailable',
+                                    admission={'claude': 'legacy-supervision-only',
+                                               'codex': 'blocked',
+                                               'muse': 'source-test-handoff-only'}[runtime]),
                 events=dict(listen='terminal-events', handling_ack='explicit-after-handling',
                             idle_wake={'claude': 'native-hooks-requires-adoption',
-                                       'codex': 'qualified-cli-only', 'muse': 'unavailable'}[runtime]),
+                                       'codex': 'qualified-cli-only',
+                                       'muse': 'bounded-worker-receiver-requires-adoption'}[runtime]),
                 review='bounded-native-cli; separate from Worker custody')
 
 
@@ -101,8 +105,6 @@ def main():
             print(json.dumps(capabilities(args.runtime), sort_keys=True)); return 0
         if args.operation == 'worker':
             launch = capabilities(args.runtime)['managed_worker']['launcher']
-            if not launch:
-                raise ValueError('Muse managed Worker execution fence unavailable; no client started')
             config = read_json(args.config)
             if args.runtime == 'claude' and any(not config.get(key) for key in ('model', 'effort', 'event_executable')):
                 raise ValueError('portable Claude launch requires model, effort and event_executable')

@@ -89,10 +89,21 @@ The `worker` entry selects the existing launch adapter. Claude's portable entry
 requires explicit model/effort and the event executable; its receipt is
 `launch-checked`, not proof of effective model/permissions or claim-loss write
 exclusion. Legacy direct configurations retain their existing invocation.
-Codex and Muse custody guards remain in force. A shared App is not a CLI target.
+Codex custody guards remain in force. Muse delegates to the source/test/handoff
+launcher below and retains its custody and containment checks. A shared App is not a CLI target.
 
 The bounded reviewer supports explicit `--backend grok|claude|codex|muse`.
 Non-Grok selection requires an explicit model, uses distinct Check names and
 retains the shared PR admission history. Choosing another backend does not reset
 an attempt, refund a consumed input or impersonate a required Grok Check. See
 [the review command reference](../../docs/proposals/grok-required-review-gate.md#native-review-backends).
+
+## Muse source Worker adapter
+
+The bounded `muse_worker_launcher.py` lane qualifies source/test/handoff work
+with Meta 1.3 Contributor and YOLO. It uses fixed native shell/write denial,
+exact-session MCP mutations, owned Linux containers, immutable custody pins and
+actual decision/outcome handling. Read the [launch contract](README.md#muse-source-worker-execution)
+before selecting it. Other roles and environment execution retain their existing
+operation-specific qualification boundaries. New admission does not migrate
+already-running sessions or change the current controller.

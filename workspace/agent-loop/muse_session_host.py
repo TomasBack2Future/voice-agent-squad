@@ -31,7 +31,11 @@ def uuid7():
 
 def atomic(path, value):
     tmp = path.with_suffix('.tmp')
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+    with tmp.open('w') as output:
+        os.chmod(tmp, 0o600)
+        output.write(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+        output.flush()
+        os.fsync(output.fileno())
     tmp.replace(path)
 
 
@@ -70,8 +74,11 @@ def config(path):
 def server_arguments(c):
     # serve has no --yolo flag. Its sandbox is immutable for the host lifetime;
     # approval is selected on session/start and must be read back on resume.
-    return [c['client_executable'], 'serve', '--provider', c['provider'],
+    argv = [c['client_executable'], 'serve', '--provider', c['provider'],
             '--model', c['model'], '--disable-sandbox', '--trust-workspace']
+    if c.get('execution_mode') == 'mediated-worker':
+        argv += ['--disable-write', '--disable-shell']
+    return argv
 
 
 def check_executable(c):
@@ -180,6 +187,7 @@ class Host:
         try:
             r = target.get(timeout=60)
             if 'error' in r:
+                atomic(self.state / 'rpc-error.json', {'method': method, 'error': r['error']})
                 raise ValueError('Muse RPC rejected ' + method + ' (code ' + str(r['error'].get('code')) + ')')
             return r['result']
         finally:

@@ -50,8 +50,25 @@ class RuntimeEntryTests(unittest.TestCase):
         for runtime in ('claude', 'codex', 'muse'):
             result = entry.capabilities(runtime)
             self.assertFalse(result['native_qualified'])
-            self.assertEqual(result['managed_worker']['execution_fence'], 'unavailable')
+            self.assertEqual(result['managed_worker']['execution_fence'],
+                             'custody-pin-and-contained-tools' if runtime == 'muse' else 'unavailable')
             self.assertEqual(result['events']['handling_ack'], 'explicit-after-handling')
+
+    def test_muse_worker_routes_to_custody_launcher_and_preserves_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'launch.json'
+            config.write_text('{}')
+            argv = ['runtime_entry.py', '--runtime', 'muse', 'worker',
+                    '--assignment', '/assignment.json', '--config', str(config), '--check']
+            with patch.object(sys, 'argv', argv), patch.object(entry.subprocess, 'run') as run:
+                run.return_value.returncode = 17
+                self.assertEqual(entry.main(), 17)
+                self.assertEqual(run.call_args.args[0], [sys.executable,
+                    str(ROOT / 'muse_worker_launcher.py'), '--assignment', '/assignment.json',
+                    '--config', str(config), '--check'])
+            capability = entry.capabilities('muse')
+            self.assertEqual(capability['managed_worker']['admission'], 'source-test-handoff-only')
+            self.assertFalse(capability['native_qualified'])
 
     def test_handled_receipt_cannot_ack_other_native_or_delivery_or_duplicate(self):
         receipt = {'schema_version': 'squad.handled-events.v1', 'runtime': 'codex',

@@ -95,8 +95,6 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
     if context_only and launch_config is not None:
         raise ValidationError('context-only cannot be combined with a launch config')
     if not context_only:
-        if runtime == 'muse':
-            raise ValidationError('Muse launch adapter unavailable in this package; context-only is not execution readiness')
         if launch_config is None:
             raise ValidationError(f'{runtime.capitalize()} launch config required; executable presence is not readiness')
     assignment = validate_file(
@@ -138,6 +136,8 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
     if launch_config is not None:
         if runtime == "codex":
             from codex_worker_launcher import check_launch
+        elif runtime == "muse":
+            from muse_worker_launcher import check_launch
         else:
             from claude_worker_launcher import check_launch
         launch_receipt = check_launch(assignment, launch_config)

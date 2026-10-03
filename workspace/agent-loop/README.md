@@ -139,12 +139,13 @@ env -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u SQUAD_SESSION_ID -u SQUAD_AGENT \
 used at launch. A valid reserved/unbound entry passes with `binding: pending`;
 that is preparation, not ownership or permission to execute work. It never
 starts a model, claims, binds or mutates an environment. Execution preflight
-requires a checked launch config for both Claude and Codex. Use `--context-only`
+requires a checked launch config for Claude, Codex and Muse. Use `--context-only`
 explicitly for portable input checks without a launcher; the receipt reports
 `status: context-checked` and `launcher.status: not_checked`, never `launch-checked`.
-Do not use that receipt to admit a session. Muse supports this context check via
-its shared `.agents/skills` discovery path, but execution preflight fails with an
-explicit unavailable-adapter error until a reviewed Muse launcher is integrated.
+Do not use that receipt to admit a session. Muse source/test Workers use
+`muse_worker_launcher.py` with the checked Muse launch configuration and the
+shared `.agents/skills` discovery path. Environment execution remains a separate
+qualification; this launcher rejects staging/production assignment authority.
 Unknown runtimes are rejected by both the CLI and the importable Python API.
 
 Use the same command without `--check` as the new cmux workspace command, then
@@ -331,7 +332,7 @@ than inheriting an independently drifting profile's model selection.
 | Codex / sub2api | Actual upstream model, Responses compatibility, output/resume/tool behavior, gateway quota/limits and account-pool semantics |
 | Claude / existing approved gateway | Resolved model, permission boundaries, structured output/resume, distinction between launches, turns and API requests |
 | Grok / existing subscription | Read-only review contract, session identity, usage semantics and required publisher policy |
-| Muse | Eligible under the common role contract; this package has no merged qualified Muse launcher. Verify the native CLI/MSP surface, skill loading, explicit model/permissions, custody and both event directions before unattended adoption |
+| Muse | `muse_worker_launcher.py` admits bounded source/test/handoff Workers with the exact reviewed native build, fixed native write/shell denial, an owned Linux container tool runtime, complete custody pin and decision/outcome route. Environment and other role adapters remain separately qualified |
 
 Codex's two entries are one runtime with distinct service routes, not necessarily
 two independent quota pools. Do not add their balances or apply the OpenAI account
@@ -406,7 +407,7 @@ unattended task executor**. The previous renewal-only host has been disabled:
 stopping heartbeats does not prevent a native tool or descendant from continuing
 to write after losing ownership. Neither `turn/interrupt` nor
 `session/setApprovalMode` is a persistent Squad-generation execution fence.
-Worker and Dispatcher task starts fail before spawning a server or receiver;
+Managed starts through this lifecycle probe fail before spawning a server or receiver;
 Deployer, Reviewer and Investigator execution has no adapter here. This does not
 exclude Muse from interactive roles under their ordinary operation authority.
 
@@ -766,6 +767,10 @@ python3 runtime_entry.py --runtime claude worker \
   --assignment /absolute/assignment.json --config /absolute/launch.json --check
 ```
 
+The `worker` entry delegates Muse to the custody-bound source/test/handoff
+launcher described below; its config, claim, reservation and container checks
+remain mandatory. Native adoption is not inferred from this routing capability.
+
 Use the actual native Squad binary, not a wrapper which derives Codex identity
 or switches ledger directories. No global wrapper, installation or live client
 is changed. `exec` forwards argument boundaries and exit codes unchanged, with
@@ -795,3 +800,88 @@ handling note idempotently. If ACK cannot confirm processing, the helper stops
 with a nonzero result. Partial success is safe to replay with the same notes. Never synthesize a handling result merely because a
 listener returned, a native turn ended or an operation remains unresolved. The
 Squad store independently rechecks recipient, generation and current decision.
+
+## Muse source Worker execution
+
+Use `muse_worker_launcher.py`, not the lifecycle probe, for a new bounded
+source/test/handoff assignment. The assignment must already have a primary
+claim and a dispatched reservation for its exact native UUIDv7. Its launch
+configuration follows [muse-launch.schema.json](schemas/muse-launch.schema.json):
+absolute native/Squad/settings/prompt/ledger/state paths, explicit coordination
+home, Worker/controller identities, primary claim generation and controller epoch, Meta 1.3 Contributor,
+YOLO, and an explicit supported reasoning effort. Keep configuration and state
+private; credentials stay in the native client's existing environment. The
+launcher copies only endpoint/catalog settings into its isolated configuration.
+Project MCP servers and hooks require their own qualification and are rejected.
+
+The native host receives `--disable-write --disable-shell` for its full lifetime,
+in addition to explicit model/provider, disabled sandbox and trusted workspace.
+MSP selects and reads back `allowAll`; `serve` does not accept a `--yolo` flag.
+Mutation tools come only from the exact-session MCP bridge. `write_file` requires
+the previous SHA-256 and an assigned-workspace path. `run_command` runs in an
+unprivileged, dedicated Linux container with only that workspace mounted. It
+mounts no ledger, host credential home, Docker socket or other worktree. Thus
+kernel containment covers reparenting, `setsid` and cleared child environments.
+The current lane does not promise host GitHub credentials, a shared Git worktree
+metadata mount, environment operations or detached services. Choose an explicit
+source/test/handoff assignment rather than claiming unsupported delivery phases.
+
+Build [the source tool image](containers/muse-source.Dockerfile) explicitly and
+select its immutable `sha256:...` image ID, Docker executable, context and daemon
+ID in `tool_runtime`. The daemon must report Linux and cgroup v2. The checked
+image must contain the toolchain required by that assignment; shell output and
+command lifetime are bounded. Docker or daemon identity failure does not fall
+back to a host shell. This is execution mediation; the user's YOLO approval mode
+and model selection remain unchanged.
+
+```sh
+python3 workspace/agent-loop/muse_worker_launcher.py \
+  --assignment /absolute/assignment.json --config /absolute/muse-launch.json --check
+python3 workspace/agent-loop/muse_worker_launcher.py \
+  --assignment /absolute/assignment.json --config /absolute/muse-launch.json
+# Original task/native/claim/reservation only; preserve edits and commits.
+python3 workspace/agent-loop/muse_worker_launcher.py \
+  --assignment /absolute/assignment.json --config /absolute/muse-launch.json --resume
+```
+
+The supervisor acquires an execution pin for the immutable native, actor,
+primary claim generation, reservation generation/source, and controller native/
+epoch. The ledger rejects competing native admission and custody changes while
+that pin is active. Expiry, failed renewal and closed admission retain the pin;
+they never release task custody. A hold blocks source mutations while allowing
+assignment decision reads and handled acknowledgements. Mutation admission also requires observed successful native reads of the
+canonical Worker skill and selected profile at startup; retain its actual reads
+and reported identities in startup evidence.
+
+The session-owned receiver requests deferred delivery, submits a durable wake
+to the original native session, and records transport acceptance separately from
+handling. Only the model's typed `decision_get` and `acknowledge` tools handle and confirm a decision. The
+`report` tool records actual results; after native/MCP/container joins the
+supervisor records one durable outcome and publishes `handoff-complete` or
+`blocked` with the current decision revision. It does not release the primary
+claim, close the Issue or start another controller. After a completed native turn
+and queued decisions drain, the bounded invocation exits; later continuation
+uses `--resume` on this same assignment. It is not a permanently idle TUI daemon.
+
+State retains the original writer intent, binding, tool journal, native items,
+delivery command journal, report and join receipt. A lost startup/result or
+unjoined process blocks replacement; reconcile that original evidence and
+actual container handles. Supervisor-only `worker-execution outcome/close`
+verify private bounded receipts against the original journals, exact binding,
+actual native/bridge/tool process absence and owned container state. They are
+not exposed to the model. Completion reporting does not prove that a Dispatcher
+received or handled its pending outcome event.
+
+Deterministic regression tests run in the ordinary Python and Go suites.
+Opt-in container tests require `MUSE_CONTAINER_QUALIFICATION` pointing to a
+private launch configuration and create/remove only their own containers. Retain
+real native new/resume, source mutation, command, decision handling, outcome and
+join evidence before installing this lane for new Workers. Source changes alone
+do not migrate existing sessions or establish native adoption.
+
+Suspension closes mutation admission while retaining the exact execution pin.
+A suspended bridge may read decisions, acknowledge handled events, inspect its
+claim/mailbox and record a blocked report under a separate exact-custody check.
+It cannot reopen writes, request review or record completion. In-flight hold
+joins the owned container before the model handles the decision and returns the
+blocked result; the original primary claim remains with its owner.
