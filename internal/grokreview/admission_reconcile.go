@@ -247,6 +247,11 @@ func (a *Admission) ReviewerStarted(ctx context.Context, pid int) error {
 // proves no child launch; a crash in the spawn/PID-record window stays closed
 // until actual original process/native join provenance is supplied.
 func (a *Admission) ReviewerLaunching(ctx context.Context) error {
+	if a.humanRestart != nil {
+		if err := a.validateCompletionCustody(ctx, a.humanRestart.Grant.Custody, a.receipt.Identity); err != nil {
+			return err
+		}
+	}
 	r := a.receipt
 	if r.ID == "" || r.LaunchStage != "admitted" {
 		return fmt.Errorf("admitted launch custody required")
