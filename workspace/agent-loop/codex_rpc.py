@@ -158,6 +158,15 @@ class RPC:
         raise ValidationError('native RPC deadline expired; delivery uncertain')
 
 
+class OwnedStdioNotSent(ValidationError):
+    """Single-use local witness issued before intent or any possible os.write."""
+    def __init__(self, owner, operation):
+        super().__init__('owned stdio request definitely not sent; fresh readiness required')
+        self.owner = owner
+        self.identity = owner.identity()
+        self.operation = operation
+
+
 class OwnedStdioStartupError(ValidationError):
     """Sanitized failure with the acquired original adapter's cleanup custody."""
     def __init__(self, owner):
@@ -207,6 +216,7 @@ class OwnedStdioRPC(RPC):
                 self.queue_uncertain = False
                 self.pending_queue = None
                 self.startup_failed = False
+                self._not_sent = None
                 self._owners[child] = self
             for pipe in (child.stdin, child.stdout, child.stderr):
                 os.set_blocking(pipe.fileno(), False)
@@ -237,31 +247,78 @@ class OwnedStdioRPC(RPC):
         if (self.startup_failed or self.closed or os.getpid() != self.owner_pid or threading.get_ident() != self.owner_thread
                 or self._owners.get(self.child) is not self or self.child.poll() is not None):
             raise ValidationError('owned stdio child lifetime/IO owner changed')
+        if any(current is not original for current, original in zip(
+                (self.child.stdin, self.child.stdout, self.child.stderr), self._pipes)):
+            raise ValidationError('owned stdio original pipe objects changed')
         pipes = [(os.fstat(p.fileno()).st_dev, os.fstat(p.fileno()).st_ino)
                  for p in (self.child.stdin, self.child.stdout, self.child.stderr)]
         if pipes != self.pipe_identity or (identity is not None and identity != self.identity()):
             raise ValidationError('owned stdio child incarnation/pipes changed')
 
-    def send(self, value):
+    def consume_not_sent(self, witness, operation):
+        # Object identity is transport-local provenance; caller-authored values
+        # cannot manufacture or reuse a witness after reconnect/another request.
+        if not isinstance(witness, OwnedStdioNotSent):
+            raise ValidationError('original typed not-sent witness required')
+        self.check_owner(witness.identity)
+        if (witness.owner is not self
+                or self._not_sent is not witness or witness.operation != operation):
+            raise ValidationError('exact original not-sent witness unavailable')
+        self._not_sent = None
+
+    def send(self, value, before_write=None):
         import select
+        import copy
         self.check_owner()
-        raw = (json.dumps(value, separators=(',', ':')) + '\n').encode()
-        if len(raw) > LIMIT:
-            raise ValidationError('stdio request exceeds bounded input')
-        deadline = time.monotonic() + 10
-        offset = 0
-        while offset < len(raw):
-            _, ready, _ = select.select([], [self.child.stdin.fileno()], [], max(0, deadline-time.monotonic()))
+        queue = value.get('method') == 'thread/queue/add'
+        self._not_sent = None
+        try:
+            raw = (json.dumps(value, separators=(',', ':')) + '\n').encode()
+            if len(raw) > LIMIT:
+                raise ValidationError('stdio request exceeds bounded input')
+            deadline = time.monotonic() + 10
+            # Perform the first writable check before the intent boundary.
+            _, ready, _ = select.select([], [self.child.stdin.fileno()], [], 10)
             if not ready:
-                self.uncertain = True
-                raise ValidationError('stdio write deadline; delivery uncertain')
+                raise ValidationError('stdio first write not ready')
+            self.check_owner()
+        except (ValueError, TypeError, OSError):
+            # Proven current custody is required even for zero-wire evidence.
+            # Ownership loss is never a witness that permits journal recovery.
+            self.check_owner()
+            if queue:
+                witness = OwnedStdioNotSent(self, copy.deepcopy(value['params']))
+                self._not_sent = witness
+                raise witness from None
+            raise
+        if queue:
+            self.pending_queue = copy.deepcopy(value['params'])
+            self.queue_uncertain = True
+        # Mark uncertain BEFORE the callback: an exception may occur after its
+        # durable commit. No witness or absence-based journal rollback then.
+        if before_write is not None:
+            before_write()
+        self.check_owner()
+        offset = 0
+        first_write = True
+        while offset < len(raw):
+            if not first_write:
+                _, ready, _ = select.select([], [self.child.stdin.fileno()], [], max(0, deadline-time.monotonic()))
+                if not ready:
+                    self.uncertain = True
+                    raise ValidationError('stdio write deadline; delivery uncertain')
+            first_write = False
             try:
+                # Crossing this call boundary is uncertainty even if an
+                # interruption reports no counted bytes. Never infer not-sent.
                 written = os.write(self.child.stdin.fileno(), raw[offset:offset+4096])
             except (BlockingIOError, InterruptedError):
                 continue
             except OSError:
                 self.uncertain = True
                 raise ValidationError('stdio write closed; delivery uncertain') from None
+            if written <= 0:
+                raise ValidationError('stdio write did not progress; delivery uncertain')
             offset += written
 
     def receive(self, deadline):
@@ -332,13 +389,11 @@ class OwnedStdioRPC(RPC):
         self.sequence += 1
         current = self.sequence
         try:
+            frame = {'id': current, 'method': method, 'params': params}
             if method == 'thread/queue/add':
-                if before_send is not None:
-                    before_send()  # Durable intent AFTER all readiness/read-only gates.
-                import copy
-                self.pending_queue = copy.deepcopy(params)
-                self.queue_uncertain = True
-            self.send({'id': current, 'method': method, 'params': params})
+                self.send(frame, before_write=before_send)
+            else:
+                self.send(frame)
             deadline = time.monotonic() + timeout
             while True:
                 value = self.receive(deadline)
@@ -361,7 +416,7 @@ class OwnedStdioRPC(RPC):
                     if len(self.notifications) >= 256:
                         raise ValidationError('stdio notification bound exceeded')
                     self.notifications.append(value)
-        except (ValidationError, OSError):
+        except BaseException:
             self.uncertain = True
             raise
 

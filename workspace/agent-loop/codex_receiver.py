@@ -13,7 +13,7 @@ import sys
 import time
 import uuid
 
-from codex_rpc import RPC
+from codex_rpc import RPC, OwnedStdioRPC, OwnedStdioNotSent
 from codex_worker_launcher import child_environment, check_qualification, live_target, save, server_identity
 from codex_heartbeat import heartbeat, CustodyRejected, require_execution_fence
 from validate_context_package import ROOT, ValidationError, validate_file
@@ -116,6 +116,21 @@ def native_contains(rpc, thread, text, client_id=None):
 
 def deliver(rpc, event, c, journal_path):
     journal_path = Path(journal_path)
+    if c.get('transport') == 'owned-stdio' and isinstance(rpc, OwnedStdioRPC):
+        rpc.check_owner()
+        # Serialize the complete owning journal comparison/transition. A
+        # second writer cannot interleave a different event's marker save.
+        with journal_path.with_name(journal_path.name + '.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValidationError('owning stdio journal writer already active') from None
+            return _deliver(rpc, event, c, journal_path)
+    return _deliver(rpc, event, c, journal_path)
+
+
+def _deliver(rpc, event, c, journal_path):
+    journal_path = Path(journal_path)
     journal = json.loads(journal_path.read_text()) if journal_path.exists() else {}
     key = event['event_id']
     text = message(event, c)
@@ -128,6 +143,9 @@ def deliver(rpc, event, c, journal_path):
     if previous and previous['identity'] != identity:
         raise ValidationError('delivery journal identity changed; reconcile without resubmission')
     stdio = c.get('transport') == 'owned-stdio'
+    owned = stdio and isinstance(rpc, OwnedStdioRPC)
+    if owned and previous and previous['state'] == 'prepared' and previous.get('transport_owner') != json.loads(json.dumps(rpc.identity())):
+        raise ValidationError('prepared stdio owner/incarnation changed; reconcile without replay')
     if previous and previous['state'] == 'accepted':
         return
     if previous and previous['state'] == 'intent':
@@ -139,16 +157,32 @@ def deliver(rpc, event, c, journal_path):
         if not previous:
             journal[key] = {'identity': identity, 'submitted_endpoint': c.get('endpoint', 'owned-stdio'),
                             'state': 'prepared' if stdio else 'intent'}
+            if owned:
+                journal[key]['transport_owner'] = json.loads(json.dumps(rpc.identity()))
             save(journal_path, journal)
         params = {'threadId': c['native_session_id'], 'clientUserMessageId': key,
                   'input': [{'type': 'text', 'text': text, 'text_elements': []}]}
         if stdio:
             def write_intent():
+                if owned:
+                    rpc.check_owner()
+                    if json.loads(journal_path.read_text()) != journal:
+                        raise ValidationError('original prepared journal CAS rejected')
                 journal[key]['state'] = 'intent'
                 save(journal_path, journal)
             # Readiness failures precede this durable boundary. Once it executes,
             # interruption/lost reply remains uncertain and can only be read back.
-            result = rpc.call('thread/queue/add', params, before_send=write_intent)
+            try:
+                result = rpc.call('thread/queue/add', params, before_send=write_intent)
+            except OwnedStdioNotSent as witness:
+                # Only the exact owning prepared record may retain replay
+                # eligibility. A marker exception or unknown journal never
+                # produces this transport-local witness.
+                current_journal = json.loads(journal_path.read_text())
+                if current_journal != journal or current_journal.get(key, {}).get('state') != 'prepared':
+                    raise ValidationError('not-sent journal custody changed; reconcile without replay') from None
+                rpc.consume_not_sent(witness, params)
+                raise
         else:
             result = rpc.call('thread/queue/add', params)
         accepted = result.get('queuedSubmission', {})

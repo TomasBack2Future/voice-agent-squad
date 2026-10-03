@@ -183,3 +183,15 @@ entitlement, Unix remote transport, persistent all-writer custody, business
 handling/ACK or Issue acceptance. Those retain independent platform contracts
 and installer qualification gates. This compatibility API does not install,
 resume, migrate or activate any existing native session.
+
+For an owned stdio queue write, encoding/size, exact IO ownership and first
+writable readiness precede the durable marker. Only the original transport can
+issue a typed, exact-operation, single-use not-sent witness before any marker or
+possible `os.write`. The locked owning journal must still equal its prepared
+record and original parent/native/server incarnation before that witness is
+consumed; it does not authorize another owner or reconnect to replay. Another
+event requires fresh owner/native/policy readiness. Intent and queue uncertainty
+precede every possible first write. Marker exceptions, interrupted write calls
+(even with zero counted bytes), partial writes, lost replies and unknown journal
+outcomes retain custody/intent and require exact supported readback. There is no
+broad-error rollback or inferred absence-based retry.

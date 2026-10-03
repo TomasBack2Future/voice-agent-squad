@@ -434,6 +434,206 @@ class OwnedPipeTests(unittest.TestCase):
         self.assertEqual((self.root/'wire-count').read_text(),'1')
         rpc.close()
 
+    def test_zero_wire_size_rejection_keeps_prepared_and_other_event_can_progress(self):
+        import os
+        child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'journal'
+        event=dict(event_id='oversize',item_id='x'*LIMIT,kind='handoff-complete',outcome_id=1,source_message_id=1)
+        original_send=rpc.send;queue_writes=[]
+        def observe(value, **kwargs):
+            if value.get('method')!='thread/queue/add':return original_send(value, **kwargs)
+            with patch('codex_rpc.os.write',wraps=os.write) as writes:
+                try:return original_send(value, **kwargs)
+                finally:queue_writes.append(writes.call_count)
+        with patch.object(rpc,'send',side_effect=observe):
+            with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertEqual(queue_writes,[0])
+        self.assertEqual(json.loads(path.read_text())['oversize']['state'],'prepared')
+        self.assertFalse(rpc.queue_uncertain);self.assertIsNone(rpc.pending_queue)
+        healthy=dict(event,event_id='healthy',item_id='TASK')
+        receiver.deliver_owned_stdio(rpc,healthy,c,owner,self.root,path)
+        self.assertEqual(json.loads(path.read_text())['healthy']['state'],'accepted');rpc.close()
+
+    def test_zero_wire_write_readiness_failure_keeps_prepared_until_fresh_qualification(self):
+        import os,select
+        child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'journal'
+        event=dict(event_id='no-wire',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        original_send=rpc.send;queue_writes=[];real_select=select.select
+        def observe(value, **kwargs):
+            if value.get('method')!='thread/queue/add':return original_send(value, **kwargs)
+            def unwritable(read,write,error,timeout):
+                return ([],[],[]) if write else real_select(read,write,error,timeout)
+            with patch('select.select',side_effect=unwritable),patch('codex_rpc.os.write',wraps=os.write) as writes:
+                try:return original_send(value, **kwargs)
+                finally:queue_writes.append(writes.call_count)
+        with patch.object(rpc,'send',side_effect=observe):
+            with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertEqual(queue_writes,[0])
+        self.assertEqual(json.loads(path.read_text())['no-wire']['state'],'prepared')
+        self.assertFalse(rpc.queue_uncertain);self.assertIsNone(rpc.pending_queue)
+        receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertEqual(json.loads(path.read_text())['no-wire']['state'],'accepted');rpc.close()
+
+    def test_not_sent_witness_is_exact_local_single_use_and_not_caller_forgeable(self):
+        from codex_rpc import OwnedStdioNotSent
+        child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+        launcher.check_owned_stdio(self.c,rpc,owner,self.root)
+        params={'threadId':self.c['native_session_id'],'clientUserMessageId':'large',
+                'input':[{'type':'text','text':'x'*LIMIT,'text_elements':[]}]}
+        with self.assertRaises(OwnedStdioNotSent) as caught:rpc.call('thread/queue/add',params)
+        witness=caught.exception
+        with self.assertRaises(ValidationError):rpc.consume_not_sent(witness,dict(params,clientUserMessageId='wrong'))
+        with self.assertRaises(ValidationError):rpc.consume_not_sent(OwnedStdioNotSent(rpc,params),params)
+        rpc.consume_not_sent(witness,params)
+        with self.assertRaises(ValidationError):rpc.consume_not_sent(witness,params)
+        self.assertFalse(rpc.queue_uncertain);rpc.close()
+
+    def test_serialization_and_first_select_failures_produce_exact_prepared_witness(self):
+        import os,select
+        for failure in ('serialization','select-error'):
+            with self.subTest(failure=failure):
+                child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+                c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/('journal-'+failure)
+                event=dict(event_id=failure,item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+                send=rpc.send
+                def rejected(value,**kwargs):
+                    if value.get('method')!='thread/queue/add':return send(value,**kwargs)
+                    with patch('codex_rpc.os.write',wraps=os.write) as writes:
+                        try:
+                            target='codex_rpc.json.dumps' if failure=='serialization' else 'select.select'
+                            with patch(target,side_effect=ValueError('bounded encoding') if failure=='serialization' else OSError('first select')):
+                                return send(value,**kwargs)
+                        finally:self.assertEqual(writes.call_count,0)
+                with patch.object(rpc,'send',side_effect=rejected):
+                    with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+                self.assertEqual(json.loads(path.read_text())[failure]['state'],'prepared')
+                self.assertFalse(rpc.queue_uncertain)
+                receiver.deliver_owned_stdio(rpc,dict(event,event_id=failure+'-healthy'),c,owner,self.root,path)
+                rpc.close()
+
+    def test_marker_exceptions_never_mean_absent_commit_or_not_sent_replay(self):
+        for committed in (False,True):
+            with self.subTest(committed=committed):
+                child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+                c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/('marker-'+str(committed))
+                event=dict(event_id='marker',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+                real_save=receiver.save
+                def marker(path,value):
+                    if value['marker']['state']=='intent':
+                        if committed:real_save(path,value)
+                        raise ValueError('unknown marker outcome')
+                    return real_save(path,value)
+                with patch.object(receiver,'save',side_effect=marker):
+                    with self.assertRaises(ValueError):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+                self.assertEqual(json.loads(path.read_text())['marker']['state'],'intent' if committed else 'prepared')
+                self.assertTrue(rpc.queue_uncertain);self.assertIsNone(rpc._not_sent)
+                with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,dict(event,event_id='other'),c,owner,self.root,path)
+                rpc.close()
+
+    def test_partial_write_and_interrupted_possible_write_retain_intent(self):
+        import os
+        for partial in (False,True):
+            with self.subTest(partial=partial):
+                child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+                c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/('partial-'+str(partial))
+                event=dict(event_id='partial',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+                send=rpc.send;calls=[];real_write=os.write
+                def interrupted(fd,data):
+                    calls.append(len(data))
+                    if partial and len(calls)==1:return real_write(fd,data[:3])
+                    raise KeyboardInterrupt('possible write boundary')
+                def queue_only(value,**kwargs):
+                    if value.get('method')!='thread/queue/add':return send(value,**kwargs)
+                    with patch('codex_rpc.os.write',side_effect=interrupted):return send(value,**kwargs)
+                with patch.object(rpc,'send',side_effect=queue_only):
+                    with self.assertRaises(KeyboardInterrupt):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+                self.assertEqual(len(calls),2 if partial else 1)
+                self.assertEqual(json.loads(path.read_text())['partial']['state'],'intent')
+                self.assertTrue(rpc.queue_uncertain);self.assertIsNone(rpc._not_sent)
+                rpc.close()
+
+    def test_not_sent_cannot_keep_prepared_after_journal_or_incarnation_change(self):
+        import select
+        child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'changed-journal'
+        event=dict(event_id='changed',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        send=rpc.send;real_select=select.select
+        def changed_select(read,write,error,timeout):
+            if write:
+                journal=json.loads(path.read_text());journal['changed']['state']='intent';receiver.save(path,journal)
+                return [],[],[]
+            return real_select(read,write,error,timeout)
+        def queue_only(value,**kwargs):
+            if value.get('method')!='thread/queue/add':return send(value,**kwargs)
+            with patch('select.select',side_effect=changed_select):return send(value,**kwargs)
+        with patch.object(rpc,'send',side_effect=queue_only):
+            with self.assertRaisesRegex(ValidationError,'journal custody changed'):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertEqual(json.loads(path.read_text())['changed']['state'],'intent')
+        rpc.close()
+        other=self.child();new=OwnedStdioRPC(other,self.c);new_owner=new.identity()
+        journal=json.loads(path.read_text());journal['changed']['state']='prepared';receiver.save(path,journal)
+        with self.assertRaisesRegex(ValidationError,'owner/incarnation changed'):receiver.deliver_owned_stdio(new,event,c,new_owner,self.root,path)
+        new.close()
+
+    def test_prewrite_owner_loss_has_no_not_sent_witness_and_blocks_protected_write(self):
+        import os,select
+        child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity();thread=rpc.owner_thread
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'lost-owner'
+        event=dict(event_id='lost',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        send=rpc.send;real_select=select.select
+        def lose(read,write,error,timeout):
+            result=real_select(read,write,error,timeout)
+            if write:rpc.owner_thread=-1
+            return result
+        def queue_only(value,**kwargs):
+            if value.get('method')!='thread/queue/add':return send(value,**kwargs)
+            with patch('select.select',side_effect=lose),patch('codex_rpc.os.write',wraps=os.write) as writes:
+                try:return send(value,**kwargs)
+                finally:self.assertEqual(writes.call_count,0)
+        try:
+            with patch.object(rpc,'send',side_effect=queue_only):
+                with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+            self.assertIsNone(rpc._not_sent)
+            with self.assertRaises(ValidationError):receiver.deliver_owned_stdio(rpc,dict(event,event_id='other'),c,owner,self.root,path)
+            self.assertIsNone(child.poll())  # No kill on transport/custody failure.
+        finally:
+            rpc.owner_thread=thread  # Undo the isolated mock only for actual EOF+join.
+            rpc.close()
+
+    def test_journal_lock_and_marker_compare_reject_competing_writer(self):
+        import fcntl
+        child=self.child();rpc=OwnedStdioRPC(child,self.c);owner=rpc.identity()
+        c=dict(self.c,agent_id='dispatcher',role='dispatcher');path=self.root/'competing'
+        event=dict(event_id='competing',item_id='TASK',kind='handoff-complete',outcome_id=1,source_message_id=1)
+        with path.with_name(path.name+'.lock').open('a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            with self.assertRaisesRegex(ValidationError,'writer already active'):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertFalse(path.exists());self.assertFalse(rpc.queue_uncertain)
+        send=rpc.send
+        def changed(value,**kwargs):
+            if value.get('method')=='thread/queue/add':
+                journal=json.loads(path.read_text());journal['competing']['identity']['recipient']='other';receiver.save(path,journal)
+            return send(value,**kwargs)
+        with patch.object(rpc,'send',side_effect=changed):
+            with self.assertRaisesRegex(ValidationError,'CAS rejected'):receiver.deliver_owned_stdio(rpc,event,c,owner,self.root,path)
+        self.assertTrue(rpc.queue_uncertain);self.assertIsNone(rpc._not_sent)
+        self.assertEqual(json.loads(path.read_text())['competing']['state'],'prepared')
+        rpc.close()
+
+    def test_replaced_pipe_object_never_borrows_original_send_owner(self):
+        import os
+        child=self.child();rpc=OwnedStdioRPC(child,self.c);original=child.stdin
+        duplicate=os.fdopen(os.dup(original.fileno()),'wb',buffering=0)
+        child.stdin=duplicate
+        try:
+            with patch('codex_rpc.os.write',wraps=os.write) as writes:
+                with self.assertRaises(ValidationError):rpc.send({'method':'initialized'})
+                self.assertEqual(writes.call_count,0)
+            self.assertIsNone(rpc._not_sent)
+        finally:
+            child.stdin=original;duplicate.close();rpc.close()
+
     def test_notification_and_private_error_output_remain_bounded(self):
         script="import sys,json\nfor line in sys.stdin:\n q=json.loads(line)\n if 'id' not in q:continue\n if q['method']=='initialize':print(json.dumps({'id':q['id'],'result':{}}),flush=True)\n else:print(json.dumps({'id':q['id'],'error':{'message':'PRIVATE-SECRET'}}),flush=True)\n"
         p=self.child(script);rpc=OwnedStdioRPC(p,self.c)
