@@ -93,3 +93,36 @@ class RuntimeEntryTests(unittest.TestCase):
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertEqual([call[1:3] for call in calls], [['delivered', 'one'], ['ack', 'one']])
             self.assertTrue(all('--native-session' in call for call in calls))
+
+    def test_partial_batch_replay_advances_past_already_processed_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / '.squad').mkdir()
+            script = root / 'squad'
+            script.write_text('#!' + sys.executable + '\n' + '''import json,sys,pathlib
+p=pathlib.Path.cwd()/'state.json'
+s=json.loads(p.read_text()) if p.exists() else {'delivered':[], 'processed':[], 'failed':False}
+op,event=sys.argv[2:4]; code=0
+if op=='ack':
+ if event not in s['delivered']: code=7
+ elif event not in s['processed']: s['processed'].append(event)
+elif op=='delivered':
+ if event in s['processed']: code=8
+ elif event=='two' and not s['failed']: s['failed']=True;code=9
+ elif event not in s['delivered']:s['delivered'].append(event)
+p.write_text(json.dumps(s));sys.exit(code)
+''')
+            script.chmod(0o700)
+            delivery = root / 'delivery.json'; receipt = root / 'handled.json'
+            delivery.write_text(json.dumps({'type': 'worker-terminal-delivery-v1', 'recipient': 'actor',
+                'delivery_session': 'incarnation', 'events': [{'event_id': 'one'}, {'event_id': 'two'}]}))
+            receipt.write_text(json.dumps({'schema_version': 'squad.handled-events.v1',
+                'runtime': 'muse', 'native_session': 'native', 'agent': 'actor',
+                'delivery_session': 'incarnation', 'handled': [{'event_id': 'one', 'note': 'checked/1'},
+                                                               {'event_id': 'two', 'note': 'checked/2'}]}))
+            args = [sys.executable, str(ROOT / 'runtime_entry.py'), '--runtime', 'muse',
+                '--native-session', 'native', '--agent', 'actor', '--ledger', str(root), '--squad', str(script),
+                'handled', '--delivery', str(delivery), '--receipt', str(receipt)]
+            self.assertEqual(subprocess.run(args, capture_output=True).returncode, 9)
+            self.assertEqual(json.loads((root / 'state.json').read_text())['processed'], ['one'])
+            self.assertEqual(subprocess.run(args, capture_output=True).returncode, 0)
+            self.assertEqual(json.loads((root / 'state.json').read_text())['processed'], ['one', 'two'])

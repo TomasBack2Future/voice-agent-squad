@@ -789,7 +789,9 @@ this bounded result with that delivery receipt:
 Then invoke `handled --delivery /absolute/delivery.json --receipt /absolute/handled.json`
 with the same global arguments. It validates the complete batch before writes,
 records native acceptance implied by that explicit recipient result, then ACKs
-only those events. It stops on any failed update; partial success is safe to
-replay with the same notes. Never synthesize a handling result merely because a
+only those events. ACK is also attempted when delivery reports an error, because
+delivery rejects an already processed event while ACK can confirm the same
+handling note idempotently. If ACK cannot confirm processing, the helper stops
+with a nonzero result. Partial success is safe to replay with the same notes. Never synthesize a handling result merely because a
 listener returned, a native turn ended or an operation remains unresolved. The
 Squad store independently rechecks recipient, generation and current decision.

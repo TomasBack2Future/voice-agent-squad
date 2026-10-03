@@ -114,9 +114,11 @@ def main():
                 or not args.squad or not args.squad.is_absolute() or not os.access(args.squad, os.X_OK)):
             raise ValueError('absolute native Squad executable and initialized ledger required')
         env = environment(args.runtime, args.native_session or '', args.agent or '', args.ledger)
-        def run(argv):
+        def run(argv, quiet=False):
             # Inherited stdout/stderr; no credential-bearing environment is printed.
-            return subprocess.run([str(args.squad), *argv], cwd=args.ledger, env=env).returncode
+            return subprocess.run([str(args.squad), *argv], cwd=args.ledger, env=env,
+                                  stdout=subprocess.DEVNULL if quiet else None,
+                                  stderr=subprocess.DEVNULL if quiet else None).returncode
         if args.operation == 'exec':
             argv = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
             if not argv:
@@ -132,14 +134,16 @@ def main():
         for event in events:
             # The recipient's explicit handled proof implies native acceptance.
             # Mark it only now, never when the pointer was merely read.
-            result = run(['terminal-events', 'delivered', event['event_id'], '--native-session',
-                          args.native_session, '--delivery-session', delivery['delivery_session']])
-            if result:
-                return result
-            result = run(['terminal-events', 'ack', event['event_id'], '--native-session',
-                          args.native_session, '--note', event['note']])
-            if result:
-                return result  # Partial success is idempotent, never hidden.
+            delivered = run(['terminal-events', 'delivered', event['event_id'], '--native-session',
+                             args.native_session, '--delivery-session', delivery['delivery_session']], quiet=True)
+            # Delivered rejects an already processed event. ACK is the authoritative
+            # idempotent read/write: success proves the exact same handling note,
+            # including after a partial batch or a lost command response. Never
+            # infer success from a delivery error or classify its stderr.
+            acknowledged = run(['terminal-events', 'ack', event['event_id'], '--native-session',
+                                args.native_session, '--note', event['note']])
+            if acknowledged:
+                return delivered or acknowledged
         return 0
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(json.dumps({'status': 'blocked', 'reason': str(error) if isinstance(error, ValueError)
