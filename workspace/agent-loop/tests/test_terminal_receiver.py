@@ -37,7 +37,7 @@ print(json.dumps({"type":"worker-terminal-delivery-v1","events":[{"event_id":"te
 ''')
         self.binary.chmod(0o700)
         self.config = self.root / 'config.json'
-        self.data = dict(native_session_id='session-one', agent_id='dispatcher',
+        self.data = dict(native_session_id='session-one', agent_id='dispatcher', role='worker',
                          state_directory=str(self.root / 'state'), ledger_directory=str(self.root),
                          squad_executable=str(self.binary), incarnation='launch-one', owner_pid=os.getpid(), max_seconds=60)
         self.config.write_text(json.dumps(self.data))
