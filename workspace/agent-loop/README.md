@@ -241,6 +241,29 @@ against a matching selected package/profile; running sessions are not assumed to
 reload skill instructions. These are local setup operations, not a ledger API or
 new MCP coordination surface.
 
+### Role-skill canonical sources
+
+`canonical-sources.json` declares exactly one canonical source per routed
+skill (Issue #14). In-repo skills resolve to their versioned directory;
+external skills (Importer/Studio-owned, or not yet versioned here) record
+their owning repository and current status instead of a copy. The old
+`studio-staging-sls-logs` name is a time-bounded compatibility alias of
+`studio-sls-logs` only.
+
+Audit deterministically without touching live installs:
+
+```bash
+python3 workspace/agent-loop/audit_canonical_sources.py
+python3 workspace/agent-loop/audit_canonical_sources.py --installed <skills-dir>
+```
+
+The audit fails on duplicate skill names with different content across the
+declared in-repo roots, on a canonical entry whose source is missing or
+mismatched, and on an installed entry that is neither a symlink into a
+declared canonical source nor byte-identical to it. It never relinks or
+reinstalls skills; live installation remains a separately authorized
+operator step.
+
 ## Worker startup probe
 
 From an installed or reviewed package, prepare portable inputs before execution

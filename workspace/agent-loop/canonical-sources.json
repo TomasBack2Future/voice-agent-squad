@@ -1,0 +1,73 @@
+{
+  "schema_version": "agent-loop.canonical-sources.v1",
+  "policy": "Repository-owned product workflows come from the checked-out owning repository. Cross-repository or machine skills have exactly one versioned source; global installs are symlinks or generated installs from that source, never independently edited copies. Data Analyze is migration evidence, not a source for newly launched sessions. No active Worker is migrated in place.",
+  "skill_roots": [
+    "workspace/agent-loop",
+    "workspace/coordination-skills",
+    "plugin/skills",
+    "reviewer/skills"
+  ],
+  "sources": {
+    "squad-dispatcher": {
+      "kind": "squad-repo",
+      "status": "canonical",
+      "path": "workspace/coordination-skills/squad-dispatcher",
+      "note": "Maintained Dispatcher skill; global installs must link the installed snapshot of this source."
+    },
+    "studio-issue-worker": {
+      "kind": "squad-repo",
+      "status": "canonical",
+      "path": "workspace/coordination-skills/studio-issue-worker",
+      "note": "Maintained Studio Worker skill; global installs must link the installed snapshot of this source."
+    },
+    "cmux-sessions": {
+      "kind": "squad-repo",
+      "status": "canonical",
+      "path": "workspace/agent-loop/tools/cmux-sessions",
+      "note": "Versioned Agent Loop tool skill (PR #13 merged); global installs must link the installed snapshot of this source."
+    },
+    "agent-loop-worker": {
+      "kind": "squad-repo",
+      "status": "canonical",
+      "path": "workspace/agent-loop/roles/worker",
+      "note": "Generic Worker role skill for Squad/Importer/Interceptor assignments."
+    },
+    "squad-pr-reviewer-core": {
+      "kind": "squad-repo",
+      "status": "canonical",
+      "path": "reviewer/skills/squad-pr-reviewer-core",
+      "note": "Reviewer skill embedded in the Go reviewer bundle (reviewer/bundle.go)."
+    },
+    "squad-env-recovery": {
+      "kind": "external-canonical",
+      "status": "pending-source",
+      "path": null,
+      "note": "No versioned source in this repository yet. Live global copy at ~/.claude/skills/squad-env-recovery (-> ~/.codex/skills/squad-env-recovery) has unknown source revision; do not treat it as canonical until a versioned source lands."
+    },
+    "transfer-docker-image": {
+      "kind": "external-canonical",
+      "status": "pending-source",
+      "path": null,
+      "note": "No versioned source in this repository yet. Live global copy is an independently maintained install with unknown source revision."
+    },
+    "convoai-call-studio-import": {
+      "kind": "external-canonical",
+      "status": "pending-source",
+      "path": null,
+      "note": "Canonical source is the ConvoAI Studio Importer repository (skills/convoai-call-studio-import/SKILL.md); this repository only routes to it via workspace/agent-loop/projects/importer/profile.json. The global copy trails that source."
+    },
+    "studio-sls-logs": {
+      "kind": "external-canonical",
+      "status": "canonical-external",
+      "path": null,
+      "note": "Canonical source is the Studio repository (.agents/skills/studio-sls-logs); Voice Agent Studio PR #983 merged. This repository only routes to it, never copies it."
+    },
+    "studio-staging-sls-logs": {
+      "kind": "external-canonical",
+      "status": "compatibility-alias",
+      "path": null,
+      "alias_of": "studio-sls-logs",
+      "note": "Time-bounded compatibility alias only for sessions launched before migration; new references must use studio-sls-logs."
+    }
+  }
+}
