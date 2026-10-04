@@ -22,8 +22,23 @@ from validate_context_package import ROOT, ValidationError, validate_file
 from worker_preflight import check_profile, check_worktree, git, repository_name
 from muse_worker_receiver import Receiver
 from muse_worker_container import Runtime
+from muse_worker_view import LiveView
 
 FINGERPRINT = native.FINGERPRINT
+
+
+def resolve_effort(c):
+    if 'reasoning_effort' in c:
+        effort, source = c['reasoning_effort'], 'launch-config'
+    else:
+        preferences = json.loads(Path(c['settings_file']).read_text())
+        if not isinstance(preferences, dict):
+            raise ValidationError('Muse settings must be an object; no model started')
+        effort = preferences.get('reasoning_effort', 'max')
+        source = 'settings-file' if 'reasoning_effort' in preferences else 'default'
+    if effort not in ('minimal', 'low', 'medium', 'high', 'xhigh', 'max'):
+        raise ValidationError('unsupported Muse reasoning preference; no model started')
+    return effort, source
 
 
 def config_file(path):
@@ -42,6 +57,7 @@ def config_file(path):
     for name in ('.mcp.json', '.muse/hooks.json'):
         if (workspace / name).exists():
             raise ValidationError('unmediated project extensions require separate qualification: ' + name)
+    c['reasoning_effort'], c['reasoning_effort_source'] = resolve_effort(c)
     return c
 
 
@@ -86,7 +102,8 @@ def check_launch(assignment, config_path, resume=False):
         raise ValidationError('coordination runtime lacks source Worker execution gating')
     native.check_executable(c)
     Runtime(c)
-    return {'status': 'ready', 'runtime_approval': 'explicit-meta-1.3-yolo', 'primary_ownership': 'verified',
+    return {'reasoning_effort': c['reasoning_effort'], 'reasoning_effort_source': c['reasoning_effort_source'],
+            'progress_view': c.get('progress_view', 'live'), 'status': 'ready', 'runtime_approval': 'explicit-meta-1.3-yolo', 'primary_ownership': 'verified',
             'environment': 'identity-sanitized', 'execution': 'mediated-source-tools',
             'authorization': authorization(c, assignment)}
 
@@ -165,6 +182,10 @@ def run(assignment_path, config_path, resume=False):
         if old.get('state') != 'joined' or old.get('assignment') != assignment or old.get('custody') != custody:
             raise ValidationError('original Worker writer is unjoined or assignment changed; reconcile original custody')
     native.atomic(writer, {'state': 'intent', 'custody': custody, 'assignment': assignment, 'evidence': str(state)})
+    view = LiveView(c['native_session_id'], enabled=c.get('progress_view', 'live') == 'live')
+    view.status('[Muse] ' + ('Resuming ' if resume else 'Starting ') + c['native_session_id']
+                + ' | effort=' + c['reasoning_effort'] + ' (' + c['reasoning_effort_source'] + ')'
+                + ' | mediated source tools | evidence=' + str(state))
     h = native.Host(c, state, env)
     native.atomic(writer, {'state': 'running', 'custody': custody, 'assignment': assignment, 'evidence': str(state), 'pid': h.p.pid})
     pinned = False
@@ -207,6 +228,7 @@ def run(assignment_path, config_path, resume=False):
             profile_path = Path(assignment['worktree']) / profile_path
         native.atomic(state / 'startup.json', {'native': c['native_session_id'], 'actor': c['agent_id'],
                       'model': native.MODEL, 'permission_mode': 'yolo', 'reasoning_effort': c['reasoning_effort'],
+                      'reasoning_effort_source': c['reasoning_effort_source'], 'progress_view': c.get('progress_view', 'live'),
                       'role': {'path': str(ROOT / 'roles/worker/SKILL.md'), 'sha256': hashlib.sha256((ROOT / 'roles/worker/SKILL.md').read_bytes()).hexdigest()},
                       'profile': {'path': str(profile_path.resolve()), 'sha256': hashlib.sha256(profile_path.read_bytes()).hexdigest()},
                       'assignment_sha256': hashlib.sha256(Path(assignment_path).read_bytes()).hexdigest()})
@@ -227,18 +249,18 @@ def run(assignment_path, config_path, resume=False):
             if time.monotonic() - renewed >= 20:
                 heartbeat(assignment, c, env)
                 renewed = time.monotonic()
+                view.status('[Muse] running; claim renewed, execution pin retained')
             try:
                 m = h.events.get(timeout=1)
             except queue.Empty:
                 continue
             params = m.get('params', {})
+            view.observe(m)
             record_context_read(c, state, m, loaded)
             native_events.append(m)
             native.atomic(state / 'native-events.json', native_events)
             if m.get('method') == 'host/exited':
                 raise ValidationError('native host exited; original custody retained')
-            if m.get('method') == 'item/completed' and params.get('item', {}).get('kind') == 'agentMessage':
-                print(params['item'].get('text', ''), flush=True)
             if m.get('method') == 'turn/completed':
                 terminal = params.get('terminal')
                 if terminal == 'completed':

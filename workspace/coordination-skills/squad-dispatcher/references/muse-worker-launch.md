@@ -6,7 +6,7 @@ than `muse_session_host.py` or a lifecycle-only package's generic preflight.
 No adapter availability result overrides role, phase or ownership requirements.
 
 This lane admits source/test/handoff work with explicit Meta 1.3 Contributor,
-YOLO and reasoning effort. Stage/production authority, environment operations,
+YOLO and resolved reasoning effort. Stage/production authority, environment operations,
 other roles, host credential mounts and detached services remain unqualified.
 Never silently narrow a full delivery assignment to fit it. If a source handoff
 is the authorized operation, reflect that exact operation in the envelope and
@@ -42,3 +42,14 @@ retains its closed execution pin and original custody. Recover that original
 operation; never replace it or delete its journal to make admission pass. Install
 and qualify this lane before selecting it for new work. Existing sessions adopt
 nothing merely because an installation link moved.
+
+Default to the launcher's `progress_view: live` in the cmux surface. It displays
+agent messages and tool activity while retaining the qualified headless host,
+container mediation, execution pin, renewal and outcome publication. A naked
+interactive `muse resume` is not an equivalent replacement.
+
+Leave `reasoning_effort` absent unless the task explicitly overrides the user's
+preference. The launcher reads the persisted native settings preference and
+otherwise defaults to `max`; it records the effective value/source in check and
+startup receipts. Apply the same rule on resume. Do not insert a guessed `high`
+value or rely on the interactive wrapper to configure MSP turns.

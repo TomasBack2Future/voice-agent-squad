@@ -189,6 +189,10 @@
         "xhigh",
         "max"
       ]
+    },
+    "client_config_directory": {
+      "type": "string",
+      "pattern": "^/"
     }
   }
 }
