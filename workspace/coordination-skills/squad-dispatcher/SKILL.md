@@ -295,7 +295,8 @@ Never wait for Worker termination to answer its blocking design question.
 8. Use the workspace-authorized session transport (cmux when required by
    workspace policy), preserving fresh workspace/session identity and binding.
    Do not create a second App task in parallel with a cmux Worker. For an
-   App-task deployment, create one Codex task whose title begins with `[#<issue>][<item>]` and whose
+   App-task deployment, create one runtime task (Codex, Claude or Muse, per the
+   workspace-authorized runtime) whose title begins with `[#<issue>][<item>]` and whose
    prompt invokes `$studio-issue-worker` for a Studio implementation assignment
    or `$agent-loop-worker` with the matching project profile for Squad, Importer
    or Interceptor. Name exactly one Issue and item and use the applicable prompt
@@ -308,7 +309,7 @@ Never wait for Worker termination to answer its blocking design question.
 
    ```bash
    squad-coordination dispatch bind <RESERVATION-KEY> \
-     --generation <N> --thread-id <CODEX-TASK-ID>
+     --generation <N> --thread-id <RUNTIME-TASK-ID>
    ```
 
    If binding fails, do not create a second task. Reconcile the already-created
