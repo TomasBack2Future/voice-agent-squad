@@ -56,13 +56,15 @@
     "sandbox": {
       "enum": [
         "read-only",
-        "workspace-write"
+        "workspace-write",
+        "danger-full-access"
       ]
     },
     "approval_policy": {
       "enum": [
         "on-request",
-        "untrusted"
+        "untrusted",
+        "never"
       ]
     },
     "approvals_reviewer": {

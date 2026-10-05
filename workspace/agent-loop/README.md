@@ -528,6 +528,16 @@ Source tests do not authorize installing the adapter or migrating live sessions.
 
 ## Qualified Codex control plane
 
+The Worker launch schema accepts the selected `read-only`, `workspace-write`
+or `danger-full-access` sandbox and `on-request`, `untrusted` or `never`
+approval policy. Schema acceptance does not qualify execution. Admission checks
+the already-loaded native's actual `thread/resume` reply against the exact
+selected model, effort, provider, sandbox, approval policy and reviewer, without
+settings overrides. A mismatch fails closed; recorded metadata and launch argv
+alone cannot establish effective Full Access. App delivery and persistent
+all-writer execution fencing retain their independent qualification gates.
+
+
 The maintained Codex Worker adapter is `codex_worker_launcher.py`, not the
 standalone provider-selection helper. Current Worker adoption remains unavailable
 at the claim-loss execution-fence boundary below.
