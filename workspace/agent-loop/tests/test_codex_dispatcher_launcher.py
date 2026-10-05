@@ -103,7 +103,7 @@ class DispatcherContinuityTests(unittest.TestCase):
         self.c['sandbox']='read-only'
         with self.assertRaisesRegex(ValidationError,'policy/checkpoint'):self.fence()
 
-    def test_existing_policy_preserved_but_worker_cannot_enable_bypass(self):
+    def test_existing_policy_preserved_for_dispatcher_and_worker_schema(self):
         self.c.update(sandbox='danger-full-access',approval_policy='never')
         self.transition['prior_selection']=dict(selection(self.c),client='app');self.persist()
         launcher.config_file(self.path);self.fence()
@@ -112,6 +112,6 @@ class DispatcherContinuityTests(unittest.TestCase):
                             approvalPolicy='never',approvalsReviewer='auto_review',sandbox={'type':'dangerFullAccess'}),self.c)
         self.c['schema_version']='agent-loop.codex-launch.v1'
         self.c.pop('worktree');self.c.pop('transition_file');self.c.pop('controller_epoch');self.path.write_text(json.dumps(self.c))
-        with self.assertRaises(ValidationError):config_file(self.path)
+        self.assertEqual(config_file(self.path), self.c)
 
 if __name__=='__main__':unittest.main()

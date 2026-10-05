@@ -174,6 +174,58 @@ class CodexControlPlaneTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValidationError):
                 launcher.check_effective(effective, self.c)
 
+    def test_worker_schema_accepts_selected_full_access_and_never(self):
+        for sandbox, policy in [('danger-full-access', 'on-request'),
+                                ('workspace-write', 'never'),
+                                ('danger-full-access', 'never')]:
+            with self.subTest(sandbox=sandbox, policy=policy):
+                selected = dict(self.c, sandbox=sandbox, approval_policy=policy,
+                                approvals_reviewer='user')
+                self.path.write_text(json.dumps(selected))
+                config = launcher.config_file(self.path)
+                self.assertEqual(config, selected)
+                argv = launcher.argv(config, str(self.root), 'prompt')
+                self.assertEqual(argv[argv.index('--sandbox') + 1], sandbox)
+                self.assertEqual(argv[argv.index('--ask-for-approval') + 1], policy)
+                self.assertFalse(any('bypass' in value for value in argv))
+        for key, value in [('sandbox', 'full-access'), ('approval_policy', 'always'),
+                           ('approvals_reviewer', 'unverified')]:
+            self.path.write_text(json.dumps(dict(self.c, **{key: value})))
+            with self.subTest(key=key), self.assertRaises(ValidationError):
+                launcher.config_file(self.path)
+
+    def test_full_access_requires_exact_effective_resume_reply(self):
+        selected = dict(self.c, sandbox='danger-full-access', approval_policy='never',
+                        approvals_reviewer='user')
+        self.path.write_text(json.dumps(selected))
+        config = launcher.config_file(self.path)
+        # Persisted thread metadata matches selection, but does not prove policy.
+        effective = dict(model='test-model', modelProvider='openai', reasoningEffort='medium',
+                         approvalPolicy='never', approvalsReviewer='user',
+                         sandbox={'type': 'dangerFullAccess'})
+        original = self.rpc.call
+        def call(method, params):
+            if method == 'thread/resume':
+                self.rpc.calls.append((method, params))
+                return copy.deepcopy(effective)
+            return original(method, params)
+        with patch.object(self.rpc, 'call', side_effect=call):
+            self.assertEqual(launcher.live_target(self.rpc, config, self.root), effective)
+            for key, value in [('approvalPolicy', 'on-request'),
+                               ('sandbox', {'type': 'workspaceWrite'}),
+                               ('approvalsReviewer', 'auto_review'), ('model', 'other'),
+                               ('reasoningEffort', 'high'), ('modelProvider', 'other')]:
+                before = copy.deepcopy(effective)
+                effective[key] = value
+                with self.subTest(key=key), self.assertRaisesRegex(ValidationError, 'effective runtime'):
+                    launcher.live_target(self.rpc, config, self.root)
+                effective.clear(); effective.update(before)
+        resumes = [params for method, params in self.rpc.calls if method == 'thread/resume']
+        self.assertEqual(len(resumes), 7)
+        self.assertTrue(all(params == {'threadId': NATIVE, 'excludeTurns': True} for params in resumes))
+        self.assertNotIn('thread/queue/add', [method for method, _ in self.rpc.calls])
+        self.assertEqual(config, selected)
+
     def test_child_identity_and_argv_preserve_exact_native_and_permissions(self):
         with patch.dict(os.environ, {'SQUAD_AGENT':'parent','CLAUDE_SESSION_ID':'parent','CODEX_THREAD_ID':'parent'}):
             env = launcher.child_environment(self.c)
