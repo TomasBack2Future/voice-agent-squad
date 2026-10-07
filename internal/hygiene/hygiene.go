@@ -373,6 +373,9 @@ func (sw *Sweeper) Sweep(ctx context.Context) ([]Finding, error) {
 		}
 	}
 	oldRows.Close()
+	if err := oldRows.Err(); err != nil {
+		return nil, err
+	}
 
 	return findings, nil
 }

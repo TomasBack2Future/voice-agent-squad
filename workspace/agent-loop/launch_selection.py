@@ -161,9 +161,14 @@ def launch_receipt(config_check, process, runtime, surface, task, outcome):
                'report': (outcome or {}).get('report_path')}
     surface = surface or {}
     process = process or {}
+    pid = process.get('pid')
+    if not isinstance(pid, int) or pid < 1:
+        receipt.update(status='blocked', surface=surface.get('surface_id', 'unknown'),
+                       reason='new session process identity is missing; a visible surface alone proves nothing spawned')
+        return receipt
     if surface.get('visible') is True and surface.get('selected') is True:
         shell_pid = surface.get('shell_pid')
-        if shell_pid is not None and shell_pid != process.get('pid'):
+        if shell_pid is not None and shell_pid != pid:
             receipt.update(status='blocked', surface='stale-shell',
                            reason='selected surface is owned by an old shell, not the new session process')
         else:

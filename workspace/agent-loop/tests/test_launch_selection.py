@@ -108,6 +108,16 @@ class UnifiedReceiptTests(unittest.TestCase):
         self.assertEqual(receipt['task'], 'BUG-016:held:verified')
         self.assertEqual(receipt['status'], 'launched')
 
+    def test_visible_surface_without_proven_pid_is_not_success(self):
+        receipt = selection.launch_receipt(
+            config_check={'status': 'ready'}, process={},
+            runtime={'runtime': 'muse', 'native_session': 'native-1'},
+            surface={'visible': True, 'selected': True, 'surface_id': 'surface:9'},
+            task={'item': 'BUG-016', 'claim': 'held', 'heartbeat': 'verified'},
+            outcome={'report_path': '/tmp/report.json'})
+        self.assertEqual(receipt['status'], 'blocked')
+        self.assertIn('process', receipt['reason'])
+
     def test_hidden_surface_or_old_shell_is_not_success(self):
         base = dict(config_check={'status': 'ready'},
                     process={'pid': 1234, 'argv': ['muse']},
