@@ -80,6 +80,40 @@ def check_resume_readback(selected, effective, expected_item=None, expected_nati
     return native
 
 
+CODEX_SANDBOX_NATIVE = {'read-only': 'readOnly', 'workspace-write': 'workspaceWrite',
+                           'danger-full-access': 'dangerFullAccess'}
+
+
+def normalize_codex_effective(effective):
+    """Normalize a native thread/resume reply to selected-policy vocabulary."""
+    sandbox = (effective.get('sandbox') or {}).get('type')
+    inverted = {native: selected for selected, native in CODEX_SANDBOX_NATIVE.items()}
+    return {'sandbox': inverted.get(sandbox, sandbox),
+            'approval_policy': effective.get('approvalPolicy'),
+            'approvals_reviewer': effective.get('approvalsReviewer'),
+            'model': effective.get('model'), 'effort': effective.get('reasoningEffort'),
+            'provider': effective.get('modelProvider')}
+
+
+def check_codex_resume(selected, effective):
+    """Verify a resumed Codex thread kept its selected permission/model policy.
+
+    Takes the launch selection and a normalize_codex_effective reply. A
+    stale readback (e.g. workspace-write/on-request after Full Access was
+    selected) fails closed instead of silently running routine work under
+    the old weaker policy.
+    """
+    normalized = effective if 'approval_policy' in effective else normalize_codex_effective(effective)
+    for name in ('sandbox', 'approval_policy'):
+        if normalized.get(name) != selected.get(name):
+            raise ValueError('resumed Codex %s %r differs from selected %r; requalify before adoption'
+                             % (name, normalized.get(name), selected.get(name)))
+    for name in ('model', 'effort', 'provider', 'approvals_reviewer'):
+        if name in selected and normalized.get(name) != selected[name]:
+            raise ValueError('resumed Codex %s differs from selected; no silent repair' % name)
+    return True
+
+
 def verify_surface(tree, workspace_id, surface_ref):
     """Verify the new session surface is the visible selected one.
 

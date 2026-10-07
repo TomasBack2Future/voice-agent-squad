@@ -49,6 +49,21 @@ class ResumeReadbackTests(unittest.TestCase):
                 expected_item='BUG-016')
 
 
+class CodexResumeReadbackTests(unittest.TestCase):
+    def test_resume_rejects_stale_permission_readback(self):
+        selected = {'sandbox': 'danger-full-access', 'approval_policy': 'never'}
+        effective = selection.normalize_codex_effective(
+            {'sandbox': {'type': 'workspaceWrite'}, 'approvalPolicy': 'never'})
+        with self.assertRaises(ValueError):
+            selection.check_codex_resume(selected, effective)
+
+    def test_resume_accepts_matching_full_access_readback(self):
+        selected = {'sandbox': 'danger-full-access', 'approval_policy': 'never'}
+        effective = selection.normalize_codex_effective(
+            {'sandbox': {'type': 'dangerFullAccess'}, 'approvalPolicy': 'never'})
+        self.assertTrue(selection.check_codex_resume(selected, effective))
+
+
 class LaunchSelectionTests(unittest.TestCase):
     def test_explicit_task_selection_beats_persisted_preference_and_default(self):
         with tempfile.TemporaryDirectory() as tmp:
