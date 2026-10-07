@@ -39,6 +39,7 @@ func handoffFixture(t *testing.T) (*Store, HandoffRequest, string) {
 	request := HandoffRequest{RequestID: "handoff-1", ExpectedEpoch: 1, OldNative: "old-native", NewActor: "new", NewNative: "new-native", Reservations: rows}
 	return s, request, "event-1"
 }
+
 // Controller projection must derive from the real ledger binding and its
 // explicit scope: after handoff, the retired actor projects nothing while
 // the successor projects its bound native/epoch.
