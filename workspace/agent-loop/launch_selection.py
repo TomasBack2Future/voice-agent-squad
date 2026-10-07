@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 
 UI_MODES = ('interactive', 'live-view', 'headless')
-SOURCES = ('task', 'preference', 'default')
 
 
 def _preferences(path):
