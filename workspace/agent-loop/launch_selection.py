@@ -80,6 +80,34 @@ def check_resume_readback(selected, effective, expected_item=None, expected_nati
     return native
 
 
+def verify_surface(tree, workspace_id, surface_ref):
+    """Verify the new session surface is the visible selected one.
+
+    Takes a parsed `cmux tree --all --json` document plus the owned
+    workspace UUID and expected surface ref. Returns a surface claim for
+    launch_receipt. A hidden surface, a surface in another workspace, or
+    an unknown ref fails closed: the old shell or a log view never counts
+    as interactive success. Only the caller's owned workspace is read.
+    """
+    if not isinstance(tree, dict):
+        raise ValueError('cmux tree output is unavailable')
+    for window in tree.get('windows', []) or []:
+        for workspace in (window or {}).get('workspaces', []) or []:
+            if (workspace or {}).get('id') != workspace_id:
+                continue
+            for pane in (workspace or {}).get('panes', []) or []:
+                for surface in (pane or {}).get('surfaces', []) or []:
+                    surface = surface or {}
+                    if surface.get('ref') != surface_ref and surface.get('id') != surface_ref:
+                        continue
+                    if surface.get('active') is True and surface.get('selected') is True:
+                        return {'visible': True, 'selected': True, 'surface_id': surface_ref,
+                                'workspace_id': workspace_id}
+                    raise ValueError('surface %s in workspace %s is hidden or unselected'
+                                     % (surface_ref, workspace_id))
+    raise ValueError('surface %s not found in owned workspace %s' % (surface_ref, workspace_id))
+
+
 def launch_receipt(config_check, process, runtime, surface, task, outcome):
     """Build one unified startup receipt from separately verified stages.
 

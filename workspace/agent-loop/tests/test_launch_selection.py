@@ -8,6 +8,25 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 import launch_selection as selection
 
 
+class SurfaceVerificationTests(unittest.TestCase):
+    TREE = {'windows': [{'workspaces': [{'id': 'WS-1', 'active': True, 'panes': [
+        {'surfaces': [
+            {'ref': 'surface:1', 'active': False, 'selected': False, 'title': 'old shell'},
+            {'ref': 'surface:2', 'active': True, 'selected': True, 'title': 'new TUI'}]}]}]}]}
+
+    def test_selected_visible_surface_is_verified(self):
+        surface = selection.verify_surface(self.TREE, 'WS-1', 'surface:2')
+        self.assertEqual((surface['visible'], surface['selected']), (True, True))
+
+    def test_hidden_or_old_shell_surface_is_rejected(self):
+        with self.assertRaises(ValueError):
+            selection.verify_surface(self.TREE, 'WS-1', 'surface:1')
+        with self.assertRaises(ValueError):
+            selection.verify_surface(self.TREE, 'WS-1', 'surface:9')
+        with self.assertRaises(ValueError):
+            selection.verify_surface(self.TREE, 'WS-OLD', 'surface:2')
+
+
 class ResumeReadbackTests(unittest.TestCase):
     def test_resume_rejects_effective_config_mismatch(self):
         selected = {'model': 'muse-spark-1.3-contributor', 'effort': 'max',
