@@ -386,6 +386,35 @@ func TestSelfReservedReleaseRoutesToOwnReserver(t *testing.T) {
 	}
 }
 
+// TASK-029: a release source that the decision path does not accept must
+// still deliver its terminal outcome through the release lane; the
+// unadopted decision can never swallow the outcome.
+func TestUnadoptedReleaseSourceStillDeliversOutcome(t *testing.T) {
+	s := releaseFixture(t, "production:studio:78af0934:importer:89312005:20261006", "dispatcher", "TASK-029", "deployer")
+	if _, e := s.DB.Exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent)
+ VALUES('repo','production:studio:78af0934:importer:89312005:20261006',1,'TASK-029',1,1,'proceed','','deployer-agent')`); e != nil {
+		t.Fatal(e)
+	}
+	publisher := s
+	publisher.Recipient = ""
+	if _, e := s.DB.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo',3,'deployer-agent','TASK-029','say','terminal result','[]','normal')`); e != nil {
+		t.Fatal(e)
+	}
+	var outcome int64
+	if e := s.DB.QueryRow("SELECT max(id) FROM messages").Scan(&outcome); e != nil {
+		t.Fatal(e)
+	}
+	id, e := publisher.Publish(context.Background(), "deployer-agent",
+		PublishRequest{"production:studio:78af0934:importer:89312005:20261006", 1, "deployer", "handoff-complete", outcome, 1})
+	if e != nil {
+		t.Fatalf("release outcome with unadopted decision source rejected: %v", e)
+	}
+	events, e := s.Pending(context.Background(), "dispatcher-start", 0)
+	if e != nil || len(events) != 1 || events[0].ID != id {
+		t.Fatalf("release outcome not routed %v %v", events, e)
+	}
+}
+
 func TestNativeAcceptanceRechecksRoutingFence(t *testing.T) {
 	for _, mutation := range []string{
 		"UPDATE dispatch_reservations SET generation=2",
