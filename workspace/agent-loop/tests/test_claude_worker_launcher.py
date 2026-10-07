@@ -261,3 +261,17 @@ class ExplicitSelectionTests(unittest.TestCase):
         for value in ({'model': 'selected'}, {'effort': 'high'}):
             with self.assertRaises(launcher.ValidationError):
                 launcher.selection_arguments(value)
+
+
+class ClaudeResumeTests(unittest.TestCase):
+    def test_resume_reuses_native_and_verifies_effective_selection(self):
+        argv = launcher.resume_arguments({'native_session_id': 'native-1', 'permission_mode': 'auto',
+                                         'model': 'm', 'effort': 'high'},
+                                        {'model': 'm', 'effort': 'high'})
+        self.assertEqual(argv, ['--resume', 'native-1', '--permission-mode', 'auto',
+                                '--model', 'm', '--effort', 'high'])
+
+    def test_resume_rejects_effective_selection_drift(self):
+        with self.assertRaises(launcher.ValidationError):
+            launcher.check_resume_effective({'model': 'm', 'effort': 'high'},
+                                            {'model': 'other', 'effort': 'high'})

@@ -240,6 +240,27 @@ def selection_arguments(c):
     return ['--model', c['model'], '--effort', c['effort']] if c.get('model') else []
 
 
+def resume_arguments(c, effective):
+    """Resume the SAME native session; never create a replacement session.
+
+    Reuses the bound native id with the selected permission/model/effort,
+    then the caller verifies the effective reply. A drifted effective
+    selection fails closed via check_resume_effective.
+    """
+    check_resume_effective({'model': c.get('model'), 'effort': c.get('effort')},
+                           {'model': effective.get('model'), 'effort': effective.get('effort')})
+    return ['--resume', c['native_session_id'], '--permission-mode', c['permission_mode'],
+            *selection_arguments(c)]
+
+
+def check_resume_effective(selected, effective):
+    """Reject a resumed session whose effective selection drifted."""
+    for name in ('model', 'effort'):
+        if (selected.get(name) or None) != (effective.get(name) or None):
+            raise ValidationError('resumed %s differs from selected; no silent repair' % name)
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--assignment', type=Path, required=True)
