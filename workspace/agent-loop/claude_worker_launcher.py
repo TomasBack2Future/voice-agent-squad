@@ -15,7 +15,24 @@ import time
 import uuid
 import terminal_receiver
 from claude_workspace_trust import workspace_trust
-from human_authorization import authorization, prompt_context
+from human_authorization import authorization, effective_grant, prompt_context
+
+
+def check_receipt_authorization(c, assignment, current_revision=0, requested=None, holds=None):
+    """Build the check receipt's authorization field with effective grant.
+
+    Reuses the existing receipt for routine operations without new
+    approval; a revoked receipt, active hold or new-scope request still
+    fails closed via effective_grant.
+    """
+    base = authorization(c, assignment)
+    if base.get('status') != 'present':
+        return base
+    try:
+        grant = effective_grant(c, assignment, current_revision, requested=requested, holds=holds)
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
+    return dict(base, effective_grant=grant)
 
 from validate_context_package import ROOT, ValidationError, validate_file
 from worker_preflight import check_profile, check_worktree

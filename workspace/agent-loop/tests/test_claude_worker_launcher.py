@@ -263,6 +263,19 @@ class ExplicitSelectionTests(unittest.TestCase):
                 launcher.selection_arguments(value)
 
 
+class GrantReuseReceiptTests(unittest.TestCase):
+    def test_check_receipt_carries_effective_grant_revision(self):
+        field = launcher.check_receipt_authorization(
+            {'human_authorization': {'assignment_id': 'a/1/1', 'repository': 'o/r',
+                                      'reference': 'human:1', 'operations': ['source']}},
+            {'assignment_id': 'a/1/1', 'repository': 'o/r',
+             'authorization': {'source_mutation': True, 'pull_request': False, 'merge': False,
+                               'staging': False, 'production': False, 'issue_close': False}},
+            current_revision=4)
+        self.assertEqual(field['effective_grant']['revision'], 4)
+        self.assertEqual(field['effective_grant']['operations'], ['source'])
+
+
 class ClaudeResumeTests(unittest.TestCase):
     def test_resume_reuses_native_and_verifies_effective_selection(self):
         argv = launcher.resume_arguments({'native_session_id': 'native-1', 'permission_mode': 'auto',
