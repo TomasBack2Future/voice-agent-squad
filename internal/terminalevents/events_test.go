@@ -313,6 +313,79 @@ func TestConcurrentPublishIsIdempotent(t *testing.T) {
 	}
 }
 
+func releaseFixture(t *testing.T, key, owner, item, worker string) Store {
+	t.Helper()
+	db, e := store.Open(filepath.Join(t.TempDir(), "db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { db.Close() })
+	_, e = db.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id)
+ VALUES('repo',?,?,'`+owner+`',1,1,0,'dispatched',1,?,?,'`+item+`')`, key, "release:"+item, worker, "reporter role note")
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = db.Exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(1,'repo',1,?,?,'say','result','[]','normal')`, worker+"-agent", item)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = db.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo',?,? ,1,2,'released')`, item, worker+"-agent")
+	if e != nil {
+		t.Fatal(e)
+	}
+	return Store{DB: db, Repo: "repo", Recipient: owner}
+}
+
+// TASK-027: a release reservation with no assignment decision record must
+// still publish its terminal outcome; the missing decision is evidence of
+// the contract gap, not proof the outcome never happened.
+func TestReleaseWithoutDecisionRecordPublishesOutcome(t *testing.T) {
+	s := releaseFixture(t, "production:studio:9252764b:20261005", "dispatcher", "TASK-027", "deployer")
+	publisher := s
+	publisher.Recipient = ""
+	id, e := publisher.Publish(context.Background(), "deployer-agent",
+		PublishRequest{"production:studio:9252764b:20261005", 1, "deployer", "handoff-complete", 1, 0})
+	if e != nil {
+		t.Fatalf("release outcome rejected: %v", e)
+	}
+	if id == "" {
+		t.Fatal("empty event id")
+	}
+	events, e := s.Pending(context.Background(), "dispatcher-start", 0)
+	if e != nil || len(events) != 1 || events[0].ID != id {
+		t.Fatalf("release outcome not routed %v %v", events, e)
+	}
+	if e = s.Delivered(context.Background(), id, "dispatcher-start"); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Ack(context.Background(), id, "TASK-027 result verified"); e != nil {
+		t.Fatal(e)
+	}
+}
+
+// TASK-028: a self-reserved release reservation routes its outcome to its
+// own reserver, never to the queue Dispatcher; the queue Dispatcher must
+// not be able to close or receive it as owner.
+func TestSelfReservedReleaseRoutesToOwnReserver(t *testing.T) {
+	s := releaseFixture(t, "production:studio:bfd4e18c:20261006", "deployer-agent", "TASK-028", "deployer")
+	publisher := s
+	publisher.Recipient = ""
+	id, e := publisher.Publish(context.Background(), "deployer-agent",
+		PublishRequest{"production:studio:bfd4e18c:20261006", 1, "deployer", "handoff-complete", 1, 0})
+	if e != nil {
+		t.Fatalf("self-reserved outcome rejected: %v", e)
+	}
+	events, e := s.Pending(context.Background(), "deployer-start", 0)
+	if e != nil || len(events) != 1 || events[0].ID != id {
+		t.Fatalf("self-reserved outcome not routed to reserver %v %v", events, e)
+	}
+	foreign := s
+	foreign.Recipient = "dispatcher"
+	if events, e = foreign.Pending(context.Background(), "dispatcher-start", 0); e != nil || len(events) != 0 {
+		t.Fatalf("self-reserved outcome leaked to queue dispatcher %v %v", events, e)
+	}
+}
+
 func TestNativeAcceptanceRechecksRoutingFence(t *testing.T) {
 	for _, mutation := range []string{
 		"UPDATE dispatch_reservations SET generation=2",
