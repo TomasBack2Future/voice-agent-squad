@@ -54,3 +54,60 @@ def resolve_launch(task, preferences_path, runtime):
     resolved['mediation'] = (mediation, 'task' if 'mediation' in task else
                              ('preference' if 'mediation' in preferences else 'default'))
     return resolved
+
+
+def check_resume_readback(selected, effective, expected_item=None, expected_native=None):
+    """Verify a resumed native kept its selected native/task/claim identity.
+
+    Returns the verified native session id. Any mismatch in model, effort,
+    permission, UI mode, native identity or task item fails closed instead
+    of silently adopting the drifted configuration.
+    """
+    for name in ('model', 'effort', 'permission_mode', 'ui_mode'):
+        if effective.get(name) != selected.get(name):
+            raise ValueError('resumed %s %r differs from selected %r; no silent repair'
+                             % (name, effective.get(name), selected.get(name)))
+    native = effective.get('native_session')
+    if not native:
+        raise ValueError('resumed native session identity is missing')
+    if expected_native is not None and native != expected_native:
+        raise ValueError('resumed native %r differs from bound %r'
+                         % (native, expected_native))
+    if effective.get('task_item') is not None and expected_item is not None \
+            and effective['task_item'] != expected_item:
+        raise ValueError('resumed task %r differs from assigned %r'
+                         % (effective['task_item'], expected_item))
+    return native
+
+
+def launch_receipt(config_check, process, runtime, surface, task, outcome):
+    """Build one unified startup receipt from separately verified stages.
+
+    Config validation, process spawn, effective runtime, visible/selected
+    surface, task/ownership and result path are distinct stages. An
+    interactive request on a hidden surface, or a selected surface owned by
+    an old shell PID, is blocked: neither proves the user can see or
+    interact with the new session.
+    """
+    receipt = {'config': (config_check or {}).get('status', 'unknown'),
+               'process': (process or {}).get('pid'),
+               'runtime': '%s:%s' % ((runtime or {}).get('runtime', '?'),
+                                     (runtime or {}).get('native_session', '?')),
+               'surface': 'unknown',
+               'task': '%s:%s:%s' % ((task or {}).get('item', '?'),
+                                     (task or {}).get('claim', '?'),
+                                     (task or {}).get('heartbeat', '?')),
+               'report': (outcome or {}).get('report_path')}
+    surface = surface or {}
+    process = process or {}
+    if surface.get('visible') is True and surface.get('selected') is True:
+        shell_pid = surface.get('shell_pid')
+        if shell_pid is not None and shell_pid != process.get('pid'):
+            receipt.update(status='blocked', surface='stale-shell',
+                           reason='selected surface is owned by an old shell, not the new session process')
+        else:
+            receipt.update(status='launched', surface='visible-selected')
+    else:
+        receipt.update(status='blocked', surface='hidden-or-unselected',
+                       reason='new session surface is hidden or unselected; old shell or log view is not success')
+    return receipt
