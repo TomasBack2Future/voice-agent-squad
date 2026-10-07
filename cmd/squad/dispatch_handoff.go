@@ -27,7 +27,8 @@ func dispatchControllerCommands() []*cobra.Command {
 	}}
 	bind.Flags().StringVar(&native, "native-session", "", "Independently verified current owner's native identity")
 	bind.Flags().Int64Var(&expected, "expected-epoch", 0, "Bootstrap epoch must be zero")
-	var actor string
+	var actor, reservation string
+	var generation int64
 	status := &cobra.Command{Use: "controller-status", Short: "Read current legitimate controller actor/native/epoch", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		bc, err := bootClaimContext(cmd.Context())
 		if err != nil {
@@ -38,13 +39,21 @@ func dispatchControllerCommands() []*cobra.Command {
 		if selected == "" {
 			selected = bc.agentID
 		}
-		b, err := dispatch.New(bc.db, bc.repoID, nil).Controller(cmd.Context(), selected)
+		s := dispatch.New(bc.db, bc.repoID, nil)
+		var b dispatch.ControllerBinding
+		if reservation != "" {
+			b, err = s.ControllerForReservation(cmd.Context(), selected, reservation, generation)
+		} else {
+			b, err = s.Controller(cmd.Context(), selected)
+		}
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(b)
 	}}
 	status.Flags().StringVar(&actor, "actor", "", "Read-only selected actor; does not impersonate it")
+	status.Flags().StringVar(&reservation, "reservation", "", "Exact live reservation scope; projection derives from its ledger binding")
+	status.Flags().Int64Var(&generation, "generation", 0, "Reservation generation for scoped projection")
 	var path string
 	handoff := &cobra.Command{Use: "handoff", Short: "Atomically hand off complete controller custody to a registered distinct actor/native", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		file, err := os.Open(path)
