@@ -43,6 +43,9 @@ def controller_receiver(config, env, state):
         if action == 'receiver-bind':
             # Readiness-gated custody: owner health plus the native wake path
             # (asyncRewake). Never inject callbacks through terminal input.
+            # owner_pid is required by the receiver config contract (the
+            # orphan-watch below already reads config['owner_pid']); a missing
+            # key fails closed with KeyError rather than binding pid 0.
             argv += ['--owner-pid', str(config['owner_pid']), '--wake-kind', 'asyncRewake']
         call(*argv)
     if journal.exists():
