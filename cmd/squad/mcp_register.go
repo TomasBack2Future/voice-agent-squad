@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -412,7 +413,15 @@ func registerLifecycleTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string
 			if err != nil {
 				return nil, err
 			}
-			cfg, _ := config.Load(repoRoot)
+			cfg, cfgErr := config.Load(repoRoot)
+			if os.Getenv("SQUAD_SERVICE_CHILD") == "1" {
+				if cfgErr != nil {
+					return nil, cfgErr
+				}
+				if code := runVerification(cfg.Verification.PreCommit, repoRoot, os.Stderr, os.Stderr); code != 0 {
+					return nil, fmt.Errorf("verification gates failed")
+				}
+			}
 			res, err := Done(ctx, DoneArgs{
 				DB: db, RepoID: repoID, AgentID: agent,
 				ItemID:                  args.ItemID,

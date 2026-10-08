@@ -1,0 +1,23 @@
+[Unit]
+Description=Shared Squad coordination service
+After=network.target
+
+[Service]
+User=squad-service
+Group=squad-service
+WorkingDirectory=/var/lib/squad-service/ledger
+ExecStart=/opt/squad-service/current/squad service --config /etc/squad-service/service.json --listen 127.0.0.1:7788
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=135
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/squad-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

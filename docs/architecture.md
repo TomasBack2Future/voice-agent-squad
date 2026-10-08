@@ -1,7 +1,8 @@
 # Architecture
 
 This repository builds the Squad CLI, MCP server and optional local UI/plugin.
-It is a local coordination tool, not an application deployment controller.
+It supports local coordination and an optional authenticated single-host service.
+It is not an application deployment controller.
 The module path retains its upstream identity; the fork's Git remote identifies
 delivery ownership. Do not change module imports just to rename the checkout.
 
@@ -14,6 +15,7 @@ delivery ownership. Do not change module imports just to rename the checkout.
 | `internal/chat/`, `listener/`, `notify/` | Durable coordination messages and wakeup transport |
 | `internal/attest/`, `learning/` | Command evidence and reviewed durable learnings |
 | `internal/hygiene/` | Diagnosis and bounded cleanup; protected ENV ownership is not ordinary stale-claim cleanup |
+| `internal/remote/`, `deploy/` | Authenticated single-host CLI/MCP service, durable request receipts and optional Linux deployment |
 | `internal/mcp/` | MCP transport over coordination operations |
 | `internal/server/`, `tui/` | Local presentation/API; capabilities depend on configured mode |
 | `internal/scaffold/`, `plugin/` | Adoption templates, generated entry points, hooks and optional agent integration |

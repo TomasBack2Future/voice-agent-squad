@@ -1,0 +1,9 @@
+[Unit]
+Description=Adopt qualified Squad main HEAD
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/squad-service/update.py
+TimeoutStartSec=900
+UMask=0077

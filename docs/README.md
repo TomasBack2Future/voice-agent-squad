@@ -3,6 +3,7 @@
 ## Maintained fork entry points
 
 - [Agent guide](../AGENTS.md) and [Contributing](contributing.md).
+- [Remote service](reference/remote-service.md): shared authenticated CLI/MCP and Linux deployment.
 - [Architecture](architecture.md): source boundaries and durable state ownership.
 - [Environments and CI](environments-and-ci.md): test/release capabilities and
   local distribution rather than application deployment.

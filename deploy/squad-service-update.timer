@@ -1,0 +1,11 @@
+[Unit]
+Description=Check qualified Squad main HEAD every five minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

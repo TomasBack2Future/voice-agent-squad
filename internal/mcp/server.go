@@ -191,6 +191,9 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 func (s *Server) dispatch(ctx context.Context, req rpcRequest) rpcResponse {
 	base := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
+	case "ping":
+		base.Result = map[string]any{}
+		return base
 	case "initialize":
 		base.Result = map[string]any{
 			"protocolVersion": ProtocolVersion,
