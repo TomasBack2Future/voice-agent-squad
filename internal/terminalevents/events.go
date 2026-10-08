@@ -83,7 +83,7 @@ func (s Store) recordTx(ctx context.Context, tx *sql.Tx, actor string, q Publish
  AND (? NOT IN ('decision-request','reconcile-needed') OR r.state='dispatched')`,
 		q.OutcomeID, actor, source, s.Repo, q.Reservation, q.Generation, q.WorkerSession, q.Kind, q.Kind, q.Kind).Scan(&item, &owner)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrInvalidEvent
+		return "", diagnosePublish(ctx, tx, s.Repo, actor, q, source)
 	}
 	if err != nil {
 		return "", err
@@ -105,6 +105,56 @@ func (s Store) recordTx(ctx context.Context, tx *sql.Tx, actor string, q Publish
 		return "", err
 	}
 	return id, nil
+}
+
+// diagnosePublish pinpoints the exact failed publish condition in check order:
+// reservation identity, outcome message custody, then routing. It never copies
+// or reroutes messages; sanitized IDs only, no bodies.
+func diagnosePublish(ctx context.Context, tx *sql.Tx, repo, actor string, q PublishRequest, source int64) error {
+	var n int
+	_ = tx.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_reservations WHERE repo_id=? AND item_id=?`, repo, q.Reservation).Scan(&n)
+	if n == 0 {
+		_ = tx.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_reservations WHERE item_id=?`, q.Reservation).Scan(&n)
+		if n > 0 {
+			return &Rejection{Condition: "reservation-repo-mismatch", Repair: fmt.Sprintf("reservation %s exists but not in ledger %s; publish from the assignment ledger directory", q.Reservation, repo)}
+		}
+		return &Rejection{Condition: "absent-reservation", Repair: fmt.Sprintf("no reservation %s in ledger %s", q.Reservation, repo)}
+	}
+	_ = tx.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_reservations WHERE repo_id=? AND item_id=? AND generation=?`, repo, q.Reservation, q.Generation).Scan(&n)
+	if n == 0 {
+		return &Rejection{Condition: "wrong-generation", Repair: fmt.Sprintf("reservation %s has no generation %d in this ledger", q.Reservation, q.Generation)}
+	}
+	_ = tx.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_reservations WHERE repo_id=? AND item_id=? AND generation=? AND worker_thread_id=?`, repo, q.Reservation, q.Generation, q.WorkerSession).Scan(&n)
+	if n == 0 {
+		return &Rejection{Condition: "wrong-worker", Repair: fmt.Sprintf("worker session %s is not bound to %s generation %d", q.WorkerSession, q.Reservation, q.Generation)}
+	}
+	var msgRepo, msgAgent, msgThread string
+	var msgTS int64
+	err := tx.QueryRowContext(ctx, `SELECT repo_id, agent_id, thread, ts FROM messages WHERE id=?`, q.OutcomeID).Scan(&msgRepo, &msgAgent, &msgThread, &msgTS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &Rejection{Condition: "absent-outcome", Repair: fmt.Sprintf("no message %d in any ledger; post the outcome first, or use submit to store message and event atomically", q.OutcomeID)}
+	}
+	if err != nil {
+		return err
+	}
+	if msgRepo != repo {
+		return &Rejection{Condition: "outcome-repo-mismatch", Repair: fmt.Sprintf("message %d lives in ledger %s but reservation %s lives in %s; repost the factual outcome into the assignment ledger and publish that ID (never copy rows across ledgers)", q.OutcomeID, msgRepo, q.Reservation, repo)}
+	}
+	if msgAgent != actor {
+		return &Rejection{Condition: "wrong-actor", Repair: fmt.Sprintf("message %d was posted by %s, not %s; the outcome must come from its author", q.OutcomeID, msgAgent, actor)}
+	}
+	return &Rejection{Condition: "outcome-custody", Repair: fmt.Sprintf("message %d fails custody/thread/state checks for %s (thread %s, ts %d); verify the message is on the canonical item thread, posted after reservation start, by a claim holder", q.OutcomeID, q.Reservation, msgThread, msgTS)}
+}
+
+// isExpectedRejection swallows routine per-candidate fences during Discover:
+// legacy generic rejections, precise rejections, and stale decisions. Other
+// errors (transport, schema) still abort the scan.
+func isExpectedRejection(err error) bool {
+	if errors.Is(err, ErrInvalidEvent) || errors.Is(err, ErrStaleDecision) {
+		return true
+	}
+	var rejection *Rejection
+	return errors.As(err, &rejection)
 }
 
 // Discover supports old canonical/global callbacks and observes durable done/ask
@@ -148,7 +198,7 @@ func (s Store) Discover(ctx context.Context) error {
 				continue
 			}
 			_, err = s.record(ctx, c.actor, PublishRequest{c.key, gen, c.worker, parts[4], outcome, 0}, c.id)
-			if err != nil && !errors.Is(err, ErrInvalidEvent) && !errors.Is(err, ErrStaleDecision) {
+			if err != nil && !isExpectedRejection(err) {
 				return err
 			}
 		}
@@ -168,7 +218,7 @@ func (s Store) Discover(ctx context.Context) error {
 		}
 		if kind != "" {
 			_, err = s.record(ctx, c.actor, PublishRequest{c.key, c.gen, c.worker, kind, c.id, 0}, c.id)
-			if err != nil && !errors.Is(err, ErrInvalidEvent) && !errors.Is(err, ErrStaleDecision) {
+			if err != nil && !isExpectedRejection(err) {
 				return err
 			}
 		}

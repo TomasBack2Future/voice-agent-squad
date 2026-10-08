@@ -27,6 +27,29 @@ from muse_worker_view import LiveView
 FINGERPRINT = native.FINGERPRINT
 
 
+def submit_outcome(c, env, pin, kind, body_file):
+    """Submit one Worker outcome atomically via terminal-events submit.
+
+    Returns the stored message/event IDs. Retries are idempotent server-side;
+    a rejection carries a precise condition plus repair action instead of the
+    legacy generic error.
+    """
+    result = subprocess.run([c['coordination_executable'], 'terminal-events', 'submit',
+                             '--reservation', pin['reservation'], '--generation', str(pin['generation']),
+                             '--worker-session', pin['native'], '--kind', kind,
+                             '--body-file', str(body_file)],
+                            cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10, check=False)
+    if result.returncode:
+        raise ValidationError('outcome submit rejected: ' + diagnostic(result.stderr or result.stdout))
+    try:
+        submitted = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValidationError('outcome submit returned invalid JSON') from error
+    if not isinstance(submitted, dict) or not submitted.get('message_id') or not submitted.get('event_id'):
+        raise ValidationError('outcome submit returned no message/event IDs')
+    return submitted
+
+
 def resolve_effort(c):
     if 'reasoning_effort' in c:
         effort, source = c['reasoning_effort'], 'launch-config'
@@ -342,14 +365,16 @@ def run(assignment_path, config_path, resume=False):
             if pinned and joined and cleanup_error is None:
                 report_path = state / 'report.json'
                 if terminal == 'completed' and report_path.exists():
-                    outcome = coordination(c, 'outcome', str(state / 'join.json'), str(report_path))
                     report = json.loads(report_path.read_text())
                     kind = 'handoff-complete' if report['status'] == 'completed' else 'blocked'
-                    subprocess.run([c['coordination_executable'], 'terminal-events', 'publish',
-                                    '--reservation', pin['reservation'], '--generation', str(pin['generation']),
-                                    '--worker-session', pin['native'], '--kind', kind,
-                                    '--outcome', str(outcome['outcome_id']), '--expected-decision', str(outcome['decision_revision'])],
-                                   cwd=c['ledger_directory'], env=env, capture_output=True, timeout=10, check=True)
+                    # Atomic outcome submission: one call stores the canonical
+                    # message and the durable event, returning both IDs. No
+                    # manual message-ID extraction, so a cross-repo mixup
+                    # cannot strand completion.
+                    body_file = state / 'outcome-body.txt'
+                    body_file.write_text(report.get('summary', '') or report.get('status', ''))
+                    submitted = submit_outcome(c, env, pin, kind, body_file)
+                    native.atomic(state / 'outcome.json', submitted)
                 coordination(c, 'close', str(state / 'join.json'))
                 for op in operations:
                     if op.get('kind') == 'container':
