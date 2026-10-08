@@ -154,17 +154,63 @@ def duplicate(observation, config) -> bool:
     return _locked(config, check)
 
 
-def _pending_observation(config):
-    """Return the stored pending observation, or None."""
+def _compose_body(episode_id, observation):
+    return 'runtime-failure %s %s turn=%s request=%s attempt=%d provider=%s' % (
+        episode_id, observation['error_class'], observation['turn_id'],
+        observation['request_id'], observation['attempt'], observation['provider'])
+
+
+def _pending_observation(config, episode_id=None):
+    """Return the stored pending observation for an episode, or None.
+
+    The pending store is keyed by episode: at most one immutable payload
+    per episode. Later failures in the same outage never overwrite it.
+    """
     path = Path(config['state_directory']) / 'pending.json'
     try:
         pending = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    if not isinstance(pending, list) or not pending:
+    if isinstance(pending, list):
+        if not pending:
+            return None
+        if episode_id is None:
+            last = pending[-1]
+            return last if isinstance(last, dict) else None
+        for entry in pending:
+            if isinstance(entry, dict) and entry.get('episode_id') == episode_id:
+                return entry
         return None
-    last = pending[-1]
-    return last if isinstance(last, dict) else None
+    if isinstance(pending, dict):
+        if episode_id is None:
+            return None
+        entry = pending.get(episode_id)
+        return entry if isinstance(entry, dict) else None
+    return None
+
+
+def _store_pending(config, observation):
+    """Freeze the episode payload immutably; never overwrite an existing one."""
+    state = Path(config['state_directory'])
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / 'pending.json'
+    try:
+        pending = json.loads(path.read_text())
+    except (OSError, ValueError):
+        pending = {}
+    if isinstance(pending, list):
+        merged = {}
+        for entry in pending:
+            if isinstance(entry, dict) and entry.get('episode_id') and entry['episode_id'] not in merged:
+                merged[entry['episode_id']] = entry
+        pending = merged
+    if not isinstance(pending, dict):
+        pending = {}
+    if observation.get('episode_id') and observation['episode_id'] not in pending:
+        pending[observation['episode_id']] = observation
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(pending))
+    temp.replace(path)
 
 
 def _drop_pending(config, observation):
@@ -173,10 +219,13 @@ def _drop_pending(config, observation):
         pending = json.loads(path.read_text())
     except (OSError, ValueError):
         return
-    if not isinstance(pending, list):
+    if isinstance(pending, list):
+        pending = [p for p in pending
+                   if not (isinstance(p, dict) and p.get('episode_id') == observation.get('episode_id'))]
+    elif isinstance(pending, dict):
+        pending.pop(observation.get('episode_id', ''), None)
+    else:
         return
-    pending = [p for p in pending
-               if not (isinstance(p, dict) and p.get('episode_id') == observation.get('episode_id'))]
     temp = path.with_suffix('.tmp')
     temp.write_text(json.dumps(pending))
     temp.replace(path)
@@ -211,13 +260,11 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
         if seen.get('pending'):
             if env is None:
                 return False
-            stored = _pending_observation(config)
+            stored = _pending_observation(config, seen.get('episode_id'))
             if stored is None:
                 return False
-            body = 'runtime-failure %s %s turn=%s request=%s attempt=%d provider=%s' % (
-                stored.get('episode_id', ''), stored.get('error_class', 'unknown'),
-                stored.get('turn_id', ''), stored.get('request_id', ''),
-                stored.get('attempt', 0), stored.get('provider', ''))
+            stored = dict(stored, episode_id=seen['episode_id'])
+            body = _compose_body(seen['episode_id'], stored)
             last = None
             for _ in range(max(1, attempts)):
                 try:
@@ -250,11 +297,15 @@ def _mark_open_unlocked(config, observation, episode_id):
     data = _snapshots(config)
     key = episode_key(observation, config)
     seen = data.get(key, {})
+    # Sequence counts failed→closed episodes only. Reconciling a pending
+    # replay must NOT consume the next episode number: the new outage
+    # after the close still opens sequence+1.
+    bump = 0 if (seen.get('episode_open') or seen.get('pending')) else 1
     data[key] = {'episode_open': True, 'pending': False,
                  'episode_id': episode_id,
                  'turns': seen.get('turns', []) + [observation['turn_id'] + '|' + observation['request_id']],
                  'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
-                 'sequence': seen.get('sequence', 0) + (0 if seen.get('episode_open') else 1)}
+                 'sequence': seen.get('sequence', 0) + bump}
     _save(config, data)
     return data[key]
 
@@ -355,14 +406,25 @@ def _publish_locked(observation, config, attempts):
     if seen is not None and not seen.get('pending'):
         return {'state': 'duplicate'}
     if seen is not None and seen.get('pending') and seen.get('episode_id'):
+        # Immutable pending replay (D84-6): resend the EXACT frozen payload
+        # of the first attempt. Later failures in the same outage only add
+        # local dedupe diagnostics; they never rewrite the submitted body.
         episode_id = seen['episode_id']
+        frozen = _pending_observation(config, episode_id)
+        if frozen is not None:
+            observation = dict(frozen, episode_id=episode_id)
+        observation['episode_id'] = episode_id
+        replay = True
     else:
         episode_id = 'ep-%d' % (data.get(episode_key(observation, config), {}).get('sequence', 0) + 1)
-    observation['episode_id'] = episode_id
+        observation['episode_id'] = episode_id
+        replay = False
     env = _hook_env(config)
-    body = 'runtime-failure %s %s turn=%s request=%s attempt=%d provider=%s' % (
-        episode_id, observation['error_class'], observation['turn_id'],
-        observation['request_id'], observation['attempt'], observation['provider'])
+    body = _compose_body(episode_id, observation)
+    if not replay:
+        # Freeze before the first attempt so a lost reply can replay the
+        # identical payload even if this process dies mid-submit.
+        _store_pending(config, observation)
     last = None
     for _ in range(max(1, attempts)):
         try:
@@ -371,20 +433,10 @@ def _publish_locked(observation, config, attempts):
             last = error
             continue
         _mark_open_unlocked(config, observation, episode_id)
+        _drop_pending(config, observation)
         receipt.setdefault('episode_id', episode_id)
         return receipt
     _mark_pending_unlocked(config, observation)
-    state = Path(config['state_directory'])
-    state.mkdir(parents=True, exist_ok=True)
-    pending_path = state / 'pending.json'
-    try:
-        pending = json.loads(pending_path.read_text())
-    except (OSError, ValueError):
-        pending = []
-    pending.append(observation)
-    temp = pending_path.with_suffix('.tmp')
-    temp.write_text(json.dumps(pending))
-    temp.replace(pending_path)
     raise last
 
 

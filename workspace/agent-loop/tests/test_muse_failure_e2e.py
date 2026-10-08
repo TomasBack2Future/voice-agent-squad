@@ -158,5 +158,74 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual(note, 'e2e reconciled runtime-failure')
 
 
+    def test_lost_reply_second_failure_healthy_flush_new_outage(self):
+        """D84-6 full sequence on the real backend.
+
+        1. First failure submits ep-1 (turn=t1, request=req-1).
+        2. Simulate a lost reply: force the local episode back to pending
+           while the server row stays committed.
+        3. A second failure in the SAME outage (different turn/request)
+           must NOT rewrite the ep-1 payload: the replay resends the
+           identical body and reconciles to the stored IDs.
+        4. Healthy progress flushes/closes the episode.
+        5. A new independent outage records under a NEW key with a fresh
+           budget.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        first = {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native',
+                 'turn_id': 't1', 'status': 'failed', 'attempt': 10,
+                 'provider': 'meta', 'request_id': 'req-1',
+                 'error': 'API error 503: x (after 10 provider attempts)'}
+        run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                              '--config', str(self.config), '--event', json.dumps(first)],
+                             env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with self.db() as db:
+            committed = db.execute(
+                "SELECT event_id,outcome_id FROM terminal_event_receipts WHERE kind='runtime-failure'").fetchone()
+        self.assertIsNotNone(committed)
+        event_id, outcome = committed
+        # Lost reply: server committed, local receipt lost -> pending.
+        cfg = json.loads(self.config.read_text())
+        obs = hook.observe(first, cfg)
+        obs['episode_id'] = 'ep-1'
+        hook._mark_pending_unlocked(cfg, obs)
+        state_dir = Path(cfg['state_directory'])
+        (state_dir / 'pending.json').write_text(json.dumps([obs]))
+        # Second failure, same outage, different turn/request.
+        second = dict(first, turn_id='t2', request_id='req-2')
+        run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                              '--config', str(self.config), '--event', json.dumps(second)],
+                             env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT event_id,outcome_id FROM terminal_event_receipts WHERE kind='runtime-failure'").fetchall()
+            body = db.execute('SELECT body FROM messages WHERE id=?', (outcome,)).fetchone()[0]
+        # Same key + identical payload reconciles to stored IDs: no new
+        # event, no payload-conflict, original body intact.
+        self.assertEqual(rows, [committed])
+        self.assertEqual(body, 'runtime-failure ep-1 exhausted turn=t1 request=req-1 attempt=10 provider=meta')
+        # Healthy progress closes the episode after reconciling pending.
+        healthy = dict(first, turn_id='t3', status='completed', error='')
+        run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                              '--config', str(self.config), '--event', json.dumps(healthy)],
+                             env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        # New independent outage gets a new key and records again.
+        third = dict(first, turn_id='t4', request_id='req-3')
+        run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                              '--config', str(self.config), '--event', json.dumps(third)],
+                             env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT event_id FROM terminal_event_receipts WHERE kind='runtime-failure' ORDER BY outcome_id").fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0][0].endswith('/ep-1'))
+        self.assertTrue(rows[1][0].endswith('/ep-2'))
+
+
 if __name__ == '__main__':
     unittest.main()

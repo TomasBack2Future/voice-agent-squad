@@ -199,19 +199,21 @@ class EpisodeLifecycleTests(unittest.TestCase):
                 self.assertEqual(action, 'stop')
 
     def test_retry_reuses_episode_request_key(self):
-        # D84-5: one Submit per attempt; the same episode reuses the same
-        # request key, so the backend dedupes to the same IDs. A lost
-        # receipt replays the identical key instead of opening a new one.
+        # D84-5/D84-6: one Submit per attempt; the same episode reuses the
+        # same request key AND the identical frozen body, so the backend
+        # dedupes to the same IDs. A lost receipt replays the identical
+        # key instead of opening a new one.
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
             first = hook.publish(payload(), self.cfg)
             self.assertEqual(first['state'], 'pending')
         self.assertEqual(len(stub.submits), 1)
         # Simulate a lost receipt: clear the marker but keep the episode
-        # identity, republish with the same key.
+        # identity AND the frozen payload, republish with the same key.
         lost = hook.observe(payload(), self.cfg)
         lost['episode_id'] = 'ep-1'
         hook._mark_pending_unlocked(self.cfg, lost)
+        hook._store_pending(self.cfg, lost)
         stub2 = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub2):
             retry = hook.publish(payload(), self.cfg)
@@ -221,6 +223,9 @@ class EpisodeLifecycleTests(unittest.TestCase):
             argv = stubbed.submits[0]
             self.assertEqual(argv[argv.index('--request-key') + 1], 'ep-1')
             self.assertIn('ep-1', argv[argv.index('--body') + 1])
+        # Same key AND identical frozen body: no payload-conflict.
+        self.assertEqual(stub.submits[0][stub.submits[0].index('--body') + 1],
+                         stub2.submits[0][stub2.submits[0].index('--body') + 1])
 
     def test_live_revision_passed_to_submit(self):
         # Grok finding 2: the hook reads decision-get fresh per submit

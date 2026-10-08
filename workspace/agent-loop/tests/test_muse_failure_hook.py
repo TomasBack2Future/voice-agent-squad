@@ -118,7 +118,8 @@ class HookAdapterTests(unittest.TestCase):
                 hook.publish(payload(), self.cfg, attempts=3)
         self.assertEqual(len(calls), 3)
         pending = json.loads((self.root / 'state' / 'pending.json').read_text())
-        self.assertEqual(len(pending), 1)
+        self.assertEqual(set(pending), {'ep-1'})
+        self.assertEqual(pending['ep-1']['turn_id'], 'turn-1')
 
     def test_hook_returns_quickly_without_waiting_for_turn(self):
         binary = self.root / 'squad'
