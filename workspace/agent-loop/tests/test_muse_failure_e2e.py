@@ -312,6 +312,93 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual([e['event_id'] for e in receipt['events']], [event_id])
         self.assertEqual(receipt['events'][0]['kind'], 'runtime-failure')
 
+    def _hook_event(self, turn, status='failed'):
+        return {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native',
+                'turn_id': turn, 'status': status, 'attempt': 1,
+                'request_id': 'request-' + turn, 'provider': 'meta',
+                'error': 'connection reset by peer' if status == 'failed' else ''}
+
+    def _run_hook(self, event):
+        run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                              '--config', str(self.config), '--event', json.dumps(event)],
+                             env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return run
+
+    def _failure_rows(self):
+        with self.db() as db:
+            return db.execute(
+                "SELECT e.event_id,m.body FROM terminal_event_receipts e "
+                "JOIN messages m ON m.id=e.outcome_id "
+                "WHERE e.kind='runtime-failure' ORDER BY e.outcome_id").fetchall()
+
+    def test_healthy_boundary_survives_failed_flush_real_backend(self):
+        """D84-11 finding 1 on the real backend.
+
+        t1 fails and stays pending (submit transport broken), the healthy
+        t2 flush also fails, then transport recovers: the t3 failure must
+        replay ep-1 identically, close it at the t2 boundary, and publish
+        the live t3 failure as ep-2. Two distinct events result.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        cfg = json.loads(self.config.read_text())
+        real_exe, cfg['squad_executable'] = cfg['squad_executable'], str(self.binary) + '-missing'
+        try:
+            self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+        finally:
+            cfg['squad_executable'] = real_exe
+            self.config.write_text(json.dumps(cfg))
+        boundary = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+        self.assertEqual(boundary['D-E2E|1|e2e-native'].get('healthy_boundary'), 't2')
+        self.assertEqual(self._failure_rows(), [])
+        self._run_hook(self._hook_event('t3'))
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0][0].endswith('/ep-1'), rows[0][0])
+        self.assertTrue(rows[1][0].endswith('/ep-2'), rows[1][0])
+        self.assertIn('turn=t1 request=request-t1', rows[0][1])
+        self.assertIn('turn=t3 request=request-t3', rows[1][1])
+        snaps = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+        seen = snaps['D-E2E|1|e2e-native']
+        self.assertEqual(seen['episode_id'], 'ep-2')
+        self.assertEqual(seen['sequence'], 2)
+
+    def test_commit_before_interrupt_keeps_boundary_real_backend(self):
+        """D84-11 finding 2 on the real backend.
+
+        A real Submit commits, then the hook process exits before writing
+        any snapshot. The orphan frozen payload is adopted: t2 healthy
+        flushes it, and the t3 failure publishes as a NEW ep-2 episode.
+        """
+        sys.path.insert(0, str(ROOT))
+        code = ('import importlib.util,json,os,sys\n'
+                's=importlib.util.spec_from_file_location("a",sys.argv[1])\n'
+                'm=importlib.util.module_from_spec(s)\n'
+                's.loader.exec_module(m)\n'
+                'orig=m._submit\n'
+                'def crash(*args):\n'
+                ' orig(*args)\n'
+                ' os._exit(99)\n'
+                'm._submit=crash\n'
+                'm.run(__import__("pathlib").Path(sys.argv[2]),json.loads(sys.argv[3]))\n')
+        child = subprocess.run([sys.executable, '-c', code,
+                                str(ROOT / 'muse_failure_hook.py'), str(self.config),
+                                json.dumps(self._hook_event('t1'))],
+                               env=self.env, capture_output=True, text=True, timeout=25)
+        self.assertEqual(child.returncode, 99, child.stderr)
+        self.assertEqual(len(self._failure_rows()), 1)
+        self.assertFalse((self.root / 'hook-state' / 'failure-episodes.json').exists())
+        self._run_hook(self._hook_event('t2', 'completed'))
+        self._run_hook(self._hook_event('t3'))
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0][0].endswith('/ep-1'), rows[0][0])
+        self.assertTrue(rows[1][0].endswith('/ep-2'), rows[1][0])
+        self.assertIn('turn=t1 request=request-t1', rows[0][1])
+        self.assertIn('turn=t3 request=request-t3', rows[1][1])
+
 
 if __name__ == '__main__':
     unittest.main()

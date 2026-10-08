@@ -292,6 +292,73 @@ class EpisodeLifecycleTests(unittest.TestCase):
             replayed = hook.publish(payload(), self.cfg, attempts=1)
             self.assertEqual(replayed['state'], 'pending')
 
+    def test_failed_flush_records_boundary_replay_closes_and_new_outage_republishes(self):
+        # D84-11 finding 1: ep-1 stays pending, the healthy flush at t2
+        # fails, and a later publish confirms the replay. The healthy
+        # boundary must survive: the replay confirmation closes ep-1,
+        # and the live t3 failure publishes as a NEW ep-2 episode.
+        submits = []
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            if len(submits) <= 2:
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            healthy = payload(turn_id='t2', status='completed', error='')
+            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            receipt = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        # Replay of frozen ep-1 first, then the live t3 failure as ep-2.
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-2'])
+        self.assertIn('turn=t1 request=req-1', bodies[2])
+        self.assertIn('turn=t3 request=req-3', bodies[3])
+        self.assertEqual(receipt['episode_id'], 'ep-2')
+        data = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
+        seen = data['DISPATCH-1|1|worker-native']
+        self.assertEqual(seen['episode_id'], 'ep-2')
+        self.assertEqual(seen['sequence'], 2)
+
+    def test_orphan_pending_without_snapshot_replays_and_keeps_boundary(self):
+        # D84-11 finding 2: the process dies after _store_pending but
+        # before any snapshot write. The orphan frozen payload must be
+        # adopted on the next publish, replayed identically, and — after
+        # a healthy turn lands — the next outage must be a new episode.
+        import muse_failure_hook as hook_module
+        cfg = self.cfg
+        first = hook_module.observe(payload(turn_id='t1', request_id='req-1'), cfg)
+        first['episode_id'] = 'ep-1'
+        hook_module._store_pending(cfg, first)
+        self.assertFalse((self.root / 'state' / 'failure-episodes.json').exists())
+        submits = []
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            # Orphan adopted: no new ep-1 submit of the live body; the
+            # frozen payload replays under its own key.
+            receipt = hook.publish(payload(turn_id='t2x', request_id='req-2x'), self.cfg, attempts=1)
+            self.assertEqual(receipt['episode_id'], 'ep-1')
+            healthy = payload(turn_id='t2', status='completed', error='')
+            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            second = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            self.assertEqual(second['episode_id'], 'ep-2')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-1', bodies[0])
+        self.assertIn('turn=t3 request=req-3', bodies[1])
+
 
 if __name__ == '__main__':
     unittest.main()

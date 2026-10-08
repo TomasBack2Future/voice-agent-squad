@@ -218,6 +218,50 @@ def _current_episode(data, key):
     return seen
 
 
+def _adopt_orphan_pending(config, data, key):
+    """Adopt a frozen payload whose snapshot row was never written.
+
+    D84-11 finding 2: the hook may die after _store_pending but before
+    any snapshot write. The orphan in pending.json belongs to this
+    assignment (reservation/generation/native must match) and its key
+    was never advanced: synthesize the pending row from it so the next
+    publish or healthy flush replays the EXACT frozen body instead of
+    allocating a fresh episode over a possibly committed request key.
+    Returns the adopted row, or None when there is nothing to adopt.
+    Only closed or missing rows are adopted; an open or pending row
+    always wins. Caller must hold the episode lock.
+    """
+    seen = data.get(key, {})
+    if seen.get('episode_open') or seen.get('pending'):
+        return None
+    try:
+        pending = json.loads((Path(config['state_directory']) / 'pending.json').read_text())
+    except (OSError, ValueError):
+        return None
+    if isinstance(pending, list):
+        entries = [e for e in pending if isinstance(e, dict) and e.get('episode_id')]
+    elif isinstance(pending, dict):
+        entries = [e for e in pending.values() if isinstance(e, dict) and e.get('episode_id')]
+    else:
+        return None
+    for entry in entries:
+        if (entry.get('reservation') != config['reservation']
+                or entry.get('generation') != config['generation']
+                or entry.get('native_session_id') != config['native_session_id']):
+            continue
+        if seen.get('advanced_episode') == entry['episode_id']:
+            continue
+        adopted = {'episode_open': False, 'pending': True,
+                   'episode_id': entry['episode_id'],
+                   'turns': seen.get('turns', []),
+                   'first_observed_at': seen.get('first_observed_at', entry.get('observed_at', int(time.time()))),
+                   'sequence': seen.get('sequence', 0)}
+        data[key] = adopted
+        _save(config, data)
+        return adopted
+    return None
+
+
 def duplicate(observation, config) -> bool:
     """Dedupe within one continuous outage; new episodes re-admit.
 
@@ -342,7 +386,11 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
         key = episode_key(None, config)
         seen = data.get(key)
         if not seen:
-            return False
+            # D84-11 finding 2: an orphan frozen payload with no snapshot
+            # row still flushes on a healthy turn.
+            seen = _adopt_orphan_pending(config, data, key)
+            if seen is None:
+                return False
         if seen.get('pending'):
             if env is None:
                 return False
@@ -373,6 +421,13 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
                 data[key] = seen
                 _save(config, data)
                 return True
+            # D84-11 finding 1: the healthy turn is verified progress even
+            # when its flush attempt fails. Record the boundary durably so
+            # a later confirmed replay closes this episode instead of
+            # leaving it open and collapsing the next outage into it.
+            seen['healthy_boundary'] = str(event.get('turn_id', ''))[:128]
+            data[key] = seen
+            _save(config, data)
             return False
         if not seen.get('episode_open'):
             return False
@@ -394,11 +449,14 @@ def _mark_open_unlocked(config, observation, episode_id):
     # The guard is the advancing episode's identity: repeats of the same
     # episode never re-advance, a new episode advances again, and close
     # paths never advance. A stale 'advanced' boolean from an older head
-    # is dropped, not carried.
+    # is dropped, not carried. A recorded healthy boundary (D84-11) is
+    # carried, not dropped: the replay-confirmation path consumes it.
     bump = 0 if seen.get('advanced_episode') == episode_id else 1
+    boundary = seen.get('healthy_boundary')
     data[key] = {'episode_open': True, 'pending': False,
                  'episode_id': episode_id,
                  'advanced_episode': episode_id,
+                 **({'healthy_boundary': boundary} if boundary else {}),
                  'turns': seen.get('turns', []) + [observation['turn_id'] + '|' + observation['request_id']],
                  'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
                  'sequence': seen.get('sequence', 0) + bump}
@@ -498,9 +556,18 @@ def publish(event, config, attempts=MAX_ATTEMPTS):
 
 def _publish_locked(observation, config, attempts):
     data = _snapshots(config)
-    seen = _current_episode(data, episode_key(observation, config))
+    key = episode_key(observation, config)
+    seen = _current_episode(data, key)
+    if seen is None:
+        # D84-11 finding 2: adopt an orphan frozen payload before
+        # allocating anything, so a possibly committed request key is
+        # replayed identically instead of overwritten by a fresh body.
+        adopted = _adopt_orphan_pending(config, data, key)
+        if adopted is not None:
+            seen = adopted
     if seen is not None and not seen.get('pending'):
         return {'state': 'duplicate'}
+    live = dict(observation)
     if seen is not None and seen.get('pending') and seen.get('episode_id'):
         # Immutable pending replay (D84-6): resend the EXACT frozen payload
         # of the first attempt. Later failures in the same outage only add
@@ -531,8 +598,56 @@ def _publish_locked(observation, config, attempts):
         _mark_open_unlocked(config, observation, episode_id)
         _drop_pending(config, observation)
         receipt.setdefault('episode_id', episode_id)
+        boundary = _snapshots(config).get(key, {}).get('healthy_boundary')
+        if replay and boundary:
+            # D84-11 finding 1: a healthy turn landed while this episode
+            # was pending. The replay confirmation CLOSES the old episode
+            # at the recorded boundary, then the live failure that
+            # triggered this publish is a NEW outage with a fresh key.
+            return _publish_new_outage_after_boundary(live, config, env, boundary, attempts, key)
         return receipt
     _mark_pending_unlocked(config, observation)
+    raise last
+
+
+def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, key):
+    """Close a replay-confirmed episode at its healthy boundary and publish.
+
+    The old episode is marked closed with its recorded boundary turn; the
+    live failure becomes a NEW episode under the next key with its own
+    immutable payload. On submit failure the new episode stays pending and
+    the boundary is retained, so a later success still closes correctly.
+    """
+    data = _snapshots(config)
+    seen = data.get(key, {})
+    seen['episode_open'] = False
+    seen['pending'] = False
+    seen['closed_at'] = int(time.time())
+    seen['closed_by_turn'] = boundary
+    data[key] = seen
+    _save(config, data)
+    episode_id = 'ep-%d' % (seen.get('sequence', 0) + 1)
+    live['episode_id'] = episode_id
+    _store_pending(config, live)
+    body = _compose_body(episode_id, live)
+    last = None
+    for _ in range(max(1, attempts)):
+        try:
+            receipt = _submit(body, config, env, live)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            last = error
+            continue
+        _mark_open_unlocked(config, live, episode_id)
+        _drop_pending(config, live)
+        receipt.setdefault('episode_id', episode_id)
+        return receipt
+    failed = _snapshots(config)
+    row = failed.get(key, {})
+    row.update({'episode_open': False, 'pending': True, 'episode_id': episode_id,
+                'first_observed_at': row.get('first_observed_at', live['observed_at']),
+                'healthy_boundary': boundary})
+    failed[key] = row
+    _save(config, failed)
     raise last
 
 
