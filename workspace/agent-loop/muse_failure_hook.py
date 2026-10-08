@@ -185,32 +185,37 @@ def note_progress(event, config) -> bool:
     return _locked(config, close)
 
 
+def _mark_open_unlocked(config, observation, episode_id):
+    data = _snapshots(config)
+    key = episode_key(observation, config)
+    seen = data.get(key, {})
+    data[key] = {'episode_open': True, 'pending': False,
+                 'episode_id': episode_id,
+                 'turns': seen.get('turns', []) + [observation['turn_id'] + '|' + observation['request_id']],
+                 'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
+                 'sequence': seen.get('sequence', 0) + (0 if seen.get('episode_open') else 1)}
+    _save(config, data)
+    return data[key]
+
+
+def _mark_pending_unlocked(config, observation):
+    data = _snapshots(config)
+    key = episode_key(observation, config)
+    seen = data.get(key, {})
+    data[key] = {'episode_open': False, 'pending': True,
+                 'episode_id': observation.get('episode_id', seen.get('episode_id', '')),
+                 'turns': seen.get('turns', []),
+                 'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
+                 'sequence': seen.get('sequence', 0)}
+    _save(config, data)
+
+
 def _mark_open(config, observation, episode_id):
-    def mark():
-        data = _snapshots(config)
-        key = episode_key(observation, config)
-        seen = data.get(key, {})
-        data[key] = {'episode_open': True, 'pending': False,
-                     'episode_id': episode_id,
-                     'turns': seen.get('turns', []) + [observation['turn_id'] + '|' + observation['request_id']],
-                     'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
-                     'sequence': seen.get('sequence', 0) + (0 if seen.get('episode_open') else 1)}
-        _save(config, data)
-        return data[key]
-    return _locked(config, mark)
+    return _locked(config, lambda: _mark_open_unlocked(config, observation, episode_id))
 
 
 def _mark_pending(config, observation):
-    def mark():
-        data = _snapshots(config)
-        key = episode_key(observation, config)
-        seen = data.get(key, {})
-        data[key] = {'episode_open': False, 'pending': True,
-                     'turns': seen.get('turns', []),
-                     'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
-                     'sequence': seen.get('sequence', 0)}
-        _save(config, data)
-    _locked(config, mark)
+    _locked(config, lambda: _mark_pending_unlocked(config, observation))
 
 
 def _episode_id(config, observation):
@@ -228,42 +233,88 @@ def _call(config, env, argv):
     return result.stdout
 
 
-def _submit(body, config, env, observation):
-    """Existing-path submission: stuck, resolve id via history, publish.
-
-    `stuck` prints no message id, so the adapter re-reads the canonical
-    item history and matches its own exact body. The body embeds the
-    episode id plus closed-enum fields, which makes the match exact and
-    lets retries find the already-posted row instead of duplicating it.
-    Replaced by #88's atomic submission API when it merges.
-    """
-    item = config['item']
-    try:
-        _call(config, env, ['stuck', '--to', item, body])
-    except subprocess.CalledProcessError as error:
-        raise error
-    out = _call(config, env, ['history', item])
+def _history_outcome(config, env, body):
+    """Resolve our exact posted body to its message id, or None."""
+    out = _call(config, env, ['history', config['item']])
     outcome = None
     for line in out.splitlines():
         match = re.match(r'\s*#(\d+)\s+\[', line)
         if match and line.rstrip().endswith(body):
             outcome = int(match.group(1))
+    return outcome
+
+
+def _live_revision(config, env):
+    """Read the current decision revision; None when no decision exists."""
+    out = _call(config, env, ['terminal-events', 'decision-get',
+                              '--reservation', config['reservation'],
+                              '--generation', str(config['generation']),
+                              '--worker-session', config['native_session_id']])
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return None
+    revision = data.get('revision')
+    return revision if isinstance(revision, int) else None
+
+
+def _submit(body, config, env, observation):
+    """Existing-path submission: history-first, then stuck, then publish.
+
+    `stuck` prints no message id, so the adapter re-reads the canonical
+    item history and matches its own exact body. The body embeds the
+    episode id plus closed-enum fields, which makes the match exact.
+    History is scanned BEFORE posting: a retry after a committed stuck
+    (or a concurrent twin that already posted) reuses the existing row
+    instead of appending a duplicate. The live decision revision is read
+    fresh for every publish so the fence never fails on a stale static
+    value. Replaced by #88's atomic submission API when it merges.
+    """
+    item = config['item']
+    outcome = _history_outcome(config, env, body)
+    if outcome is None:
+        _call(config, env, ['stuck', '--to', item, body])
+        outcome = _history_outcome(config, env, body)
     if outcome is None:
         raise ValueError('posted observation not found in item history')
     argv = ['terminal-events', 'publish', '--reservation', config['reservation'],
            '--generation', str(config['generation']),
            '--worker-session', config['native_session_id'],
            '--kind', 'runtime-failure', '--outcome', str(outcome)]
-    if config.get('expected_decision'):
-        argv += ['--expected-decision', str(config['expected_decision'])]
+    revision = _live_revision(config, env)
+    if revision is not None:
+        argv += ['--expected-decision', str(revision)]
     return json.loads(_call(config, env, argv))
 
 
 def publish(event, config, attempts=MAX_ATTEMPTS):
+    """Publish under one lock from episode check through open marker.
+
+    Holding the episode lock across the bounded squad calls closes the
+    check-then-publish window: overlapping hook runs serialize, and the
+    second sees the first's open episode instead of double-publishing.
+    Subprocess calls stay bounded (CALL_TIMEOUT each, attempts small) so
+    the lock never blocks a hook longer than its own publish budget.
+    """
     observation = observe(event, config)
-    if duplicate(observation, config):
+    path = _snapshot_path(config)
+    with path.with_suffix('.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            return _publish_locked(observation, config, attempts)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _publish_locked(observation, config, attempts):
+    data = _snapshots(config)
+    seen = _current_episode(data, episode_key(observation, config))
+    if seen is not None and not seen.get('pending'):
         return {'state': 'duplicate'}
-    episode_id = _episode_id(config, observation)
+    if seen is not None and seen.get('pending') and seen.get('episode_id'):
+        episode_id = seen['episode_id']
+    else:
+        episode_id = 'ep-%d' % (data.get(episode_key(observation, config), {}).get('sequence', 0) + 1)
     observation['episode_id'] = episode_id
     env = {k: v for k, v in os.environ.items()
            if k not in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDE_SESSION_ID',
@@ -282,10 +333,10 @@ def publish(event, config, attempts=MAX_ATTEMPTS):
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             last = error
             continue
-        _mark_open(config, observation, episode_id)
+        _mark_open_unlocked(config, observation, episode_id)
         receipt.setdefault('episode_id', episode_id)
         return receipt
-    _mark_pending(config, observation)
+    _mark_pending_unlocked(config, observation)
     state = Path(config['state_directory'])
     state.mkdir(parents=True, exist_ok=True)
     pending_path = state / 'pending.json'

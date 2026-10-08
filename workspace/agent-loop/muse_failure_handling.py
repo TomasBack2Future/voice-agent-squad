@@ -46,21 +46,26 @@ def decide(event, terminal=False, seen=frozenset(), paused=False,
     owning cycle records its reconciliation). `seen` holds episode keys that
     already consumed the continuation budget.
     """
+    if event.get('kind') != 'runtime-failure':
+        return 'stop', 'not a runtime-failure observation'
+    # D84-2 ordering: NOTHING pre-terminal is consumable. Auth/quota/config,
+    # spent budgets, pauses and completions all resolve to stop only AFTER
+    # the terminal state is confirmed; before that the event stays
+    # awaiting-terminal (never acked, re-evaluated on later delivery).
+    # Only a live external operation keeps its own awaiting-terminal reason.
+    if live_operation:
+        return 'awaiting-terminal', 'external operation live or unverified; reconcile before any decision, not acked'
+    if not terminal:
+        return 'awaiting-terminal', 'target turn still settling; keep pending and re-evaluate on later delivery, not acked'
     if paused:
         return 'stop', 'paused task never auto-continues; await explicit resume'
     if completed:
         return 'stop', 'completed task never continues; failure is observation only'
     if pending_decision:
         return 'stop', 'unhandled decision blocks automatic continuation'
-    if live_operation:
-        return 'awaiting-terminal', 'external operation live or unverified; reconcile before any decision, not acked'
-    if event.get('kind') != 'runtime-failure':
-        return 'stop', 'not a runtime-failure observation'
     if event.get('error_class') in NON_RETRYABLE:
         return 'stop', '%s failure never gets a blind continue' % event.get('error_class')
     key = episode_key(event)
     if key in seen:
         return 'stop', 'continuation budget for %s already spent; no duplicate continuation' % key
-    if not terminal:
-        return 'awaiting-terminal', 'target turn still settling; keep pending and re-evaluate on later delivery, not acked'
     return 'continue', 'terminal failure confirmed; admit one bounded continuation for %s' % key

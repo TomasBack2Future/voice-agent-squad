@@ -105,6 +105,8 @@ class HookAdapterTests(unittest.TestCase):
                 lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
                           for i, b in enumerate(bodies)]
                 return sp.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
+            if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
+                return sp.CompletedProcess(argv, 0, '{}\n', '')
             return sp.CompletedProcess(argv, 0, '{"event_id":"e1","state":"pending"}', '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=ok):
             self.assertEqual(hook.publish(payload(), self.cfg)['state'], 'pending')
@@ -135,6 +137,7 @@ class HookAdapterTests(unittest.TestCase):
                           '  print("[stuck -> #BUG-001] " + sys.argv[-1])\n'
                           'elif sys.argv[1] == "history":\n'
                           '  print("history for BUG-001:\\n  #7 [2026-10-09 01:00] worker (stuck): " + store.read_text().strip())\n'
+                          'elif sys.argv[1] == "terminal-events" and sys.argv[2] == "decision-get": print("{}")\n'
                           'else: print(json.dumps({"event_id":"e1","state":"pending"}))\n')
         binary.chmod(0o700)
         self.cfg['squad_executable'] = str(binary)

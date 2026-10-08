@@ -51,7 +51,7 @@ def config(root, **overrides):
     return base
 
 
-def ok_run(result):
+def ok_run(result, revision=None):
     bodies = []
     def run(argv, **kwargs):
         if argv[1] == 'stuck':
@@ -62,7 +62,12 @@ def ok_run(result):
             lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
                       for i, b in enumerate(bodies)]
             return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
+        if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
+            if revision is None:
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'revision': revision}), '')
         return subprocess.CompletedProcess(argv, 0, json.dumps(result), '')
+    run.bodies = bodies
     return run
 
 
@@ -85,6 +90,8 @@ class EpisodeLifecycleTests(unittest.TestCase):
                 lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
                           for i, b in enumerate(bodies)]
                 return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
+            if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
             publishes.append(argv)
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e%d' % len(publishes), 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=counting):
@@ -123,6 +130,8 @@ class EpisodeLifecycleTests(unittest.TestCase):
                 lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
                           for i, b in enumerate(bodies)]
                 return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
+            if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
             publishes.append(argv)
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e1', 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=flaky):
@@ -174,6 +183,84 @@ class EpisodeLifecycleTests(unittest.TestCase):
         action, reason = handling.decide(event, terminal=False, seen=set())
         self.assertEqual(action, 'awaiting-terminal')
         self.assertIn('not acked', reason)
+
+    def test_pre_terminal_nothing_consumable(self):
+        # Grok finding 4: auth/quota/config, spent budget, pause and
+        # completion all stay awaiting-terminal until the terminal state
+        # is confirmed; only then do they resolve to stop.
+        base = {'event_id': 'worker-terminal-v1/DISPATCH-1/1/worker-native/runtime-failure/7',
+                'item_id': 'BUG-001', 'kind': 'runtime-failure', 'outcome_id': 7,
+                'source_message_id': 7, 'error_class': 'exhausted', 'episode_id': 'ep-1'}
+        key = handling.episode_key(base)
+        early_cases = [
+            ('auth class', dict(base, error_class='auth'), {}, set()),
+            ('quota class', dict(base, error_class='quota'), {}, set()),
+            ('config class', dict(base, error_class='config'), {}, set()),
+            ('spent budget', base, {}, {key}),
+            ('paused', base, {'paused': True}, set()),
+            ('completed', base, {'completed': True}, set()),
+        ]
+        for name, event, flags, seen in early_cases:
+            with self.subTest(name=name):
+                action, _ = handling.decide(event, terminal=False, seen=seen, **flags)
+                self.assertEqual(action, 'awaiting-terminal')
+        late_cases = [
+            ('auth class', dict(base, error_class='auth'), {}, set()),
+            ('spent budget', base, {}, {key}),
+            ('paused', base, {'paused': True}, set()),
+        ]
+        for name, event, flags, seen in late_cases:
+            with self.subTest(name='terminal-' + name):
+                action, _ = handling.decide(event, terminal=True, seen=seen, **flags)
+                self.assertEqual(action, 'stop')
+
+    def test_retry_reuses_committed_stuck_row(self):
+        # Grok finding 1: history is scanned BEFORE posting, so a retry
+        # after a committed stuck reuses the existing row.
+        stub = ok_run({'event_id': 'e1', 'state': 'pending'})
+        with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
+            first = hook.publish(payload(), self.cfg)
+            self.assertEqual(first['state'], 'pending')
+        self.assertEqual(len(stub.bodies), 1)
+        # Simulate a lost receipt: clear the marker but keep the episode
+        # identity, republish, no new row.
+        lost = hook.observe(payload(), self.cfg)
+        lost['episode_id'] = 'ep-1'
+        hook._mark_pending_unlocked(self.cfg, lost)
+        stub2 = ok_run({'event_id': 'e1', 'state': 'pending'})
+        stub2.bodies.extend(stub.bodies)
+        with mock.patch.object(hook.subprocess, 'run', side_effect=stub2):
+            retry = hook.publish(payload(), self.cfg)
+            self.assertEqual(retry['state'], 'pending')
+        self.assertEqual(len(stub2.bodies), 1)
+
+    def test_live_revision_passed_to_publish(self):
+        # Grok finding 2: the hook reads decision-get fresh per publish
+        # instead of relying on a static config value.
+        publishes = []
+        stub = ok_run({'event_id': 'e1', 'state': 'pending'}, revision=7)
+        real = stub
+        def spy(argv, **kwargs):
+            if argv[1] == 'terminal-events' and argv[2] == 'publish':
+                publishes.append(argv)
+            return real(argv, **kwargs)
+        with mock.patch.object(hook.subprocess, 'run', side_effect=spy):
+            result = hook.publish(payload(), self.cfg)
+            self.assertEqual(result['state'], 'pending')
+        self.assertEqual(len(publishes), 1)
+        self.assertIn('--expected-decision', publishes[0])
+        self.assertEqual(publishes[0][publishes[0].index('--expected-decision') + 1], '7')
+
+    def test_overlapping_publish_serializes(self):
+        # Grok finding 3: one lock from episode check through open marker.
+        # Two sequential publishes prove the second sees the first's mark.
+        stub = ok_run({'event_id': 'e1', 'state': 'pending'})
+        with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
+            first = hook.publish(payload(), self.cfg)
+            second = hook.publish(payload(turn_id='turn-1'), self.cfg)
+        self.assertEqual(first['state'], 'pending')
+        self.assertEqual(second['state'], 'duplicate')
+        self.assertEqual(len(stub.bodies), 1)
 
 
 if __name__ == '__main__':
