@@ -942,7 +942,9 @@ and `agent_id`) is the canonical Worker outcome path: it
 validates the explicit ledger/repository plus reservation, generation, native
 session and actor, then atomically stores the canonical outcome message and
 the durable event, returning message and event IDs. Kinds: `issue-closed`,
-`handoff-complete`, `blocked`, `decision-request`. `request-key` is the stable
+`handoff-complete`, `blocked`, `decision-request`, `runtime-failure`
+(`runtime-failure` bodies must match the exact one-line closed-enum contract;
+anything else is a precise `malformed-failure-body`). `request-key` is the stable
 request identity: retries with the same key deduplicate to the same IDs,
 distinct keys on one live assignment each record a new event, and the same key
 with a different body is a precise `payload-conflict`. Outage episodes map one

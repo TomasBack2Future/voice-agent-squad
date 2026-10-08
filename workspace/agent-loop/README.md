@@ -993,14 +993,17 @@ unrelated/reminder/subagent sessions and unqualified StopFailure; StopFailure
 stays supplemental until exact-version proof exists. It classifies the error
 into a closed enum (`exhausted`, `connection`, `auth`, `quota`, `config`,
 `unknown`), dedupes by reservation/generation/native plus continuous episode
-under a lock, and publishes one sanitized observation through the existing
-`stuck` + `terminal-events publish --kind runtime-failure` path with bounded
-retries (switching to #88's atomic submission API when it merges). A failure
-episode closes on verified healthy progress of the same native
-(`note_progress`); the next independent failure opens a new episode with its
-own budget. Failed publications stay pending and replay on the next hook
-invocation, never falsely delivered; the hook returns quickly and never waits
-for its own turn to end (D84-2 ordering).
+under a lock, and publishes one sanitized observation through #88's atomic
+`terminal-events submit` with bounded retries: one call stores the message
+and the durable event and returns both IDs. Each failure episode maps to
+Submit's stable request key (`--request-key ep-N`): retries within one
+outage deduplicate to the same IDs, and the next independent outage after
+healthy progress uses a new key and records again. A failure episode closes
+on verified healthy progress of the same native (`note_progress`, flushing
+a pending observation first); the next independent failure opens a new
+episode with its own budget. Failed publications stay pending and replay
+on the next hook invocation, never falsely delivered; the hook returns
+quickly and never waits for its own turn to end (D84-2 ordering).
 
 `muse_failure_handling.py` is the pure Dispatcher-side contract over that
 observation: `decide` returns `continue` (one bounded continuation per

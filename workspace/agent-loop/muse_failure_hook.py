@@ -3,13 +3,11 @@
 
 Validates the exact ledger-bound Worker native, reservation generation and
 controller recipient; rejects unrelated, reminder or subagent sessions.
-Publishes a sanitized runtime-failure observation through the existing
-`stuck` + `terminal-events publish --kind runtime-failure` path (pointers
-and closed enums only: no prompt, body or credentials; switches to #88's
-atomic submission API when it merges). Dedupes by
-reservation/generation/native plus continuous episode. Retries publication
-a bounded number of times; a failed publication stays pending on disk,
-never falsely delivered.
+Publishes a sanitized runtime-failure observation through #88's atomic
+`terminal-events submit` (pointers and closed enums only: no prompt, body
+or credentials). Each failure episode maps to Submit's stable request key.
+Retries publication a bounded number of times; a failed publication stays
+pending on disk, never falsely delivered.
 
 The hook never waits for its own turn to end (D84-2 ordering): it publishes
 the observation and returns quickly. StopFailure stays supplemental until
@@ -296,17 +294,6 @@ def _call(config, env, argv):
     return result.stdout
 
 
-def _history_outcome(config, env, body):
-    """Resolve our exact posted body to its message id, or None."""
-    out = _call(config, env, ['history', config['item']])
-    outcome = None
-    for line in out.splitlines():
-        match = re.match(r'\s*#(\d+)\s+\[', line)
-        if match and line.rstrip().endswith(body):
-            outcome = int(match.group(1))
-    return outcome
-
-
 def _live_revision(config, env):
     """Read the current decision revision; None when no decision exists."""
     out = _call(config, env, ['terminal-events', 'decision-get',
@@ -322,28 +309,21 @@ def _live_revision(config, env):
 
 
 def _submit(body, config, env, observation):
-    """Existing-path submission: history-first, then stuck, then publish.
+    """Atomic submission through #88's common Submit (D84-5).
 
-    `stuck` prints no message id, so the adapter re-reads the canonical
-    item history and matches its own exact body. The body embeds the
-    episode id plus closed-enum fields, which makes the match exact.
-    History is scanned BEFORE posting: a retry after a committed stuck
-    (or a concurrent twin that already posted) reuses the existing row
-    instead of appending a duplicate. The live decision revision is read
-    fresh for every publish so the fence never fails on a stale static
-    value. Replaced by #88's atomic submission API when it merges.
+    One `terminal-events submit` call stores the sanitized message and
+    the durable event in a single transaction and returns both IDs.
+    The failure episode maps to Submit's stable request key: retries
+    within one outage reuse the key and deduplicate to the same IDs,
+    while a new independent outage uses a new key and records again.
+    The live decision revision is read fresh for every submit so the
+    fence never fails on a stale static value.
     """
-    item = config['item']
-    outcome = _history_outcome(config, env, body)
-    if outcome is None:
-        _call(config, env, ['stuck', '--to', item, body])
-        outcome = _history_outcome(config, env, body)
-    if outcome is None:
-        raise ValueError('posted observation not found in item history')
-    argv = ['terminal-events', 'publish', '--reservation', config['reservation'],
+    argv = ['terminal-events', 'submit', '--reservation', config['reservation'],
            '--generation', str(config['generation']),
            '--worker-session', config['native_session_id'],
-           '--kind', 'runtime-failure', '--outcome', str(outcome)]
+           '--kind', 'runtime-failure', '--body', body,
+           '--request-key', observation['episode_id']]
     revision = _live_revision(config, env)
     if revision is not None:
         argv += ['--expected-decision', str(revision)]

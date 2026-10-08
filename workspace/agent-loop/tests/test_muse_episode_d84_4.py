@@ -52,23 +52,22 @@ def config(root, **overrides):
 
 
 def ok_run(result, revision=None):
-    bodies = []
+    submits = []
     def run(argv, **kwargs):
-        if argv[1] == 'stuck':
-            bodies.append(argv[-1])
-            return subprocess.CompletedProcess(argv, 0, '[stuck -> #BUG-001] %s\n' % argv[-1], '')
-        if argv[1] == 'history':
-            lines = ['history for BUG-001:']
-            lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
-                      for i, b in enumerate(bodies)]
-            return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
         if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
             if revision is None:
                 return subprocess.CompletedProcess(argv, 0, '{}\n', '')
             return subprocess.CompletedProcess(argv, 0, json.dumps({'revision': revision}), '')
-        return subprocess.CompletedProcess(argv, 0, json.dumps(result), '')
-    run.bodies = bodies
+        if argv[1] == 'terminal-events' and argv[2] == 'submit':
+            submits.append(argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps(result), '')
+        raise AssertionError('unexpected squad call: %r' % (argv,))
+    run.submits = submits
     return run
+
+
+def submit_bodies(stub):
+    return [argv[argv.index('--body') + 1] for argv in stub.submits]
 
 
 class EpisodeLifecycleTests(unittest.TestCase):
@@ -79,21 +78,13 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.cfg = config(self.root)
 
     def test_failure_then_healthy_then_new_failure_publishes_again(self):
-        bodies = []
-        publishes = []
+        submits = []
         def counting(argv, **kwargs):
-            if argv[1] == 'stuck':
-                bodies.append(argv[-1])
-                return subprocess.CompletedProcess(argv, 0, '[stuck -> #BUG-001] %s\n' % argv[-1], '')
-            if argv[1] == 'history':
-                lines = ['history for BUG-001:']
-                lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
-                          for i, b in enumerate(bodies)]
-                return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
             if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
                 return subprocess.CompletedProcess(argv, 0, '{}\n', '')
-            publishes.append(argv)
-            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e%d' % len(publishes), 'state': 'pending'}), '')
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e%d' % len(submits), 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=counting):
             first = hook.publish(payload(turn_id='turn-1'), self.cfg)
             self.assertEqual(first['state'], 'pending')
@@ -102,8 +93,9 @@ class EpisodeLifecycleTests(unittest.TestCase):
             second = hook.publish(payload(turn_id='turn-3', request_id='req-3'), self.cfg)
             self.assertEqual(second['state'], 'pending')
             self.assertNotEqual(second['event_id'], first['event_id'])
-        self.assertEqual(len(publishes), 2)
-        self.assertNotEqual(bodies[0], bodies[1])
+        self.assertEqual(len(submits), 2)
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2'])
 
     def test_same_outage_retries_still_dedupe(self):
         with mock.patch.object(hook.subprocess, 'run', side_effect=ok_run({'event_id': 'e1', 'state': 'pending'})):
@@ -115,24 +107,16 @@ class EpisodeLifecycleTests(unittest.TestCase):
             self.assertEqual(later_turn['state'], 'duplicate')
 
     def test_publish_failure_stays_pending_and_replays(self):
-        bodies = []
-        publishes = []
+        submits = []
         failed_once = []
         def flaky(argv, **kwargs):
-            if argv[1] == 'stuck':
-                if not failed_once:
-                    failed_once.append(True)
-                    raise subprocess.TimeoutExpired(argv, 5)
-                bodies.append(argv[-1])
-                return subprocess.CompletedProcess(argv, 0, '[stuck -> #BUG-001] %s\n' % argv[-1], '')
-            if argv[1] == 'history':
-                lines = ['history for BUG-001:']
-                lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
-                          for i, b in enumerate(bodies)]
-                return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
             if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
                 return subprocess.CompletedProcess(argv, 0, '{}\n', '')
-            publishes.append(argv)
+            self.assertEqual(argv[2], 'submit')
+            if not failed_once:
+                failed_once.append(True)
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e1', 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=flaky):
             with self.assertRaises(subprocess.SubprocessError):
@@ -141,7 +125,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             # invocation replays it for real instead of a permanent duplicate.
             replayed = hook.publish(payload(), self.cfg, attempts=1)
             self.assertEqual(replayed['state'], 'pending')
-        self.assertEqual(len(publishes), 1)
+        self.assertEqual(len(submits), 1)
 
     def test_failed_publish_does_not_burn_episode(self):
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
@@ -214,34 +198,38 @@ class EpisodeLifecycleTests(unittest.TestCase):
                 action, _ = handling.decide(event, terminal=True, seen=seen, **flags)
                 self.assertEqual(action, 'stop')
 
-    def test_retry_reuses_committed_stuck_row(self):
-        # Grok finding 1: history is scanned BEFORE posting, so a retry
-        # after a committed stuck reuses the existing row.
+    def test_retry_reuses_episode_request_key(self):
+        # D84-5: one Submit per attempt; the same episode reuses the same
+        # request key, so the backend dedupes to the same IDs. A lost
+        # receipt replays the identical key instead of opening a new one.
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
             first = hook.publish(payload(), self.cfg)
             self.assertEqual(first['state'], 'pending')
-        self.assertEqual(len(stub.bodies), 1)
+        self.assertEqual(len(stub.submits), 1)
         # Simulate a lost receipt: clear the marker but keep the episode
-        # identity, republish, no new row.
+        # identity, republish with the same key.
         lost = hook.observe(payload(), self.cfg)
         lost['episode_id'] = 'ep-1'
         hook._mark_pending_unlocked(self.cfg, lost)
         stub2 = ok_run({'event_id': 'e1', 'state': 'pending'})
-        stub2.bodies.extend(stub.bodies)
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub2):
             retry = hook.publish(payload(), self.cfg)
             self.assertEqual(retry['state'], 'pending')
-        self.assertEqual(len(stub2.bodies), 1)
+        self.assertEqual(len(stub2.submits), 1)
+        for stubbed in (stub, stub2):
+            argv = stubbed.submits[0]
+            self.assertEqual(argv[argv.index('--request-key') + 1], 'ep-1')
+            self.assertIn('ep-1', argv[argv.index('--body') + 1])
 
-    def test_live_revision_passed_to_publish(self):
-        # Grok finding 2: the hook reads decision-get fresh per publish
+    def test_live_revision_passed_to_submit(self):
+        # Grok finding 2: the hook reads decision-get fresh per submit
         # instead of relying on a static config value.
         publishes = []
         stub = ok_run({'event_id': 'e1', 'state': 'pending'}, revision=7)
         real = stub
         def spy(argv, **kwargs):
-            if argv[1] == 'terminal-events' and argv[2] == 'publish':
+            if argv[1] == 'terminal-events' and argv[2] == 'submit':
                 publishes.append(argv)
             return real(argv, **kwargs)
         with mock.patch.object(hook.subprocess, 'run', side_effect=spy):
@@ -250,6 +238,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(len(publishes), 1)
         self.assertIn('--expected-decision', publishes[0])
         self.assertEqual(publishes[0][publishes[0].index('--expected-decision') + 1], '7')
+        self.assertIn('--request-key', publishes[0])
 
     def test_overlapping_publish_serializes(self):
         # Grok finding 3: one lock from episode check through open marker.
@@ -260,28 +249,20 @@ class EpisodeLifecycleTests(unittest.TestCase):
             second = hook.publish(payload(turn_id='turn-1'), self.cfg)
         self.assertEqual(first['state'], 'pending')
         self.assertEqual(second['state'], 'duplicate')
-        self.assertEqual(len(stub.bodies), 1)
+        self.assertEqual(len(stub.submits), 1)
 
     def test_pending_flushed_on_healthy_turn_then_new_episode(self):
         # Grok round 2: a pending episode must flush (not linger) across a
         # healthy PostLLMCall, and the next outage gets a NEW episode id.
-        publishes = []
-        bodies = []
+        submits = []
         def script(argv, **kwargs):
-            if argv[1] == 'stuck':
-                bodies.append(argv[-1])
-                return subprocess.CompletedProcess(argv, 0, '[stuck -> #BUG-001] %s\n' % argv[-1], '')
-            if argv[1] == 'history':
-                lines = ['history for BUG-001:']
-                lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
-                          for i, b in enumerate(bodies)]
-                return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
             if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
                 return subprocess.CompletedProcess(argv, 0, '{}\n', '')
-            publishes.append(argv)
-            if len(publishes) == 1:
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            if len(submits) == 1:
                 raise subprocess.TimeoutExpired(argv, 5)
-            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e%d' % len(publishes), 'state': 'pending'}), '')
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e%d' % len(submits), 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='turn-1'), self.cfg, attempts=1)
@@ -289,10 +270,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             second = hook.publish(payload(turn_id='turn-3', request_id='req-3'), self.cfg)
             self.assertEqual(second['state'], 'pending')
-        self.assertEqual(len(publishes), 3)
-        # Flushed ep-1 body kept its identity; new outage is ep-2.
-        self.assertIn('ep-1', bodies[0])
-        self.assertIn('ep-2', bodies[1])
+        self.assertEqual(len(submits), 3)
+        # Flushed ep-1 kept its request key; new outage is ep-2.
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-2'])
 
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})

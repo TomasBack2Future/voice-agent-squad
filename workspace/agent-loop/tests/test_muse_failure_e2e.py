@@ -122,6 +122,32 @@ class MuseFailureE2ETests(unittest.TestCase):
                          '--native-session', 'dispatcher-native', '--max', '5s')
         self.assertEqual([e['event_id'] for e in json.loads(out)['events']], [event_id])
 
+        # D84-5: same-episode retry dedupes to the same IDs via the
+        # stable request key; the next outage after healthy progress
+        # records a new event under a new key.
+        hook = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                               '--config', str(self.config), '--event', json.dumps(event)],
+                              env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(hook.returncode, 0, hook.stderr)
+        with self.db() as db:
+            count = db.execute("SELECT count(*) FROM terminal_event_receipts WHERE kind='runtime-failure'").fetchone()[0]
+        self.assertEqual(count, 1)
+        healthy = dict(event, turn_id='t2', status='completed', error='')
+        hook = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                               '--config', str(self.config), '--event', json.dumps(healthy)],
+                              env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(hook.returncode, 0, hook.stderr)
+        second = dict(event, turn_id='t3', request_id='req-e2e-2')
+        hook = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                               '--config', str(self.config), '--event', json.dumps(second)],
+                              env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(hook.returncode, 0, hook.stderr)
+        with self.db() as db:
+            rows = db.execute("SELECT event_id FROM terminal_event_receipts WHERE kind='runtime-failure' ORDER BY outcome_id").fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0][0].endswith('/ep-1'))
+        self.assertTrue(rows[1][0].endswith('/ep-2'))
+
         self.squad('dispatcher', 'terminal-events', 'ack', event_id,
                    '--note', 'e2e reconciled runtime-failure', '--native-session', 'dispatcher-native')
         with self.db() as db:

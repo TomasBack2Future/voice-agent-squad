@@ -94,19 +94,11 @@ class HookAdapterTests(unittest.TestCase):
         # duplicate() is a read; publish() confirms then marks.
         first = hook.observe(payload(), self.cfg)
         self.assertFalse(hook.duplicate(first, self.cfg))
-        bodies = []
         def ok(argv, **kwargs):
             import subprocess as sp
-            if argv[1] == 'stuck':
-                bodies.append(argv[-1])
-                return sp.CompletedProcess(argv, 0, '[stuck -> #BUG-001] %s\n' % argv[-1], '')
-            if argv[1] == 'history':
-                lines = ['history for BUG-001:']
-                lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
-                          for i, b in enumerate(bodies)]
-                return sp.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
             if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
                 return sp.CompletedProcess(argv, 0, '{}\n', '')
+            assert argv[2] == 'submit', argv
             return sp.CompletedProcess(argv, 0, '{"event_id":"e1","state":"pending"}', '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=ok):
             self.assertEqual(hook.publish(payload(), self.cfg)['state'], 'pending')
@@ -130,17 +122,12 @@ class HookAdapterTests(unittest.TestCase):
 
     def test_hook_returns_quickly_without_waiting_for_turn(self):
         binary = self.root / 'squad'
-        binary.write_text('#!/usr/bin/env python3\nimport json,sys,pathlib\n'
-                          'store = pathlib.Path(sys.argv[0]).parent / "messages.txt"\n'
-                          'if sys.argv[1] == "stuck":\n'
-                          '  store.write_text(sys.argv[-1] + "\\n")\n'
-                          '  print("[stuck -> #BUG-001] " + sys.argv[-1])\n'
-                          'elif sys.argv[1] == "history":\n'
-                          '  print("history for BUG-001:\\n  #7 [2026-10-09 01:00] worker (stuck): " + store.read_text().strip())\n'
-                          'elif sys.argv[1] == "terminal-events" and sys.argv[2] == "decision-get": print("{}")\n'
-                          'else: print(json.dumps({"event_id":"e1","state":"pending"}))\n')
+        binary.write_text('#!/usr/bin/env python3\nimport json,sys\n'
+                          'if sys.argv[1] == "terminal-events" and sys.argv[2] == "decision-get": print("{}")\n'
+                          'else: print(json.dumps({"message_id":7,"event_id":"e1","state":"pending"}))\n')
         binary.chmod(0o700)
         self.cfg['squad_executable'] = str(binary)
+        (self.root / 'config.json').write_text(json.dumps(self.cfg))
         start = time.monotonic()
         code = hook.main(['--config', str(self.root / 'config.json'),
                           '--event', json.dumps(payload())])
