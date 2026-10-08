@@ -187,12 +187,20 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertIsNotNone(committed)
         event_id, outcome = committed
         # Lost reply: server committed, local receipt lost -> pending.
+        # Faithful corruption: rebuild the exact pre-reply local state —
+        # frozen payload present, open marker absent, sequence still 0
+        # (nothing confirmed yet). Only the reply is lost.
         cfg = json.loads(self.config.read_text())
         obs = hook.observe(first, cfg)
         obs['episode_id'] = 'ep-1'
-        hook._mark_pending_unlocked(cfg, obs)
+        hook._store_pending(cfg, obs)
         state_dir = Path(cfg['state_directory'])
-        (state_dir / 'pending.json').write_text(json.dumps([obs]))
+        snaps = json.loads((state_dir / 'failure-episodes.json').read_text())
+        snaps['D-E2E|1|e2e-native'] = {'episode_open': False, 'pending': True,
+                                       'episode_id': 'ep-1', 'turns': [],
+                                       'first_observed_at': obs['observed_at'],
+                                       'sequence': 0}
+        (state_dir / 'failure-episodes.json').write_text(json.dumps(snaps))
         # Second failure, same outage, different turn/request.
         second = dict(first, turn_id='t2', request_id='req-2')
         run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
@@ -225,6 +233,45 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(rows[0][0].endswith('/ep-1'))
         self.assertTrue(rows[1][0].endswith('/ep-2'))
+        snaps = json.loads((Path(json.loads(self.config.read_text())['state_directory'])
+                            / 'failure-episodes.json').read_text())
+        self.assertEqual(snaps['D-E2E|1|e2e-native']['sequence'], 2)
+
+    def test_real_native_payload_without_request_id_delivers(self):
+        """D84-9 real path: exact real Muse 1.4.3 capture shape.
+
+        The payload has no request_id and no provider. The hook must
+        accept it, send it through the real Go Submit with the sentinel,
+        and the receiver must deliver it — 1 durable event, sanitized.
+        """
+        sys.path.insert(0, str(ROOT))
+        event = {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native',
+                 'turn_id': 'b311fc68-3cd3-4711-a545-1feaf6358654',
+                 'error': 'API error 503: isolated failure fixture (fixture_error) '
+                          '(after 10 provider attempts)',
+                 'error_details': None, 'status': 'failed', 'attempt': 1}
+        run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                              '--config', str(self.config), '--event', json.dumps(event)],
+                             env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT event_id,outcome_id FROM terminal_event_receipts WHERE kind='runtime-failure'").fetchall()
+        self.assertEqual(len(rows), 1)
+        event_id, outcome = rows[0]
+        self.assertTrue(event_id.endswith('/ep-1'), event_id)
+        with self.db() as db:
+            body = db.execute('SELECT body FROM messages WHERE id=?', (outcome,)).fetchone()[0]
+        self.assertEqual(body, 'runtime-failure ep-1 exhausted '
+                               'turn=b311fc68-3cd3-4711-a545-1feaf6358654 '
+                               'request=unknown attempt=1 provider=unknown')
+        self.assertNotIn('fixture_error', body)
+        self.assertNotIn('API error', body)
+        out = self.squad('dispatcher', 'terminal-events', 'listen', '--delivery-session', 'e2e-recv',
+                         '--native-session', 'dispatcher-native', '--max', '5s')
+        receipt = json.loads(out)
+        self.assertEqual([e['event_id'] for e in receipt['events']], [event_id])
+        self.assertEqual(receipt['events'][0]['kind'], 'runtime-failure')
 
 
 if __name__ == '__main__':

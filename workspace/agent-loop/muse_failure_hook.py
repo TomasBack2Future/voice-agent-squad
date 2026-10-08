@@ -70,20 +70,76 @@ def admits(event: dict, config: dict) -> bool:
     return True
 
 
+_SAFE_ID = re.compile(r'[A-Za-z0-9_.-]{1,128}\Z')
+_SAFE_PROVIDER = re.compile(r'[A-Za-z0-9_.-]{1,64}\Z')
+
+
+class UnsafeIdentifier(ValueError):
+    """An admitted failure whose identifiers cannot form a valid body."""
+
+
+#: Sentinel for legitimately absent fields (D84-9). Every captured real
+#: Muse 1.4.3 failed PostLLMCall has no request_id and no provider; that
+#: absence is normal payload shape, not a rejection. The token is fixed,
+#: documented, and inside the closed Go body alphabet.
+UNKNOWN_SENTINEL = 'unknown'
+
+
+def _safe(value, pattern, name):
+    text = str(value or '')
+    if not pattern.fullmatch(text):
+        raise UnsafeIdentifier('%s %r is missing or outside the closed body alphabet' % (name, text))
+    return text
+
+
+def _safe_or_unknown(value, pattern, name):
+    if value is None or str(value) == '':
+        return UNKNOWN_SENTINEL
+    text = str(value)
+    if not pattern.fullmatch(text):
+        raise UnsafeIdentifier('%s %r is present but outside the closed body alphabet' % (name, text))
+    return text
+
+
 def observe(event: dict, config: dict) -> dict:
-    """Build the sanitized observation. Raw error text never leaves."""
+    """Build the sanitized observation. Raw error text never leaves.
+
+    D84-9 (correcting D84-7(c)): turn_id is always present in real
+    captures, so it stays strict. request_id/provider are legitimately
+    absent from every real 1.4.3 failure capture: absent maps to the
+    fixed UNKNOWN_SENTINEL. A value that is present but unsafe still
+    raises UnsafeIdentifier: the caller records the precise rejection
+    and never silently drops it.
+    """
     return {
         'reservation': config['reservation'],
         'generation': config['generation'],
         'native_session_id': config['native_session_id'],
         'controller_agent_id': config['controller_agent_id'],
-        'turn_id': str(event.get('turn_id', ''))[:128],
-        'request_id': str(event.get('request_id', ''))[:128],
+        'turn_id': _safe(event.get('turn_id'), _SAFE_ID, 'turn_id'),
+        'request_id': _safe_or_unknown(event.get('request_id'), _SAFE_ID, 'request_id'),
         'attempt': int(event.get('attempt', 0) or 0),
-        'provider': str(event.get('provider', ''))[:64],
+        'provider': _safe_or_unknown(event.get('provider'), _SAFE_PROVIDER, 'provider'),
         'error_class': classify_error(str(event.get('error', ''))),
         'observed_at': int(time.time()),
     }
+
+
+def _record_rejection(config, reason):
+    """Persist a precise local rejection; the failure is never silent."""
+    state = Path(config['state_directory'])
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / 'rejected.json'
+    try:
+        rejected = json.loads(path.read_text())
+    except (OSError, ValueError):
+        rejected = []
+    if not isinstance(rejected, list):
+        rejected = []
+    rejected.append({'at': int(time.time()), 'reason': reason})
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(rejected))
+    temp.replace(path)
 
 
 def _snapshot_path(config):
@@ -277,7 +333,13 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
                 seen['pending'] = False
                 seen['closed_at'] = int(time.time())
                 seen['closed_by_turn'] = str(event.get('turn_id', ''))[:128]
-                seen['sequence'] = seen.get('sequence', 0) + 1
+                # D84-8: a still-pending flush confirms delivery here, so the
+                # advance happens exactly once at this point, tracked by
+                # the advancing episode's identity — a new episode always
+                # advances again, repeats of the same one never do.
+                if seen.get('advanced_episode') != seen.get('episode_id'):
+                    seen['sequence'] = seen.get('sequence', 0) + 1
+                    seen['advanced_episode'] = seen.get('episode_id')
                 data[key] = seen
                 _save(config, data)
                 return True
@@ -297,12 +359,16 @@ def _mark_open_unlocked(config, observation, episode_id):
     data = _snapshots(config)
     key = episode_key(observation, config)
     seen = data.get(key, {})
-    # Sequence counts failed→closed episodes only. Reconciling a pending
-    # replay must NOT consume the next episode number: the new outage
-    # after the close still opens sequence+1.
-    bump = 0 if (seen.get('episode_open') or seen.get('pending')) else 1
+    # D84-8: sequence advances exactly once per episode, at the moment its
+    # delivery is first confirmed (first success or confirmed replay).
+    # The guard is the advancing episode's identity: repeats of the same
+    # episode never re-advance, a new episode advances again, and close
+    # paths never advance. A stale 'advanced' boolean from an older head
+    # is dropped, not carried.
+    bump = 0 if seen.get('advanced_episode') == episode_id else 1
     data[key] = {'episode_open': True, 'pending': False,
                  'episode_id': episode_id,
+                 'advanced_episode': episode_id,
                  'turns': seen.get('turns', []) + [observation['turn_id'] + '|' + observation['request_id']],
                  'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
                  'sequence': seen.get('sequence', 0) + bump}
@@ -465,6 +531,15 @@ def run(config_path: Path, event: dict) -> int:
         return 0
     try:
         publish(event, config)
+    except UnsafeIdentifier as error:
+        # D84-7(c)/D84-9: precise local rejection, durable and inspectable.
+        # Only present-but-unsafe identifiers reach here; legitimately
+        # absent request_id/provider map to the sentinel and publish.
+        # Nothing is submitted, nothing is pending, and the hook reports
+        # the rejection on stderr instead of silently swallowing it.
+        _record_rejection(config, str(error))
+        print('muse-failure-hook rejected: %s' % error, file=sys.stderr)
+        return 2
     except (OSError, ValueError, subprocess.SubprocessError):
         # Publication stays pending on disk; the hook itself must not fail
         # the turn or wait. Exit 0 keeps observation-only semantics.

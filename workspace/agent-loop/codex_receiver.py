@@ -19,7 +19,7 @@ from codex_heartbeat import heartbeat, CustodyRejected, require_execution_fence
 from validate_context_package import ROOT, ValidationError, validate_file
 from codex_writer_fence import writer_intent, writer_record
 
-EVENT = re.compile(r'worker-terminal-v1/([A-Za-z0-9_-]+)/([1-9][0-9]*)/([A-Za-z0-9_-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed|runtime-failure)/([1-9][0-9]*)\Z')
+EVENT = re.compile(r'worker-terminal-v1/([A-Za-z0-9_-]+)/([1-9][0-9]*)/([A-Za-z0-9_-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed|runtime-failure)/([1-9][0-9]*)(/[A-Za-z0-9_.-]{1,128})?\Z')
 
 
 def process_start(pid):

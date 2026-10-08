@@ -368,6 +368,20 @@ class CodexControlPlaneTests(unittest.TestCase):
         self.assertIn('does not prove acceptance or termination',text)
         self.assertIn('After handling',text)
 
+    def test_keyed_runtime_failure_event_matches_real_submit_id(self):
+        # D84-7(b): the real Submit keyed event carries both the message id
+        # and the request-key suffix; the receiver must accept that exact
+        # form and still bind kind/outcome to the receipt row.
+        event_id = 'worker-terminal-v1/DISPATCH-SQUAD-84/1/01a11bd3-7f39-7a13-a38b-4a82e4c9ffc3/runtime-failure/11102/ep-1'
+        event = dict(item_id='BUG-018',kind='runtime-failure',outcome_id=11102,
+                     source_message_id=11102,event_id=event_id)
+        c = dict(self.rc,role='dispatcher',agent_id='dispatcher')
+        receipt = dict(type='worker-terminal-delivery-v1',recipient='dispatcher',delivery_session='one',events=[event])
+        self.assertEqual(receiver.validate_events(receipt,c),[event])
+        tampered = dict(event,outcome_id=999)
+        with self.assertRaises(ValidationError):
+            receiver.validate_events(dict(receipt,events=[tampered]),c)
+
     def test_stopped_owner_and_replaced_incarnation(self):
         path = self.write_receiver(self.rc)
         with patch.object(receiver,'process_start',return_value='process-incarnation'):

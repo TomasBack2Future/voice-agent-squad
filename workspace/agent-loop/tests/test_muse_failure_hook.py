@@ -121,6 +121,80 @@ class HookAdapterTests(unittest.TestCase):
         self.assertEqual(set(pending), {'ep-1'})
         self.assertEqual(pending['ep-1']['turn_id'], 'turn-1')
 
+    def test_unsafe_identifiers_rejected_precisely_not_dropped(self):
+        # D84-7(c) as corrected by D84-9: turn_id is always present in
+        # real captures so it stays strict; present-but-unsafe request/
+        # provider values are a precise durable rejection, never a
+        # silent exit 0. Absent request/provider map to the sentinel.
+        for bad in ({'turn_id': ''}, {'request_id': 'a/b'}, {'provider': 'meta ai'},
+                    {'turn_id': 't:1'}, {'turn_id': 'a b'}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(hook.UnsafeIdentifier):
+                    hook.observe(payload(**bad), self.cfg)
+        (self.root / 'config.json').write_text(json.dumps(self.cfg))
+        code = hook.main(['--config', str(self.root / 'config.json'),
+                          '--event', json.dumps(payload(turn_id='t/1'))])
+        self.assertEqual(code, 2)
+        rejected = json.loads((self.root / 'state' / 'rejected.json').read_text())
+        self.assertEqual(len(rejected), 1)
+        self.assertIn('turn_id', rejected[0]['reason'])
+        self.assertFalse((self.root / 'state' / 'pending.json').exists())
+        self.assertFalse((self.root / 'state' / 'failure-episodes.json').exists())
+
+    def test_safe_identifiers_cover_real_hook_values(self):
+        obs = hook.observe(payload(turn_id='48b8b788-8dc3-4656-b776-4995a5c105b9',
+                                   request_id='req-1.2_3', provider='meta'), self.cfg)
+        self.assertEqual(obs['turn_id'], '48b8b788-8dc3-4656-b776-4995a5c105b9')
+
+    def test_missing_request_id_and_provider_map_to_sentinel(self):
+        # D84-9: every real Muse 1.4.3 failure capture has no request_id
+        # and no provider. Absent fields map to the documented sentinel,
+        # never reject; present-but-unsafe values still reject precisely.
+        event = {'hook_event_name': 'PostLLMCall',
+                 'session_id': 'worker-native',
+                 'turn_id': 'b311fc68-3cd3-4711-a545-1feaf6358654',
+                 'error': 'API error 503: isolated failure fixture (fixture_error) '
+                          '(after 10 provider attempts)',
+                 'error_details': None, 'status': 'failed', 'attempt': 1}
+        self.assertTrue(hook.admits(event, self.cfg))
+        obs = hook.observe(event, self.cfg)
+        self.assertEqual(obs['request_id'], 'unknown')
+        self.assertEqual(obs['provider'], 'unknown')
+        self.assertEqual(obs['error_class'], 'exhausted')
+        body = hook._compose_body('ep-1', obs)
+        self.assertEqual(body, 'runtime-failure ep-1 exhausted '
+                               'turn=b311fc68-3cd3-4711-a545-1feaf6358654 '
+                               'request=unknown attempt=1 provider=unknown')
+        import re
+        go_shape = re.compile(
+            r'\Aruntime-failure ep-[1-9][0-9]* '
+            r'(exhausted|connection|auth|quota|config|unknown) '
+            r'turn=[A-Za-z0-9_.-]{1,128} request=[A-Za-z0-9_.-]{1,128} '
+            r'attempt=[0-9]{1,10} provider=[A-Za-z0-9_.-]{1,64}\Z')
+        self.assertTrue(go_shape.match(body), body)
+        for bad in ({'request_id': 'a/b'}, {'provider': 'meta ai'}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(hook.UnsafeIdentifier):
+                    hook.observe(payload(**bad), self.cfg)
+
+    def test_dedupe_works_without_request_id(self):
+        # D84-9: outage dedupe derives identity from turn + episode, so
+        # same-outage repeats without request_id still dedupe.
+        real = {'hook_event_name': 'PostLLMCall', 'session_id': 'worker-native',
+                'error': 'API error 503: x (after 10 provider attempts)',
+                'error_details': None, 'status': 'failed', 'attempt': 1}
+        first = hook.observe(dict(real, turn_id='t-a'), self.cfg)
+        self.assertFalse(hook.duplicate(first, self.cfg))
+        def ok(argv, **kwargs):
+            import subprocess as sp
+            if argv[2] == 'decision-get':
+                return sp.CompletedProcess(argv, 0, '{}\n', '')
+            return sp.CompletedProcess(argv, 0, '{"event_id":"e1","state":"pending"}', '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=ok):
+            self.assertEqual(hook.publish(dict(real, turn_id='t-a'), self.cfg)['state'], 'pending')
+        repeat = hook.observe(dict(real, turn_id='t-b'), self.cfg)
+        self.assertTrue(hook.duplicate(repeat, self.cfg))
+
     def test_hook_returns_quickly_without_waiting_for_turn(self):
         binary = self.root / 'squad'
         binary.write_text('#!/usr/bin/env python3\nimport json,sys\n'
