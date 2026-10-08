@@ -468,11 +468,16 @@ def _mark_pending_unlocked(config, observation):
     data = _snapshots(config)
     key = episode_key(observation, config)
     seen = data.get(key, {})
+    # A failed replay must not erase a recorded healthy boundary or the
+    # advanced-episode identity: the boundary still belongs to this
+    # episode until a confirmed replay consumes it (7a01892 review).
+    carried = {name: seen[name] for name in ('healthy_boundary', 'advanced_episode') if seen.get(name)}
     data[key] = {'episode_open': False, 'pending': True,
                  'episode_id': observation.get('episode_id', seen.get('episode_id', '')),
                  'turns': seen.get('turns', []),
                  'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
-                 'sequence': seen.get('sequence', 0)}
+                 'sequence': seen.get('sequence', 0),
+                 **carried}
     _save(config, data)
 
 

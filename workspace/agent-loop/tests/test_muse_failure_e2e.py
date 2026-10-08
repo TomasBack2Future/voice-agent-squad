@@ -342,18 +342,27 @@ class MuseFailureE2ETests(unittest.TestCase):
         """
         sys.path.insert(0, str(ROOT))
         import muse_failure_hook as hook
-        cfg = json.loads(self.config.read_text())
-        real_exe, cfg['squad_executable'] = cfg['squad_executable'], str(self.binary) + '-missing'
+        phase = {'fail_all': True}
+        original = hook._submit
+        def script(body, config, env, observation):
+            if phase['fail_all']:
+                raise subprocess.CalledProcessError(7, ['isolated-submit-transport-fixture'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+            mid_row = mid['D-E2E|1|e2e-native']
+            self.assertTrue(mid_row['pending'])
+            self.assertEqual(mid_row['episode_id'], 'ep-1')
+            self.assertEqual(mid_row.get('healthy_boundary'), 't2')
+            self.assertEqual(self._failure_rows(), [])
+            phase['fail_all'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
         finally:
-            cfg['squad_executable'] = real_exe
-            self.config.write_text(json.dumps(cfg))
-        boundary = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-        self.assertEqual(boundary['D-E2E|1|e2e-native'].get('healthy_boundary'), 't2')
-        self.assertEqual(self._failure_rows(), [])
-        self._run_hook(self._hook_event('t3'))
+            hook._submit = original
         rows = self._failure_rows()
         self.assertEqual(len(rows), 2)
         self.assertTrue(rows[0][0].endswith('/ep-1'), rows[0][0])

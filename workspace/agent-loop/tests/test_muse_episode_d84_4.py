@@ -280,6 +280,42 @@ class EpisodeLifecycleTests(unittest.TestCase):
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
         self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-2'])
 
+    def test_failed_replay_after_boundary_keeps_boundary_and_new_outage(self):
+        # 7a01892 review finding 1: ep-1 pending, t2 healthy flush fails
+        # (boundary recorded), then the t3 replay ALSO fails. The pending
+        # rewrite must keep the boundary and episode identity, so the t4
+        # replay still closes ep-1 at t2 and publishes the live t4
+        # failure as ep-2. Exactly ep-1 then ep-2 are used.
+        submits = []
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            if len(submits) <= 3:
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            healthy = payload(turn_id='t2', status='completed', error='')
+            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            row = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
+            pending = row['DISPATCH-1|1|worker-native']
+            self.assertTrue(pending['pending'])
+            self.assertEqual(pending['episode_id'], 'ep-1')
+            self.assertEqual(pending.get('healthy_boundary'), 't2')
+            fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
+            self.assertEqual(fourth['episode_id'], 'ep-2')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-1', 'ep-2'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-1', bodies[3])
+        self.assertIn('turn=t4 request=req-4', bodies[4])
+
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
