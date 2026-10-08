@@ -69,6 +69,25 @@ func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRo
 		}
 		return dispatch.New(db, repoID, nil).Handoff(ctx, actor, a.Request)
 	}})
+	srv.Register(mcp.Tool{Name: "squad_dispatch_receiver_preflight", Description: "Qualify standby-to-active receiver readiness before asynchronous launch; read-only, never enables a fallback.", InputSchema: json.RawMessage(`{"type":"object","properties":{"actor":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			Actor string `json:"actor"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		if a.Actor == "" {
+			var err error
+			a.Actor, err = identity.AgentID()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return dispatch.New(db, repoID, nil).ReceiverReady(ctx, a.Actor)
+	}})
 	srv.Register(mcp.Tool{Name: "squad_dispatch_handoff_get", Description: "Read immutable successful controller handoff audit receipt.", InputSchema: json.RawMessage(`{"type":"object","required":["request_id"],"properties":{"request_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			ID string `json:"request_id"`
@@ -86,11 +105,13 @@ func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRo
 		if release {
 			name = "squad_dispatch_receiver_release"
 		}
-		srv.Register(mcp.Tool{Name: name, Description: "Exact actor/native/epoch receiver custody; no lease expiry or replacement on transport failure.", InputSchema: json.RawMessage(`{"type":"object","required":["native_session","epoch","incarnation"],"properties":{"native_session":{"type":"string"},"epoch":{"type":"integer","minimum":1},"incarnation":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		srv.Register(mcp.Tool{Name: name, Description: "Exact actor/native/epoch receiver custody; no lease expiry or replacement on transport failure.", InputSchema: json.RawMessage(`{"type":"object","required":["native_session","epoch","incarnation"],"properties":{"native_session":{"type":"string"},"epoch":{"type":"integer","minimum":1},"incarnation":{"type":"string"},"owner_pid":{"type":"integer","minimum":1},"wake_kind":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			var a struct {
 				Native      string `json:"native_session"`
 				Epoch       int64  `json:"epoch"`
 				Incarnation string `json:"incarnation"`
+				OwnerPID    int    `json:"owner_pid"`
+				WakeKind    string `json:"wake_kind"`
 			}
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
@@ -105,6 +126,8 @@ func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRo
 			s := dispatch.New(db, repoID, nil)
 			if release {
 				err = s.ReleaseReceiver(ctx, actor, a.Native, a.Incarnation, a.Epoch)
+			} else if a.OwnerPID > 0 || a.WakeKind != "" {
+				err = s.BindReceiverReady(ctx, actor, a.Native, a.Incarnation, a.Epoch, a.OwnerPID, a.WakeKind)
 			} else {
 				err = s.BindReceiver(ctx, actor, a.Native, a.Incarnation, a.Epoch)
 			}

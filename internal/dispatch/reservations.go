@@ -157,6 +157,16 @@ func (s *Store) Attach(ctx context.Context, reservationKey, canonicalItemID, act
 }
 
 func (s *Store) Bind(ctx context.Context, itemID, actor, workerThreadID string, generation int64) (*Reservation, error) {
+	return s.bind(ctx, itemID, actor, workerThreadID, generation, false)
+}
+
+// BindSupervised admits an explicitly supervised/manual Worker launch. It is
+// never reported as unattended-ready; see ReceiverReady.
+func (s *Store) BindSupervised(ctx context.Context, itemID, actor, workerThreadID string, generation int64) (*Reservation, error) {
+	return s.bind(ctx, itemID, actor, workerThreadID, generation, true)
+}
+
+func (s *Store) bind(ctx context.Context, itemID, actor, workerThreadID string, generation int64, supervised bool) (*Reservation, error) {
 	itemID = strings.TrimSpace(itemID)
 	actor = strings.TrimPrefix(strings.TrimSpace(actor), "@")
 	workerThreadID = strings.TrimSpace(workerThreadID)
@@ -164,6 +174,18 @@ func (s *Store) Bind(ctx context.Context, itemID, actor, workerThreadID string, 
 		return nil, fmt.Errorf("dispatch: item, actor, worker thread, and positive generation are required")
 	}
 	now := s.now().Unix()
+	if !supervised {
+		if err := s.requireBindTarget(ctx, itemID, actor, generation, now); err != nil {
+			return nil, err
+		}
+		ready, err := s.ReceiverReady(ctx, actor)
+		if err != nil {
+			return nil, err
+		}
+		if !ready.UnattendedReady {
+			return nil, fmt.Errorf("%w: %s", ErrReceiverNotReady, ready.Repair)
+		}
+	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE dispatch_reservations
 		SET state='dispatched', worker_thread_id=?, updated_at=?, expires_at=0
@@ -273,6 +295,32 @@ func findReservationTx(ctx context.Context, tx *sql.Tx, repoID, itemID, sourceRe
 		return nil, ErrIdentityConflict
 	}
 	return found[0], nil
+}
+
+// requireBindTarget checks the reservation-side bind preconditions before the
+// receiver-readiness gate runs, so ownership/generation/expiry/canonical-item
+// failures keep their existing error identity.
+func (s *Store) requireBindTarget(ctx context.Context, itemID, actor string, generation, now int64) error {
+	r, err := s.Get(ctx, itemID)
+	if err != nil {
+		return err
+	}
+	if r.ReservedBy != actor {
+		return ErrNotOwner
+	}
+	if r.Generation != generation {
+		return ErrGeneration
+	}
+	if r.State == "reserved" && r.ExpiresAt <= now {
+		return ErrExpired
+	}
+	if r.State == "reserved" && r.CanonicalItemID == "" {
+		return ErrCanonicalItem
+	}
+	if r.State != "reserved" {
+		return fmt.Errorf("dispatch: reservation is in state %s", r.State)
+	}
+	return nil
 }
 
 func (s *Store) explainBindFailure(ctx context.Context, itemID, actor string, generation, now int64) error {

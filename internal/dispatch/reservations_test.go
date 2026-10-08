@@ -41,6 +41,8 @@ func TestReserveBindCloseLifecycle(t *testing.T) {
 	if err != nil || r.CanonicalItemID != "STUDIO-501" {
 		t.Fatalf("attach=%+v err=%v", r, err)
 	}
+	// Unattended bind requires receiver readiness; qualify the exact receiver first.
+	qualifyReceiver(t, s, ctx, "dispatcher-a", "dispatcher-a-native", "lifecycle-incarnation")
 	r, err = s.Bind(ctx, "DISPATCH-STUDIO-501", "dispatcher-a", "thread-123", 1)
 	if err != nil {
 		t.Fatal(err)

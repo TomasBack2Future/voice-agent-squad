@@ -114,7 +114,12 @@ class ReceiverLedgerTests(unittest.TestCase):
         settings.write_text(settings.read_text().replace('default_worktree_per_claim: true', 'default_worktree_per_claim: false'))
         self.squad('new', 'new', 'BUG', 'Isolated delivery fixture', '--ready')
         self.squad('new', 'dispatch', 'attach', 'D-1', '--item', 'BUG-001', '--generation', '1')
+        # Unattended bind is readiness-gated; start the receiver first so the
+        # exact native/epoch/incarnation qualifies before Worker launch.
+        p = self.receiver(); self.wait_bound(p, 'first')
         self.squad('new', 'dispatch', 'bind', 'D-1', '--thread-id', 'worker-native', '--generation', '1')
+        self.c['incarnation'] = 'second'; self.config.write_text(json.dumps(self.c))
+        p.communicate(timeout=5)
         self.squad('worker', 'register', '--as', 'worker')
         self.squad('worker', 'claim', 'BUG-001', '--long')
         self.squad('worker', 'milestone', '--to', 'BUG-001', 'Isolated blocker evidence')
