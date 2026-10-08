@@ -55,6 +55,10 @@ replacement reservation. Verify the old process exited before resuming and
 check the effective mode afterward. An external rollout continues independently
 of stopping the client and must remain supervised on resume.
 
+For controller-owned launch, bounded model-transport recovery and authorized
+live instruction adoption, use [assignment continuity](../../lifecycle-continuity.md).
+A mode change must use the native resume interface and preserve active custody.
+
 ## Create and bind one Worker
 
 Run the selected package's `worker_preflight.py` before session creation, using

@@ -6,6 +6,9 @@ the runtime supplies execution capabilities. A provider name is neither a role
 restriction nor evidence that the selected client can complete the assignment.
 CLI, desktop App and supervised protocol hosts are separate execution surfaces.
 
+For launch, resume, failed model connections and instruction rollout, apply
+[assignment continuity and effective adoption](lifecycle-continuity.md).
+
 ## Equal admission, scoped to the operation
 
 Use the same required capabilities for the same role, operation and custody mode
