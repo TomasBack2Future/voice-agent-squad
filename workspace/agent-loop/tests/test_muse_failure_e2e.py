@@ -45,10 +45,12 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.squad('dispatcher', 'new', 'BUG', 'Isolated e2e failure fixture', '--ready')
         self.squad('dispatcher', 'dispatch', 'reserve', 'D-E2E', '--source', 'github:example/repo#1')
         self.squad('dispatcher', 'dispatch', 'attach', 'D-E2E', '--item', 'BUG-001', '--generation', '1')
-        self.squad('dispatcher', 'dispatch', 'bind', 'D-E2E', '--thread-id', 'e2e-native', '--generation', '1')
         self.squad('dispatcher', 'dispatch', 'controller-bind', '--native-session', 'dispatcher-native')
         self.squad('dispatcher', 'dispatch', 'receiver-bind', '--native-session', 'dispatcher-native',
-                   '--epoch', '1', '--incarnation', 'e2e-recv')
+                   '--epoch', '1', '--incarnation', 'e2e-recv', '--owner-pid', str(os.getpid()),
+                   '--wake-kind', 'asyncRewake')
+        # Qualification runs supervised; unattended bind is receiver-gated.
+        self.squad('dispatcher', 'dispatch', 'bind', 'D-E2E', '--thread-id', 'e2e-native', '--generation', '1', '--supervised')
         self.squad('worker', 'claim', 'BUG-001', '--long')
         self.config = self.root / 'hook.json'
         self.config.write_text(json.dumps({
