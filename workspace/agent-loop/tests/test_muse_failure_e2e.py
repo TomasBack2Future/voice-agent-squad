@@ -273,6 +273,45 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual([e['event_id'] for e in receipt['events']], [event_id])
         self.assertEqual(receipt['events'][0]['kind'], 'runtime-failure')
 
+    def test_real_144_compound_payload_delivers_normalized(self):
+        """D84-10 real path: exact real Muse 1.4.4 capture shape.
+
+        request_id is compound <uuid>:<n>:<m> and provider is present.
+        The hook must normalize deterministically, send through the
+        real Go Submit, and the receiver must deliver — 1 durable
+        event, sanitized, exit 0 (never exit 2 with 0 events).
+        """
+        sys.path.insert(0, str(ROOT))
+        event = {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native',
+                 'turn_id': '3ff577ba-8b93-4d79-ad4b-5ea4d8d81999',
+                 'status': 'failed', 'attempt': 1,
+                 'error': 'your API key from META_API_KEY was rejected',
+                 'request_id': '3ff577ba-8b93-4d79-ad4b-5ea4d8d81999:0:1',
+                 'provider': 'model.meta.response'}
+        run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
+                              '--config', str(self.config), '--event', json.dumps(event)],
+                             env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT event_id,outcome_id FROM terminal_event_receipts WHERE kind='runtime-failure'").fetchall()
+        self.assertEqual(len(rows), 1)
+        event_id, outcome = rows[0]
+        self.assertTrue(event_id.endswith('/ep-1'), event_id)
+        with self.db() as db:
+            body = db.execute('SELECT body FROM messages WHERE id=?', (outcome,)).fetchone()[0]
+        self.assertEqual(body, 'runtime-failure ep-1 auth '
+                               'turn=3ff577ba-8b93-4d79-ad4b-5ea4d8d81999 '
+                               'request=3ff577ba-8b93-4d79-ad4b-5ea4d8d81999.0.1 '
+                               'attempt=1 provider=model.meta.response')
+        self.assertNotIn('META_API_KEY', body)
+        self.assertNotIn(':', body)
+        out = self.squad('dispatcher', 'terminal-events', 'listen', '--delivery-session', 'e2e-recv',
+                         '--native-session', 'dispatcher-native', '--max', '5s')
+        receipt = json.loads(out)
+        self.assertEqual([e['event_id'] for e in receipt['events']], [event_id])
+        self.assertEqual(receipt['events'][0]['kind'], 'runtime-failure')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -177,6 +177,42 @@ class HookAdapterTests(unittest.TestCase):
                 with self.assertRaises(hook.UnsafeIdentifier):
                     hook.observe(payload(**bad), self.cfg)
 
+    def test_compound_request_id_normalizes_deterministically(self):
+        # D84-10: real Muse 1.4.4 emits <uuid>:<n>:<m> request IDs. The
+        # documented mapping is <a>.<n>.<m>; it is deterministic (same
+        # input always yields the same value, so dedupe stays stable)
+        # and stays inside the closed body alphabet. Non-compound
+        # shapes with colons still reject precisely.
+        event = {'hook_event_name': 'PostLLMCall', 'session_id': 'worker-native',
+                 'turn_id': '3ff577ba-8b93-4d79-ad4b-5ea4d8d81999',
+                 'status': 'failed', 'attempt': 1,
+                 'error': 'your API key from META_API_KEY was rejected',
+                 'request_id': '3ff577ba-8b93-4d79-ad4b-5ea4d8d81999:0:1',
+                 'provider': 'model.meta.response'}
+        self.assertTrue(hook.admits(event, self.cfg))
+        first = hook.observe(event, self.cfg)
+        self.assertEqual(first['request_id'], '3ff577ba-8b93-4d79-ad4b-5ea4d8d81999.0.1')
+        self.assertEqual(first['provider'], 'model.meta.response')
+        self.assertEqual(first['error_class'], 'auth')
+        second = hook.observe(dict(event), self.cfg)
+        self.assertEqual(second['request_id'], first['request_id'])
+        body = hook._compose_body('ep-1', first)
+        self.assertEqual(body, 'runtime-failure ep-1 auth '
+                               'turn=3ff577ba-8b93-4d79-ad4b-5ea4d8d81999 '
+                               'request=3ff577ba-8b93-4d79-ad4b-5ea4d8d81999.0.1 '
+                               'attempt=1 provider=model.meta.response')
+        import re
+        go_shape = re.compile(
+            r'\Aruntime-failure ep-[1-9][0-9]* '
+            r'(exhausted|connection|auth|quota|config|unknown) '
+            r'turn=[A-Za-z0-9_.-]{1,128} request=[A-Za-z0-9_.-]{1,128} '
+            r'attempt=[0-9]{1,10} provider=[A-Za-z0-9_.-]{1,64}\Z')
+        self.assertTrue(go_shape.match(body), body)
+        for bad in ('a/b:0:1', 'x:1', 'x:1:2:3', 'x::1', ':0:1', 'x:one:1'):
+            with self.subTest(bad=bad):
+                with self.assertRaises(hook.UnsafeIdentifier):
+                    hook.observe(payload(request_id=bad), self.cfg)
+
     def test_dedupe_works_without_request_id(self):
         # D84-9: outage dedupe derives identity from turn + episode, so
         # same-outage repeats without request_id still dedupe.

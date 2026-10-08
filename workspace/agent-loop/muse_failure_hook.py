@@ -101,23 +101,53 @@ def _safe_or_unknown(value, pattern, name):
     return text
 
 
+#: Compound request identity (D84-10). Real Muse 1.4.4 emits request_id
+#: as <uuid>:<n>:<m>; colons are outside the closed Go body alphabet.
+_COMPOUND_ID = re.compile(r'\A([A-Za-z0-9_.-]{1,64}):([0-9]{1,10}):([0-9]{1,10})\Z')
+
+
+def _normalize_compound(value, pattern, name):
+    """Normalize a legitimate compound ID into the closed alphabet.
+
+    Mapping (documented, deterministic, bounded): <a>:<n>:<m> becomes
+    <a>.<n>.<m>, then the result must satisfy the same closed pattern
+    and length bound as a plain value. Anything that is not exactly the
+    documented compound shape raises UnsafeIdentifier: no silent rewrite
+    of arbitrary unsafe text.
+    """
+    match = _COMPOUND_ID.fullmatch(str(value))
+    if match is None:
+        raise UnsafeIdentifier('%s %r is present but outside the closed body alphabet' % (name, value))
+    normalized = '%s.%s.%s' % match.groups()
+    if not pattern.fullmatch(normalized):
+        raise UnsafeIdentifier('%s %r normalizes outside the closed body alphabet' % (name, value))
+    return normalized
+
+
 def observe(event: dict, config: dict) -> dict:
     """Build the sanitized observation. Raw error text never leaves.
 
     D84-9 (correcting D84-7(c)): turn_id is always present in real
     captures, so it stays strict. request_id/provider are legitimately
     absent from every real 1.4.3 failure capture: absent maps to the
-    fixed UNKNOWN_SENTINEL. A value that is present but unsafe still
-    raises UnsafeIdentifier: the caller records the precise rejection
-    and never silently drops it.
+    fixed UNKNOWN_SENTINEL. D84-10: real 1.4.4 emits compound
+    <uuid>:<n>:<m> request IDs, deterministically normalized into the
+    closed alphabet. A value that is present but neither closed nor a
+    documented compound still raises UnsafeIdentifier: the caller
+    records the precise rejection and never silently drops it.
     """
+    request_id = event.get('request_id')
+    if request_id is not None and str(request_id) != '' and ':' in str(request_id):
+        request_id = _normalize_compound(request_id, _SAFE_ID, 'request_id')
+    else:
+        request_id = _safe_or_unknown(request_id, _SAFE_ID, 'request_id')
     return {
         'reservation': config['reservation'],
         'generation': config['generation'],
         'native_session_id': config['native_session_id'],
         'controller_agent_id': config['controller_agent_id'],
         'turn_id': _safe(event.get('turn_id'), _SAFE_ID, 'turn_id'),
-        'request_id': _safe_or_unknown(event.get('request_id'), _SAFE_ID, 'request_id'),
+        'request_id': request_id,
         'attempt': int(event.get('attempt', 0) or 0),
         'provider': _safe_or_unknown(event.get('provider'), _SAFE_PROVIDER, 'provider'),
         'error_class': classify_error(str(event.get('error', ''))),
