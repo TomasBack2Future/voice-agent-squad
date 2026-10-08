@@ -164,6 +164,37 @@ func TestSubmitDistinctRequests(t *testing.T) {
 	}
 }
 
+// Request-key matching is exact and case-sensitive: a key equal to a decimal
+// message id or differing only by case from an existing key records a new
+// event instead of collapsing into the old row.
+func TestSubmitRequestKeyMatchIsExact(t *testing.T) {
+	s := fixture(t)
+	if _, err := s.DB.Exec(`INSERT INTO claims(item_id,repo_id,agent_id,claimed_at,last_touch) VALUES('TASK','repo','worker',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	publisher := s
+	publisher.Recipient = ""
+	base, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "decision-request", "base body", 0, "Phase-A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "decision-request", "lower body", 0, "phase-a"})
+	if err != nil {
+		t.Fatalf("case-distinct key rejected: %v", err)
+	}
+	if lower == base {
+		t.Fatal("case-distinct key collapsed into existing row")
+	}
+	numeric, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "decision-request", "numeric body", 0, "2"})
+	if err != nil {
+		t.Fatalf("numeric key rejected: %v", err)
+	}
+	if numeric == base || numeric == lower {
+		t.Fatal("numeric key collapsed into existing row")
+	}
+}
+
 // Atomic outcome submission takes the assignment identity plus outcome body,
 // stores the canonical message and the durable event in one transaction, and
 // returns both IDs. No manual message-ID extraction, no cwd dependence.

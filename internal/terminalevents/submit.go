@@ -56,12 +56,6 @@ func (q *SubmitRequest) normalizeRequestKey() {
 	}
 }
 
-func escapeLike(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `%`, `\%`)
-	return strings.ReplaceAll(s, `_`, `\_`)
-}
-
 // SubmitResult returns the stored identities.
 type SubmitResult struct {
 	MessageID int64  `json:"message_id"`
@@ -124,15 +118,18 @@ func (s Store) submitTx(ctx context.Context, tx *sql.Tx, actor string, q SubmitR
 	// IDs; a distinct key records a new event. The same key with a different
 	// body is a payload conflict, never a silent second message. Legacy
 	// callers with no key share the single "default" slot per kind, matching
-	// both keyed and pre-key event IDs.
-	keySuffix := "/" + q.RequestKey
+	// both keyed and pre-key event IDs. The match is exact and case-sensitive:
+	// a keyed lookup only hits six-segment IDs whose last segment equals the
+	// key byte-for-byte, so a key equal to a decimal message id or differing
+	// only by case never collapses into another request.
 	var messageID, sourceID int64
 	var eventID, oldBody string
 	err = tx.QueryRowContext(ctx, `SELECT e.event_id, e.outcome_id, e.source_message_id, m.body FROM terminal_event_receipts e
 		JOIN messages m ON m.id=e.outcome_id AND m.repo_id=e.repo_id
 		WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.kind=? AND e.item_id=?
-		AND (e.event_id LIKE '%' || ? ESCAPE '\' OR (?='default' AND length(e.event_id)-length(replace(e.event_id,'/',''))=5))`,
-		s.Repo, q.Reservation, q.Generation, q.WorkerSession, q.Kind, item, escapeLike(keySuffix), q.RequestKey).Scan(&eventID, &messageID, &sourceID, &oldBody)
+		AND ((length(e.event_id)-length(replace(e.event_id,'/',''))=6 AND substr(e.event_id, length(e.event_id)-length(?))='/' || ?)
+			OR (?='default' AND length(e.event_id)-length(replace(e.event_id,'/',''))=5))`,
+		s.Repo, q.Reservation, q.Generation, q.WorkerSession, q.Kind, item, q.RequestKey, q.RequestKey, q.RequestKey).Scan(&eventID, &messageID, &sourceID, &oldBody)
 	if err == nil {
 		if oldBody != q.Body || sourceID != messageID {
 			return out, &Rejection{Condition: "payload-conflict", Repair: fmt.Sprintf("request %q was already submitted with a different body; retry with the identical body or submit the new content under a new request key", q.RequestKey)}
