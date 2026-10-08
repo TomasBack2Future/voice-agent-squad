@@ -984,3 +984,32 @@ claim/mailbox and record a blocked report under a separate exact-custody check.
 It cannot reopen writes, request review or record completion. In-flight hold
 joins the owned container before the model handles the decision and returns the
 blocked result; the original primary claim remains with its owner.
+
+### Muse runtime-failure hook and handling contract
+
+`muse_failure_hook.py` is a PostLLMCall observation-only adapter. It admits
+only the ledger-bound Worker's native session with `status: failed`, rejecting
+unrelated/reminder/subagent sessions and unqualified StopFailure; StopFailure
+stays supplemental until exact-version proof exists. It classifies the error
+into a closed enum (`exhausted`, `connection`, `auth`, `quota`, `config`,
+`unknown`), dedupes by reservation/generation/native plus continuous episode
+under a lock, and publishes one sanitized observation through the existing
+`stuck` + `terminal-events publish --kind runtime-failure` path with bounded
+retries (switching to #88's atomic submission API when it merges). A failure
+episode closes on verified healthy progress of the same native
+(`note_progress`); the next independent failure opens a new episode with its
+own budget. Failed publications stay pending and replay on the next hook
+invocation, never falsely delivered; the hook returns quickly and never waits
+for its own turn to end (D84-2 ordering).
+
+`muse_failure_handling.py` is the pure Dispatcher-side contract over that
+observation: `decide` returns `continue` (one bounded continuation per
+episode), `awaiting-terminal` (early event: never acked, consumed or dropped)
+or `stop` (auth/quota/config, paused, completed, pending decision, spent
+budget). The budget key includes the episode identity. No
+hook->reply->failure loop: no duplicate Worker, relay restart or external
+replay is admitted. A stopped MSP session routes through the same durable
+`runtime-failure` event as a handoff candidate for the owning Dispatcher cycle;
+MSP still lacks a qualified per-thread writer-epoch transfer (see the shared-App
+boundary above), so ownership continuity after a stop remains an adapter gap,
+not proven delivery.

@@ -959,7 +959,7 @@ events use the existing 15-second durable catch-up, not a second scheduler.
 `agent_id`) is the legacy two-step path for a pre-posted message; it inserts a
 fenced event atomically. Kinds: `issue-closed`,
 `handoff-complete`, `blocked`, `decision-request`, `decision-resolved`,
-`reconcile-needed`. Outcome and sender must match the repository, task and current
+`reconcile-needed`, `runtime-failure`. Outcome and sender must match the repository, task and current
 reservation generation. Recipient/item are ledger-derived; invalid requests fail
 with a precise failed condition plus repair action. Decision replies
 can only be published by the reservation owner and route to the current claimant.
@@ -976,6 +976,14 @@ reminder; the next hook re-arms it. Other receiver failures report once per
 incarnation and need repair plus a new incarnation, rather than a wakeup loop.
 Do not claim the wake channel is healthy just because configuration exists:
 validate actual native wakeup, draft preservation, replay and acknowledgement.
+
+The `runtime-failure` kind carries a model-runtime observation submitted by
+the bound Worker through `terminal-events submit` (one sanitized closed-enum
+body plus `--request-key` per failure episode). It uses the same decision
+fence as `blocked`. See the D84-2/D84-4
+handling contract in `workspace/agent-loop/muse_failure_handling.py`: early
+events stay `awaiting-terminal`, never acked before terminal confirmation,
+with at most one bounded continuation per failure episode.
 
 ## `squad execution`
 

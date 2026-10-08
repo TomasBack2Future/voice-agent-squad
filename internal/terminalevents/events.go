@@ -15,7 +15,7 @@ import (
 	"github.com/zsiec/squad/internal/store"
 )
 
-var eventPattern = regexp.MustCompile(`worker-terminal-v1/([A-Za-z0-9_.:-]+)/([1-9][0-9]*)/([A-Za-z0-9_.-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed)/([1-9][0-9]*)`)
+var eventPattern = regexp.MustCompile(`worker-terminal-v1/([A-Za-z0-9_.:-]+)/([1-9][0-9]*)/([A-Za-z0-9_.-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed|runtime-failure)/([1-9][0-9]*)`)
 
 type Event struct {
 	ID          string `json:"event_id"`
