@@ -52,6 +52,7 @@ func TestAuthAndRoleDenyBeforeExecution(t *testing.T) {
 		{testToken, "/v1/command", `{"args":["claim-inspect","TASK-1","--repo=/elsewhere"]}`, 403},
 		{testToken, "/v1/command", `{"args":["claim","TASK-1","--worktree"]}`, 403},
 		{testToken, "/v1/command", `{"args":["done","TASK-1","--force"]}`, 403},
+		{testToken, "/v1/command", `{"args":["register","--owner-pid=1"]}`, 403},
 		{testToken, "/v1/command", `{"args":["heartbeat","TASK-1","--worker-session=foreign"]}`, 403},
 		{testToken, "/mcp", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"squad_claim","arguments":{"agent_id":"victim"}}}`, 403},
 		{testToken, "/mcp", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"squad_register","arguments":{"aſ":"victim"}}}`, 403},

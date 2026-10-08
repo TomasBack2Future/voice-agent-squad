@@ -101,7 +101,11 @@ with tempfile.TemporaryDirectory(prefix='squad-remote-test-') as tmp:
         assert stale.returncode!=0,'stale generation admitted'
         # Exercise event pointers through remote transports under real custody.
         bound=command(2,'dispatch','bind','TEST-REMOTE-RESERVATION','--thread-id',f'native-{winner}','--generation',str(reservation['generation']))
+        assert bound.returncode!=0 and 'receiver not ready' in bound.stderr,'unattended dispatch admitted without native receiver'
+        bound=command(2,'dispatch','bind','TEST-REMOTE-RESERVATION','--thread-id',f'native-{winner}','--generation',str(reservation['generation']),'--supervised')
         assert bound.returncode==0,bound.stderr
+        readiness=mcp(2,'squad_dispatch_receiver_preflight',{})
+        assert readiness['result']['structuredContent']['unattended_ready'] is False,readiness
         bound=command(2,'dispatch','controller-bind','--native-session','native-2')
         assert bound.returncode==0,bound.stderr
         epoch=json.loads(bound.stdout)['epoch']

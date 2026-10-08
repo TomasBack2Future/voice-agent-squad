@@ -61,6 +61,11 @@ request review, hand off, and finish through existing ledger checks. Controllers
 add ordinary fenced dispatch transitions and decisions. Observer credentials
 cannot invoke work mutations (existing read handlers may refresh internal caches).
 CLI-only dispatch subcommands remain CLI-only; HTTP does not invent MCP tools.
+`dispatch receiver-preflight` and MCP `squad_dispatch_receiver_preflight` expose
+native wake readiness. Remote polling alone does not qualify unattended dispatch.
+Until a real native wake path is integrated, use explicit `dispatch bind
+--supervised` for supervised assignments. Unattended binding remains fenced; a
+remote client cannot assert a server-local owner PID or wake kind.
 
 No remote arbitrary command attestation, filesystem upload, installation,
 recovery/takeover, resource-policy editing, worktree creation or verification

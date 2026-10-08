@@ -12,7 +12,7 @@ var writeCommands = strings.Fields("register new accept reject claim release don
 var controllerCommands = strings.Fields("dispatch terminal-events resources")
 var readTools = strings.Fields("squad_whoami squad_status squad_who squad_next squad_list_items squad_get_item squad_claim_inspect squad_history squad_stats squad_resources_check squad_terminal_decision_get")
 var writeTools = strings.Fields("squad_register squad_new squad_accept squad_reject squad_done squad_handoff squad_claim squad_release squad_blocked squad_say squad_ask squad_tick squad_progress squad_review_request squad_heartbeat squad_touch squad_untouch squad_terminal_events_poll squad_terminal_events_publish squad_terminal_events_ack squad_terminal_events_delivered")
-var controllerTools = strings.Fields("squad_dispatch_controller_bind squad_dispatch_controller_status squad_dispatch_continue squad_terminal_decision_set")
+var controllerTools = strings.Fields("squad_dispatch_controller_bind squad_dispatch_controller_status squad_dispatch_receiver_preflight squad_dispatch_continue squad_terminal_decision_set")
 
 func contains(xs []string, x string) bool {
 	for _, v := range xs {
@@ -61,7 +61,7 @@ func CheckCommand(c Client, args []string) error {
 			value = args[i+1]
 		}
 		switch key {
-		case "--repo", "--worktree", "--wait", "--tail", "--force", "--skip-verify", "--stdin":
+		case "--repo", "--worktree", "--wait", "--tail", "--force", "--skip-verify", "--stdin", "--owner-pid", "--wake-kind":
 			return fmt.Errorf("flag %s is local-only", key)
 		case "--worker-session":
 			if c.Role != "controller" && value != c.Session {
@@ -79,7 +79,7 @@ func CheckCommand(c Client, args []string) error {
 	}
 	// Operators define policy and perform takeover/recovery locally. Remote
 	// dispatch is restricted to the ordinary fenced lifecycle.
-	if args[0] == "dispatch" && (len(args) < 2 || !contains(strings.Fields("reserve attach bind list close continue controller-bind controller-status receiver-bind receiver-release handoff-get"), args[1])) {
+	if args[0] == "dispatch" && (len(args) < 2 || !contains(strings.Fields("reserve attach bind list close continue controller-bind controller-status receiver-preflight receiver-bind receiver-release handoff-get"), args[1])) {
 		return fmt.Errorf("dispatch operation not available remotely")
 	}
 	if args[0] == "resources" && (len(args) < 2 || args[1] != "check") {
@@ -127,7 +127,7 @@ func CheckMCP(c Client, body []byte) (notification bool, err error) {
 			}
 			expected := ""
 			switch strings.ToLower(k) {
-			case "repo", "repo_root", "worktree", "force", "skip_verify":
+			case "repo", "repo_root", "worktree", "force", "skip_verify", "owner_pid", "wake_kind":
 				return false, fmt.Errorf("argument %s is local-only", k)
 			case "worker_session":
 				if c.Role != "controller" {
