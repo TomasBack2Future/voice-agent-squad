@@ -159,6 +159,45 @@ func TestBindAfterSafeOwnIncarnationReplacementIsAccepted(t *testing.T) {
 	}
 }
 
+// Custody and readiness metadata commit atomically: replaying the same
+// incarnation refreshes metadata, a foreign incarnation is rejected, and a
+// failed bind leaves no partial pid-0 row behind.
+func TestBindReceiverReadyIsAtomicAndIdempotent(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	if _, err := s.Reserve(ctx, "DISPATCH-SQUAD-83", "github:o/r#83", "dispatcher", "", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BindController(ctx, "dispatcher", "dispatcher-native", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BindReceiverReady(ctx, "dispatcher", "dispatcher-native", "incarnation-1", 1, os.Getpid(), "asyncRewake"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BindReceiverReady(ctx, "dispatcher", "dispatcher-native", "incarnation-1", 1, os.Getpid(), "asyncRewake"); err != nil {
+		t.Fatalf("same-incarnation replay: %v", err)
+	}
+	if err := s.BindReceiverReady(ctx, "dispatcher", "dispatcher-native", "foreign", 1, os.Getpid(), "asyncRewake"); err == nil {
+		t.Fatal("foreign incarnation replaced owned receiver")
+	}
+	var pid, bound int
+	var wake string
+	if err := s.db.QueryRow(`SELECT owner_pid, bound_at, wake_kind FROM dispatch_controller_receivers`).Scan(&pid, &bound, &wake); err != nil {
+		t.Fatal(err)
+	}
+	if pid != os.Getpid() || bound == 0 || wake != "asyncRewake" {
+		t.Fatalf("metadata not committed atomically: pid=%d bound=%d wake=%s", pid, bound, wake)
+	}
+	if err := s.BindReceiverReady(ctx, "dispatcher", "dispatcher-native", "bad incarnation!", 1, os.Getpid(), "asyncRewake"); err == nil {
+		t.Fatal("invalid incarnation admitted")
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT count(*) FROM dispatch_controller_receivers WHERE incarnation='bad incarnation!'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("invalid bind left a row: count=%d err=%v", count, err)
+	}
+}
+
 // Supervised/manual mode stays possible but is never reported unattended-ready.
 func TestBindSupervisedModeIsAllowedButNotUnattendedReady(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)

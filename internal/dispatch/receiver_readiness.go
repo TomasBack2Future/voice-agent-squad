@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/zsiec/squad/internal/store"
 )
 
 // ErrReceiverNotReady rejects unattended asynchronous admission when the
@@ -136,19 +138,46 @@ func processAlive(pid int) bool {
 
 // BindReceiverReady records session-owned receiver custody with owner health and
 // wake-kind metadata. ownerPID must be the calling receiver owner's live pid;
-// wakeKind names the native wake path (e.g. "asyncRewake").
+// wakeKind names the native wake path (e.g. "asyncRewake"). Custody and
+// metadata commit atomically: a partial row is never left behind.
 func (s *Store) BindReceiverReady(ctx context.Context, actor, native, incarnation string, epoch int64, ownerPID int, wakeKind string) error {
+	if !controllerToken.MatchString(incarnation) || epoch < 1 {
+		return fmt.Errorf("exact receiver incarnation and epoch required")
+	}
 	if ownerPID <= 0 || !processAlive(ownerPID) {
 		return fmt.Errorf("receiver owner_pid must be a live process")
 	}
 	if wakeKind == "" {
 		return fmt.Errorf("receiver wake kind required")
 	}
-	if err := s.BindReceiver(ctx, actor, native, incarnation, epoch); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `UPDATE dispatch_controller_receivers
-		SET owner_pid=?, bound_at=?, wake_kind=? WHERE repo_id=? AND actor=? AND incarnation=?`,
-		ownerPID, s.now().Unix(), wakeKind, s.repoID, actor, incarnation)
-	return err
+	return store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `INSERT INTO dispatch_controller_receivers(repo_id,actor,native_session,epoch,incarnation,owner_pid,bound_at,wake_kind) SELECT repo_id,actor,native_session,epoch,?,?,?,? FROM dispatch_controller_bindings b WHERE repo_id=? AND actor=? AND native_session=? AND epoch=? AND NOT EXISTS(SELECT 1 FROM dispatch_retired_controllers f WHERE f.repo_id=b.repo_id AND f.actor=b.actor) ON CONFLICT(repo_id,actor) DO NOTHING`, incarnation, ownerPID, s.now().Unix(), wakeKind, s.repoID, actor, native, epoch)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 1 {
+			return nil
+		}
+		// Idempotent replay of the same incarnation refreshes owner metadata;
+		// a foreign incarnation still rejects it.
+		result, err = tx.ExecContext(ctx, `UPDATE dispatch_controller_receivers SET owner_pid=?, bound_at=?, wake_kind=?
+			WHERE repo_id=? AND actor=? AND native_session=? AND epoch=? AND incarnation=?
+			AND NOT EXISTS(SELECT 1 FROM dispatch_retired_controllers WHERE repo_id=? AND actor=?)`,
+			ownerPID, s.now().Unix(), wakeKind, s.repoID, actor, native, epoch, incarnation, s.repoID, actor)
+		if err != nil {
+			return err
+		}
+		n, err = result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("another receiver owns this controller")
+		}
+		return nil
+	})
 }
