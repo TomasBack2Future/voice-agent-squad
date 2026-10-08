@@ -82,7 +82,7 @@ func newDispatchAttachCmd() *cobra.Command {
 func newDispatchBindCmd() *cobra.Command {
 	var threadID string
 	var generation int64
-	var asJSON bool
+	var asJSON, supervised bool
 	cmd := &cobra.Command{
 		Use: "bind <RESERVATION-KEY>", Short: "Bind a created Worker task to the matching reservation generation", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,20 +91,31 @@ func newDispatchBindCmd() *cobra.Command {
 				return err
 			}
 			defer bc.Close()
-			res, err := dispatch.New(bc.db, bc.repoID, nil).Bind(cmd.Context(), args[0], bc.agentID, threadID, generation)
+			s := dispatch.New(bc.db, bc.repoID, nil)
+			var res *dispatch.Reservation
+			if supervised {
+				res, err = s.BindSupervised(cmd.Context(), args[0], bc.agentID, threadID, generation)
+			} else {
+				res, err = s.Bind(cmd.Context(), args[0], bc.agentID, threadID, generation)
+			}
 			if err != nil {
 				return err
 			}
 			if asJSON {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "bound %s generation=%d worker=%s\n", res.ItemID, res.Generation, res.WorkerThreadID)
+			mode := "unattended-ready"
+			if supervised {
+				mode = "supervised (not unattended-ready)"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "bound %s generation=%d worker=%s mode=%s\n", res.ItemID, res.Generation, res.WorkerThreadID, mode)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&threadID, "thread-id", "", "created Worker Codex task id")
 	cmd.Flags().Int64Var(&generation, "generation", 0, "reservation generation returned by reserve")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit JSON")
+	cmd.Flags().BoolVar(&supervised, "supervised", false, "explicit supervised/manual bind; never reported as unattended-ready")
 	_ = cmd.MarkFlagRequired("thread-id")
 	_ = cmd.MarkFlagRequired("generation")
 	return cmd

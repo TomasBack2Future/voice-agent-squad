@@ -322,6 +322,16 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 	if workerOutcome > 0 {
 		legacy = append(legacy, legacyRow{23, "worker_execution_outcome"})
 	}
+	var receiverReadiness int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('dispatch_controller_receivers') WHERE name IN ('owner_pid','bound_at','wake_kind')`).Scan(&receiverReadiness); err != nil {
+		return err
+	}
+	if receiverReadiness > 0 {
+		if receiverReadiness != 3 {
+			return fmt.Errorf("incomplete receiver readiness schema; refusing legacy bootstrap")
+		}
+		legacy = append(legacy, legacyRow{24, "receiver_readiness"})
+	}
 
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {

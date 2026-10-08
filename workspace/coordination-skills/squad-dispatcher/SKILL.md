@@ -348,6 +348,21 @@ blocker, not permission to inject input, start another Dispatcher, or ask the
 user to relay Worker messages. Receiver setup belongs to the session launcher;
 see the package's `terminal_receiver.py` and terminal-event command reference.
 
+## Standby-to-active admission preflight
+
+Controller custody does not prove delivery readiness. Before any asynchronous
+Worker launch/bind — and rechecked on first issue-local assignment, resume and
+handoff — run `squad dispatch receiver-preflight` for the exact
+ledger/actor/native/epoch. It qualifies the receiver incarnation, owner-pid
+health and native wake support, or a genuinely enabled, correctly targeted
+reconciliation fallback. When neither is available, refuse unattended-ready
+admission and follow the returned concrete repair action; never interpret a
+paused fallback as permission to enable it. Bootstrap `reserve` and
+`controller-bind` stay allowed (provisional) so the receiver can be created;
+only the Worker launch/bind step is gated. An explicitly supervised/manual
+launch uses `dispatch bind --supervised` and is never reported as
+unattended-ready.
+
 ## Worker workspace visibility
 
 For cmux Workers, apply the lifecycle-color contract in

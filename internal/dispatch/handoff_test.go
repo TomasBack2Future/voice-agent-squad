@@ -22,14 +22,15 @@ func handoffFixture(t *testing.T) (*Store, HandoffRequest, string) {
 	if _, err = s.Attach(ctx, "D-1", "TASK-1", "old", 1); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.BindController(ctx, "old", "old-native", 0); err != nil {
+		t.Fatal(err)
+	}
+	qualifyReceiverBound(t, s, ctx, "old", "old-native", "fixture-incarnation")
 	if _, err = s.Bind(ctx, "D-1", "old", "worker-native", 1); err != nil {
 		t.Fatal(err)
 	}
 	// Unrelated deployment/controller and Worker claims are never changed.
 	if _, err = s.db.Exec(`INSERT INTO agents(id,repo_id,display_name,started_at,last_tick_at,status) VALUES('new','repo-test','new',1,1,'working'),('other-new','repo-test','other',1,1,'working'); INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,generation,state) VALUES('repo-test','TASK-1','worker',9999999999,1,7,'held'); INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_session,delivered_at) VALUES('repo-test','old','event-1','D-1',1,'worker-native','TASK-1','blocked',9,9,'old-native',1)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.BindController(ctx, "old", "old-native", 0); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(ctx, false)

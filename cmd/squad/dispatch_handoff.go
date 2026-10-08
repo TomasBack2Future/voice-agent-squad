@@ -29,6 +29,30 @@ func dispatchControllerCommands() []*cobra.Command {
 	bind.Flags().Int64Var(&expected, "expected-epoch", 0, "Bootstrap epoch must be zero")
 	var actor, reservation string
 	var generation int64
+	preflightActor := ""
+	preflight := &cobra.Command{Use: "receiver-preflight", Short: "Qualify standby-to-active receiver readiness before asynchronous launch", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		selected := preflightActor
+		if selected == "" {
+			selected = bc.agentID
+		}
+		ready, err := dispatch.New(bc.db, bc.repoID, nil).ReceiverReady(cmd.Context(), selected)
+		if err != nil {
+			return err
+		}
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(ready); err != nil {
+			return err
+		}
+		if !ready.UnattendedReady {
+			return fmt.Errorf("dispatch: not unattended-ready: %s", ready.Repair)
+		}
+		return nil
+	}}
+	preflight.Flags().StringVar(&preflightActor, "actor", "", "Read-only selected actor; does not impersonate it")
 	status := &cobra.Command{Use: "controller-status", Short: "Read current legitimate controller actor/native/epoch", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		bc, err := bootClaimContext(cmd.Context())
 		if err != nil {
@@ -99,7 +123,7 @@ func dispatchControllerCommands() []*cobra.Command {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(receipt)
 	}}
 	get.Flags().StringVar(&requestID, "request-id", "", "Successful idempotency key")
-	return append([]*cobra.Command{bind, status, handoff, get}, dispatchReceiverCommands()...)
+	return append([]*cobra.Command{bind, status, preflight, handoff, get}, dispatchReceiverCommands()...)
 }
 
 func dispatchReceiverCommands() []*cobra.Command {
@@ -107,6 +131,8 @@ func dispatchReceiverCommands() []*cobra.Command {
 	for _, release := range []bool{false, true} {
 		var native, incarnation string
 		var epoch int64
+		var ownerPID int
+		var wakeKind string
 		name := "receiver-bind"
 		if release {
 			name = "receiver-release"
@@ -121,11 +147,16 @@ func dispatchReceiverCommands() []*cobra.Command {
 			if release {
 				return s.ReleaseReceiver(cmd.Context(), bc.agentID, native, incarnation, epoch)
 			}
+			if ownerPID > 0 || wakeKind != "" {
+				return s.BindReceiverReady(cmd.Context(), bc.agentID, native, incarnation, epoch, ownerPID, wakeKind)
+			}
 			return s.BindReceiver(cmd.Context(), bc.agentID, native, incarnation, epoch)
 		}}
 		cmd.Flags().StringVar(&native, "native-session", "", "Exact controller native")
 		cmd.Flags().StringVar(&incarnation, "incarnation", "", "Fresh receiver incarnation")
 		cmd.Flags().Int64Var(&epoch, "epoch", 0, "Exact controller epoch")
+		cmd.Flags().IntVar(&ownerPID, "owner-pid", 0, "Live receiver owner pid (readiness-gated bind)")
+		cmd.Flags().StringVar(&wakeKind, "wake-kind", "", "Native wake path, e.g. asyncRewake (readiness-gated bind)")
 		commands = append(commands, cmd)
 	}
 	return commands

@@ -39,7 +39,15 @@ def controller_receiver(config, env, state):
     journal = state / (config['native_session_id'] + '.receiver.json')
     lease = dict(actor=config['agent_id'], native=config['native_session_id'], epoch=current['epoch'], incarnation=config['incarnation'])
     def operation(action, owned):
-        call(action, '--native-session', owned['native'], '--epoch', str(owned['epoch']), '--incarnation', owned['incarnation'])
+        argv = [action, '--native-session', owned['native'], '--epoch', str(owned['epoch']), '--incarnation', owned['incarnation']]
+        if action == 'receiver-bind':
+            # Readiness-gated custody: owner health plus the native wake path
+            # (asyncRewake). Never inject callbacks through terminal input.
+            # owner_pid is required by the receiver config contract (the
+            # orphan-watch below already reads config['owner_pid']); a missing
+            # key fails closed with KeyError rather than binding pid 0.
+            argv += ['--owner-pid', str(config['owner_pid']), '--wake-kind', 'asyncRewake']
+        call(*argv)
     if journal.exists():
         previous = json.loads(journal.read_text())
         if previous.get('state') in ('binding', 'bound'):

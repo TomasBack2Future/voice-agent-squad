@@ -296,11 +296,21 @@ squad dispatch reserve DISPATCH-FEAT-501 \
   --source github:owner/repository#501 \
   --ttl 15m --json
 squad dispatch attach DISPATCH-FEAT-501 --item FEAT-501 --generation 1
+squad dispatch receiver-preflight
 squad dispatch bind DISPATCH-FEAT-501 --generation 1 --thread-id 0199abcd
 squad dispatch list --active --json
 squad dispatch close DISPATCH-FEAT-501 --generation 1 --state completed \
   --note "source task completed"
 ```
+
+Unattended `bind` is gated on receiver readiness: the exact
+ledger/actor/native/epoch must have a healthy receiver incarnation (live
+owner pid plus a reachable native wake endpoint) or an enabled, correctly
+targeted reconciliation fallback. Otherwise bind fails with a concrete
+repair action. Bootstrap `reserve`/`controller-bind` stay provisional; an
+explicitly supervised/manual launch uses `bind --supervised` and is never
+reported as unattended-ready. MCP exposes the same preflight as
+`squad_dispatch_receiver_preflight`.
 
 ### `squad handoff`
 
@@ -1048,9 +1058,11 @@ actors fail at the database protocol boundary. No owner-only administrative
 closure remains delegated to the retired actor.
 
 The successor reads `dispatch controller-status`, claims a session-owned receiver
-with `dispatch receiver-bind --native-session NATIVE --epoch EPOCH --incarnation ID`,
+with `dispatch receiver-bind --native-session NATIVE --epoch EPOCH --incarnation ID --owner-pid PID --wake-kind asyncRewake`,
 and releases exactly that receiver with `dispatch receiver-release` and the same
-arguments after actual helper/client join. Controller `terminal-events listen`,
+identity arguments after actual helper/client join. Before the first
+asynchronous Worker launch, `dispatch receiver-preflight` must report
+unattended-ready; recheck it on resume and handoff. Controller `terminal-events listen`,
 `delivered` and `ack` require `--native-session NATIVE`. Delivery incarnation stays
 separate; binding another receiver without release fails. New native actor/epoch
 readback is mandatory before activation, not evidence that delivery was handled.

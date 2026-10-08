@@ -43,7 +43,8 @@ class MuseWorkerNativeTests(unittest.TestCase):
         squad(c['dispatcher_agent_id'],'dispatch','controller-bind','--native-session',c['controller_native'])
         squad(c['dispatcher_agent_id'],'new','BUG','Native Muse isolated proof','--ready')
         squad(c['dispatcher_agent_id'],'dispatch','attach','QUALIFY-MUSE','--item','BUG-001','--generation','1')
-        squad(c['dispatcher_agent_id'],'dispatch','bind','QUALIFY-MUSE','--thread-id',c['native_session_id'],'--generation','1')
+        # Qualification runs supervised; unattended bind is receiver-gated.
+        squad(c['dispatcher_agent_id'],'dispatch','bind','QUALIFY-MUSE','--thread-id',c['native_session_id'],'--generation','1','--supervised')
         squad(c['agent_id'],'register','--as',c['agent_id']);squad(c['agent_id'],'claim','BUG-001','--long')
         profile={'schema_version':'agent-loop.project-profile.v1','id':'muse-qualification','version':1,'repository':'TomasBack2Future/voice-agent-squad','context_by_phase':{},'gates':{},'resources':{},'risk_probes':[]}
         native.atomic(root/'profile.json',profile)
