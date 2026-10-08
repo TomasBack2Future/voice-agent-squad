@@ -1,6 +1,8 @@
 """No network, credentials, systemd, or live state in updater regression tests."""
 import importlib.util
 import json
+import os
+import stat
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,6 +15,25 @@ spec.loader.exec_module(updater)
 
 
 class UpdateTests(unittest.TestCase):
+    def test_release_remains_executable_by_service_under_private_umask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root/'candidate'
+            binary.write_text('#!/bin/sh\nexit 0\n')
+            binary.chmod(0o700)
+            target = root/'releases'/'qualified'
+            previous = os.umask(0o077)  # Installed systemd updater's UMask.
+            try:
+                updater.stage_release(target, binary, {'sha': 'qualified'})
+            finally:
+                os.umask(previous)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE((target/'squad').stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE((target/'manifest.json').stat().st_mode), 0o600)
+            with self.assertRaisesRegex(RuntimeError, 'already attempted'):
+                updater.stage_release(target, binary, {'sha': 'replacement'})
+            self.assertEqual(json.loads((target/'manifest.json').read_text())['sha'], 'qualified')
+
     def test_exact_archive_ignores_dirty_and_untracked_build_input(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, output = Path(tmp)/'source', Path(tmp)/'output'

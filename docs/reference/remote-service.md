@@ -131,6 +131,11 @@ database and receipts, atomically selects the binary, and checks its reported SH
 The timer checks every five minutes. Main ahead of CI remains pending; store
 changes require explicit compatibility admission and never auto-downgrade schema.
 The installed updater itself is root-owned and does not self-update from Git.
+Its private umask keeps state and manifests protected; immutable release
+directories and binaries are explicitly 0755 so the service user can execute
+them. When systemd does not inherit the operator's home/config environment,
+set `GH_CONFIG_DIR` in a host-specific updater drop-in to the existing operator
+configuration directory. Do not copy credentials into source or unit files.
 
 On startup failure the updater restores the previous binary only, never rewinding
 state that might already contain accepted writes. Preserve the failed manifest

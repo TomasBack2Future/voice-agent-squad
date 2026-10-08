@@ -58,6 +58,18 @@ def main():
         adopt()
 
 
+def stage_release(target, binary, manifest):
+    target.mkdir(parents=True, exist_ok=True)
+    if (target / 'manifest.json').exists():
+        raise RuntimeError('Candidate already attempted; operator reconciliation required')
+    shutil.copy2(binary, target / 'squad')
+    # The root updater runs with UMask=0077, while the runtime is unprivileged.
+    # Only immutable executable artifacts are public; state/manifests stay private.
+    target.chmod(0o755)
+    (target / 'squad').chmod(0o755)
+    (target / 'manifest.json').write_text(json.dumps(manifest))
+
+
 def adopt():
     build_run('git', 'fetch', '--prune', 'origin', 'main')
     sha = build_run('git', 'rev-parse', 'origin/main')
@@ -93,12 +105,9 @@ def adopt():
                   '-o', str(candidate / 'squad'), './cmd/squad', cwd=clean)
         build_run('python3', 'scripts/test_remote_service.py', str(candidate / 'squad'), cwd=clean)
     target = ROOT / 'releases' / sha
-    target.mkdir(parents=True, exist_ok=True)
-    if (target / 'manifest.json').exists():
-        raise RuntimeError('Candidate already attempted; operator reconciliation required')
-    shutil.copy2(candidate / 'squad', target / 'squad')
-    (target / 'manifest.json').write_text(json.dumps({'sha': sha, 'ci_run': qualified[0]['databaseId'],
-                                                    'previous': old, 'created_at': time.time()}))
+    stage_release(target, candidate / 'squad',
+                  {'sha': sha, 'ci_run': qualified[0]['databaseId'],
+                   'previous': old, 'created_at': time.time()})
     run('systemctl', 'stop', 'squad-service')
     activated = False
     try:
