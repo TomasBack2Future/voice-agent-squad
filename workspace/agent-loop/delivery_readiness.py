@@ -296,6 +296,36 @@ def verify_workflow_inventory(snapshot, assignment):
         raise ValidationError('trigger chain omits an actual committed event')
 
 
+def closure_plan(snapshot, assignment, c, business_trigger=None, goal_complete=False, config_changed=False):
+    """Express Issue closure separately from user-goal completion.
+
+    Evaluates the readiness snapshot, then reports whether the Issue is
+    complete, whether the user goal is complete, and the exact next step
+    with its owner. A missing business trigger (e.g. the canary batch that
+    exercises the real recovery path) or a changed effective config (e.g.
+    a stale 1/1 reference now actually 32/64) keeps the goal open with a
+    concrete follow-up instead of a blanket re-approval or redeploy.
+    """
+    result = evaluate(snapshot, assignment, c)
+    issue_complete = result['phase_gates']['closure']['ready']
+    if goal_complete and business_trigger and not config_changed:
+        return {'issue_complete': issue_complete, 'goal_complete': True,
+                'next_step': 'none', 'owner': 'none', 'stale_config': ''}
+    if not business_trigger:
+        return {'issue_complete': issue_complete, 'goal_complete': False,
+                'next_step': 'prepare and authorize one canary batch that triggers the actual post-release business path',
+                'owner': c.get('agent_id', 'worker'),
+                'stale_config': 'effective config changed since release instruction (e.g. 1/1 now 32/64); re-verify before follow-up' if config_changed else ''}
+    if config_changed:
+        return {'issue_complete': issue_complete, 'goal_complete': False,
+                'next_step': 're-verify plan against current effective config, then rerun affected checks only',
+                'owner': c.get('agent_id', 'worker'),
+                'stale_config': 'release instruction references stale 1/1; actual is 32/64'}
+    return {'issue_complete': issue_complete, 'goal_complete': False,
+            'next_step': 'complete remaining goal assertions; Issue closure alone does not prove them',
+            'owner': c.get('agent_id', 'worker'), 'stale_config': ''}
+
+
 def verify_admission(assignment, c, env, readiness):
     if not c.get('delivery_readiness_file'):
         return

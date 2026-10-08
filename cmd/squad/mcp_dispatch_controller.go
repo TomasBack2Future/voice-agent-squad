@@ -28,9 +28,11 @@ func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRo
 		}
 		return dispatch.New(db, repoID, nil).BindController(ctx, actor, a.Native, a.Epoch)
 	}})
-	srv.Register(mcp.Tool{Name: "squad_dispatch_controller_status", Description: "Read current legitimate controller native/epoch; no impersonation.", InputSchema: json.RawMessage(`{"type":"object","properties":{"actor":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+	srv.Register(mcp.Tool{Name: "squad_dispatch_controller_status", Description: "Read current legitimate controller native/epoch; no impersonation.", InputSchema: json.RawMessage(`{"type":"object","properties":{"actor":{"type":"string"},"reservation":{"type":"string"},"generation":{"type":"integer","minimum":1}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
-			Actor string `json:"actor"`
+			Actor      string `json:"actor"`
+			ReserveKey string `json:"reservation"`
+			Generation int64  `json:"generation"`
 		}
 		if err := json.Unmarshal(raw, &a); err != nil {
 			return nil, err
@@ -45,7 +47,11 @@ func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRo
 				return nil, err
 			}
 		}
-		return dispatch.New(db, repoID, nil).Controller(ctx, a.Actor)
+		s := dispatch.New(db, repoID, nil)
+		if a.ReserveKey != "" {
+			return s.ControllerForReservation(ctx, a.Actor, a.ReserveKey, a.Generation)
+		}
+		return s.Controller(ctx, a.Actor)
 	}})
 	srv.Register(mcp.Tool{Name: "squad_dispatch_handoff", Description: "Old-owner initiated exact-inventory CAS. Transfers controller ownership and unhandled recipient routing atomically; never transfers Worker or ENV claims.", InputSchema: json.RawMessage(`{"type":"object","required":["request"],"properties":{"request":{"type":"object","required":["request_id","expected_epoch","old_native","new_actor","new_native","reservations"],"properties":{"request_id":{"type":"string"},"expected_epoch":{"type":"integer","minimum":1},"old_native":{"type":"string"},"new_actor":{"type":"string"},"new_native":{"type":"string"},"reservations":{"type":"array","minItems":1,"maxItems":1000,"items":{"type":"object"}}},"additionalProperties":false}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {

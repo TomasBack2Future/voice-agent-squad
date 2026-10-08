@@ -119,6 +119,30 @@ func TestDecisionAmbiguousCustodyDoesNotWriteOrWake(t *testing.T) {
 	}
 }
 
+// TASK-028 follow-up: a self-reserved release owner decides its own
+// assignment; the queue Dispatcher cannot CAS a decision on a reservation
+// it does not own.
+func TestSelfReservedReleaseOwnerDecidesOwnAssignment(t *testing.T) {
+	s := releaseFixture(t, "production:studio:bfd4e18c:20261006", "deployer-agent", "TASK-028", "deployer")
+	s.Recipient = ""
+	ctx := context.Background()
+	if _, e := s.DB.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo',3,'deployer-agent','TASK-028','say','adopt self reservation','[]','normal')`); e != nil {
+		t.Fatal(e)
+	}
+	var outcome int64
+	if e := s.DB.QueryRow("SELECT max(id) FROM messages").Scan(&outcome); e != nil {
+		t.Fatal(e)
+	}
+	q := DecisionRequest{Reservation: "production:studio:bfd4e18c:20261006", Generation: 1, WorkerSession: "deployer", OutcomeID: outcome, Action: "proceed"}
+	if _, e := s.Decide(ctx, "dispatcher", q); !errors.Is(e, ErrInvalidEvent) {
+		t.Fatalf("queue dispatcher decided foreign self-reservation: %v", e)
+	}
+	d, e := s.Decide(ctx, "deployer-agent", q)
+	if e != nil || d.Revision != 1 {
+		t.Fatalf("self-reserver cannot decide own assignment: %v %v", d, e)
+	}
+}
+
 func TestConcurrentDecisionsHaveOneWinner(t *testing.T) {
 	s := fixture(t)
 	s.Recipient = ""

@@ -337,6 +337,46 @@ func (sw *Sweeper) Sweep(ctx context.Context) ([]Finding, error) {
 		return nil, err
 	}
 
+	// Old dispatch state is diagnosed, never auto-cleaned: a dispatched
+	// reservation with no recent activity, and its unacknowledged receipts,
+	// route to the owning reserver for reconciliation. Terminal states and
+	// fresh activity stay silent.
+	oldRows, err := sw.db.QueryContext(ctx, `SELECT item_id,reserved_by,canonical_item_id,worker_thread_id FROM dispatch_reservations
+ WHERE repo_id=? AND state='dispatched' AND updated_at<?`, sw.repoID, now-sw.staleSec)
+	if err != nil {
+		return nil, err
+	}
+	for oldRows.Next() {
+		var key, owner, item, worker string
+		if err := oldRows.Scan(&key, &owner, &item, &worker); err != nil {
+			oldRows.Close()
+			return nil, err
+		}
+		findings = append(findings, Finding{
+			Severity: SeverityWarn,
+			Code:     "stale_dispatch",
+			Message:  "old dispatched reservation: " + key + " (owner=" + owner + " item=" + item + " worker=" + worker + ")",
+			Fix:      owner + " reconciles this reservation: verify Worker outcome, ack handled events, then `squad dispatch close " + key + " --generation N --state completed|failed|cancelled`",
+		})
+		var unacked int
+		if err := sw.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND processed_at=0`, sw.repoID, key).Scan(&unacked); err != nil {
+			oldRows.Close()
+			return nil, err
+		}
+		if unacked > 0 {
+			findings = append(findings, Finding{
+				Severity: SeverityWarn,
+				Code:     "unacked_terminal_receipt",
+				Message:  fmt.Sprintf("reservation %s has %d unacknowledged terminal receipt(s); delivery is not handling", key, unacked),
+				Fix:      "recipient verifies live outcome, then `squad terminal-events ack EVENT_ID --note RECONCILIATION_REFERENCE`",
+			})
+		}
+	}
+	oldRows.Close()
+	if err := oldRows.Err(); err != nil {
+		return nil, err
+	}
+
 	return findings, nil
 }
 

@@ -152,14 +152,11 @@ def check_effective(effective, c):
         from codex_stdio_contract import SELECTION
         if any(effective.get(k) != v for k, v in SELECTION.items()):
             raise ValidationError('stdio effective selection or Fast tier mismatch')
-    sandbox = {'read-only': 'readOnly', 'workspace-write': 'workspaceWrite',
-               'danger-full-access': 'dangerFullAccess'}[c['sandbox']]
-    if (effective.get('model') != c['model'] or effective.get('reasoningEffort') != c['effort']
-            or effective.get('modelProvider') != c['provider']
-            or effective.get('approvalPolicy') != c['approval_policy']
-            or effective.get('approvalsReviewer') != c['approvals_reviewer']
-            or effective.get('sandbox', {}).get('type') != sandbox):
-        raise ValidationError('effective runtime permissions/model differ from selected launch policy')
+    from launch_selection import check_codex_resume
+    try:
+        check_codex_resume({key: c[key] for key in ('sandbox', 'approval_policy', 'approvals_reviewer', 'model', 'effort', 'provider')}, effective)
+    except ValueError as error:
+        raise ValidationError('effective runtime permissions/model differ from selected launch policy: ' + str(error)) from error
 
 
 def server_identity(c):

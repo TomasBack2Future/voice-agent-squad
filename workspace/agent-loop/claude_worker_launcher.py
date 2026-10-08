@@ -15,7 +15,24 @@ import time
 import uuid
 import terminal_receiver
 from claude_workspace_trust import workspace_trust
-from human_authorization import authorization, prompt_context
+from human_authorization import authorization, effective_grant, prompt_context
+
+
+def check_receipt_authorization(c, assignment, current_revision=0, requested=None, holds=None):
+    """Build the check receipt's authorization field with effective grant.
+
+    Reuses the existing receipt for routine operations without new
+    approval; a revoked receipt, active hold or new-scope request still
+    fails closed via effective_grant.
+    """
+    base = authorization(c, assignment)
+    if base.get('status') != 'present':
+        return base
+    try:
+        grant = effective_grant(c, assignment, current_revision, requested=requested, holds=holds)
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
+    return dict(base, effective_grant=grant)
 
 from validate_context_package import ROOT, ValidationError, validate_file
 from worker_preflight import check_profile, check_worktree
@@ -238,6 +255,27 @@ def selection_arguments(c):
     if bool(c.get('model')) != bool(c.get('effort')):
         raise ValidationError('model and effort must be supplied together')
     return ['--model', c['model'], '--effort', c['effort']] if c.get('model') else []
+
+
+def resume_arguments(c, effective):
+    """Resume the SAME native session; never create a replacement session.
+
+    Reuses the bound native id with the selected permission/model/effort,
+    then the caller verifies the effective reply. A drifted effective
+    selection fails closed via check_resume_effective.
+    """
+    check_resume_effective({'model': c.get('model'), 'effort': c.get('effort')},
+                           {'model': effective.get('model'), 'effort': effective.get('effort')})
+    return ['--resume', c['native_session_id'], '--permission-mode', c['permission_mode'],
+            *selection_arguments(c)]
+
+
+def check_resume_effective(selected, effective):
+    """Reject a resumed session whose effective selection drifted."""
+    for name in ('model', 'effort'):
+        if (selected.get(name) or None) != (effective.get(name) or None):
+            raise ValidationError('resumed %s differs from selected; no silent repair' % name)
+    return True
 
 
 def main() -> int:

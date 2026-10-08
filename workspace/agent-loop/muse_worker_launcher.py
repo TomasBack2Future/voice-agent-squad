@@ -58,7 +58,25 @@ def config_file(path):
         if (workspace / name).exists():
             raise ValidationError('unmediated project extensions require separate qualification: ' + name)
     c['reasoning_effort'], c['reasoning_effort_source'] = resolve_effort(c)
+    c['ui_mode'], c['ui_mode_source'] = resolve_ui_mode(c)
     return c
+
+
+def resolve_ui_mode(c):
+    """Resolve explicit ui_mode with provenance; default stays live-view.
+
+    live-view is a passive display on the mediated headless host, never an
+    interactive TUI. An explicit interactive request keeps its label so the
+    caller must verify a visible selected surface; it never silently
+    becomes a log view.
+    """
+    from launch_selection import resolve_launch
+    task = {'ui_mode': c['ui_mode']} if c.get('ui_mode') else {}
+    resolved = resolve_launch(task, c['settings_file'], 'muse')
+    ui_mode, source = resolved['ui_mode']
+    if source == 'default':
+        return 'live-view', 'default'
+    return ui_mode, ('launch-config' if source == 'task' else source)
 
 
 def check_launch(assignment, config_path, resume=False):

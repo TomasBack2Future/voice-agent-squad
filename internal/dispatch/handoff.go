@@ -45,6 +45,20 @@ func (s *Store) Controller(ctx context.Context, actor string) (ControllerBinding
 	return b, err
 }
 
+// ControllerForReservation projects the legitimate controller for one exact
+// live reservation scope. The binding comes from the real ledger custody:
+// the actor must hold the reservation's current generation and must not be
+// retired. A stale file or a guess from another scope never projects.
+func (s *Store) ControllerForReservation(ctx context.Context, actor, key string, generation int64) (ControllerBinding, error) {
+	var b ControllerBinding
+	err := s.db.QueryRowContext(ctx, `SELECT b.actor,b.native_session,b.epoch FROM dispatch_controller_bindings b
+ JOIN dispatch_reservations r ON r.repo_id=b.repo_id AND r.reserved_by=b.actor
+ WHERE b.repo_id=? AND b.actor=? AND r.item_id=? AND r.generation=? AND r.state IN ('reserved','dispatched')
+ AND NOT EXISTS(SELECT 1 FROM dispatch_retired_controllers f WHERE f.repo_id=b.repo_id AND f.actor=b.actor)`,
+		s.repoID, actor, key, generation).Scan(&b.Actor, &b.Native, &b.Epoch)
+	return b, err
+}
+
 // BindController bootstraps a legacy owner only while its complete cohort remains
 // owned by that actor. Caller/installer independently verifies native identity.
 // Once bound, the native cannot be changed; handoff creates a distinct actor.

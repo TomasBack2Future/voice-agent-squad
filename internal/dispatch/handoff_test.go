@@ -39,6 +39,42 @@ func handoffFixture(t *testing.T) (*Store, HandoffRequest, string) {
 	request := HandoffRequest{RequestID: "handoff-1", ExpectedEpoch: 1, OldNative: "old-native", NewActor: "new", NewNative: "new-native", Reservations: rows}
 	return s, request, "event-1"
 }
+
+// Controller projection must derive from the real ledger binding and its
+// explicit scope: after handoff, the retired actor projects nothing while
+// the successor projects its bound native/epoch.
+func TestControllerProjectionDerivesFromLedgerBinding(t *testing.T) {
+	s, q, _ := handoffFixture(t)
+	ctx := context.Background()
+	before, err := s.Controller(ctx, "old")
+	if err != nil || before.Native != "old-native" || before.Epoch != 1 {
+		t.Fatalf("bound controller not projected: %v %v", before, err)
+	}
+	if _, err = s.Controller(ctx, "nobody"); err == nil {
+		t.Fatal("unbound actor projected a controller")
+	}
+	if _, err = s.Handoff(ctx, "old", q); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Controller(ctx, "old"); err == nil {
+		t.Fatal("retired controller still projected")
+	}
+	after, err := s.Controller(ctx, "new")
+	if err != nil || after.Native != "new-native" || after.Epoch != 2 {
+		t.Fatalf("successor controller not projected: %v %v", after, err)
+	}
+	scoped, err := s.ControllerForReservation(ctx, "new", "D-1", 1)
+	if err != nil || scoped.Native != "new-native" || scoped.Epoch != 2 {
+		t.Fatalf("reservation-scoped controller not projected: %v %v", scoped, err)
+	}
+	if _, err = s.ControllerForReservation(ctx, "old", "D-1", 1); err == nil {
+		t.Fatal("retired actor projected for live reservation")
+	}
+	if _, err = s.ControllerForReservation(ctx, "new", "D-1", 2); err == nil {
+		t.Fatal("wrong generation projected a controller")
+	}
+}
+
 func TestControllerHandoffAtomicRoutingAndOldOwnerWriteExclusion(t *testing.T) {
 	s, q, id := handoffFixture(t)
 	ctx := context.Background()

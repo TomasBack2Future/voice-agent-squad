@@ -163,6 +163,26 @@ class CodexControlPlaneTests(unittest.TestCase):
         # An unloaded/stopped owner must never be instantiated by the receiver.
         self.assertEqual(sum(m == 'thread/resume' for m,_ in self.rpc.calls), 1)
 
+    def test_resume_compares_against_selected_not_persisted_policy(self):
+        # Reproduces the 2026-10-05 failure: resume ran under a stale
+        # workspace-write/on-request readback while Full Access was selected.
+        selected = dict(self.c, sandbox='danger-full-access', approval_policy='never',
+                        approvals_reviewer='user')
+        self.path.write_text(json.dumps(selected))
+        config = launcher.config_file(self.path)
+        stale = dict(model=config['model'], modelProvider='openai', reasoningEffort='medium',
+                     approvalPolicy='on-request', approvalsReviewer='auto_review',
+                     sandbox={'type': 'workspaceWrite'})
+        original = self.rpc.call
+        def call(method, params):
+            if method == 'thread/resume':
+                self.rpc.calls.append((method, params))
+                return copy.deepcopy(stale)
+            return original(method, params)
+        with patch.object(self.rpc, 'call', side_effect=call):
+            with self.assertRaisesRegex(ValidationError, 'selected'):
+                launcher.live_target(self.rpc, config, self.root)
+
     def test_model_effort_permission_mismatch_is_fail_closed(self):
         for key, value in [('model','other'), ('modelProvider','other'), ('reasoningEffort','high'),
                            ('approvalPolicy','never'), ('approvalsReviewer','user'),

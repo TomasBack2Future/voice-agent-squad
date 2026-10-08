@@ -201,6 +201,13 @@
         "quiet"
       ],
       "default": "live"
+    },
+    "ui_mode": {
+      "enum": [
+        "interactive",
+        "live-view",
+        "headless"
+      ]
     }
   }
 }

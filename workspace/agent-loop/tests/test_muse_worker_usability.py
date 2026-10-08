@@ -45,6 +45,18 @@ class MuseUsabilityTests(unittest.TestCase):
         self.assertNotIn('FOREIGN', view.stream.getvalue())
         self.assertNotIn('PRIVATE', view.stream.getvalue())
 
+    def test_ui_mode_defaults_to_live_view_and_keeps_interactive_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / 'settings.json'
+            settings.write_text('{}')
+            self.assertEqual(launch.resolve_ui_mode({'settings_file': str(settings)}),
+                             ('live-view', 'default'))
+            settings.write_text(json.dumps({'ui_mode': 'headless'}))
+            self.assertEqual(launch.resolve_ui_mode({'settings_file': str(settings)}),
+                             ('headless', 'preference'))
+            self.assertEqual(launch.resolve_ui_mode({'settings_file': str(settings), 'ui_mode': 'interactive'}),
+                             ('interactive', 'launch-config'))
+
     def test_view_bounds_output_and_broken_view_does_not_stop_custody(self):
         view = launch.LiveView('native', stream=io.StringIO())
         view.observe({'method': 'item/completed', 'params': {'sessionId': 'native', 'item': {

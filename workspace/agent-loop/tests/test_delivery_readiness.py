@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from delivery_readiness import evaluate, selected_readiness, trigger_lane, verify_admission, verify_workflow_inventory, workflow_facts
+from delivery_readiness import closure_plan, evaluate, selected_readiness, trigger_lane, verify_admission, verify_workflow_inventory, workflow_facts
 from validate_context_package import ValidationError
 from claude_worker_launcher import check_resources
 
@@ -215,6 +215,22 @@ class DeliveryReadinessTests(unittest.TestCase):
         with self.assertRaises(ValidationError):evaluate(self.s,self.a,self.c)
         self.s['outcome']='issue-closed'
         with self.assertRaises(ValidationError):evaluate(self.s,self.a,self.c)
+
+    def test_closure_without_business_trigger_reports_next_step_and_owner(self):
+        self.s['outcome'] = 'issue-closed'
+        plan = closure_plan(self.s, self.a, self.c, business_trigger=None,
+                            goal_complete=False, config_changed=True)
+        self.assertEqual(plan['issue_complete'], True)
+        self.assertEqual(plan['goal_complete'], False)
+        self.assertIn('canary', plan['next_step'])
+        self.assertEqual(plan['owner'], 'worker')
+        self.assertIn('1/1', plan['stale_config'])
+
+    def test_closed_issue_with_complete_goal_needs_no_followup(self):
+        plan = closure_plan(self.s, self.a, self.c, business_trigger='canary:batch-1',
+                            goal_complete=True, config_changed=False)
+        self.assertEqual(plan['next_step'], 'none')
+        self.assertEqual(plan['owner'], 'none')
 
 
 if __name__=='__main__':unittest.main()

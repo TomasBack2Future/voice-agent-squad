@@ -458,6 +458,48 @@ func TestMarkStaleAgents_FlipsStatus(t *testing.T) {
 	}
 }
 
+// Old dispatch state must be diagnosable without touching live custody:
+// a dispatched reservation past its visible activity, its unacknowledged
+// receipts, and a held claim on a closed item each surface as a finding
+// with an owner-routed fix. Diagnosis never releases or transfers.
+func TestSweep_DiagnosesOldReservationReceiptAndClaim(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	now := time.Now().Unix()
+	repo := "repo-test"
+	if _, err := db.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?, 'DISPATCH-OLD','github:o/r#9','dispatcher',?,?,0,'dispatched',1,'old-native','note','TASK-OLD')`, repo, now-90000, now-90000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id) VALUES(?, 'dispatcher','worker-terminal-v1/DISPATCH-OLD/1/old-native/blocked/7','DISPATCH-OLD',1,'old-native','TASK-OLD','blocked',7,7)`, repo); err != nil {
+		t.Fatal(err)
+	}
+	registerAgent(t, db, repo, "holder", now)
+	insertClaim(t, db, repo, "TASK-OLD", "holder", now-100, 0)
+	sw := NewWithClock(db, repo, emptyItems{}, func() time.Time { return time.Unix(now, 0) })
+	findings, err := sw.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := joinFindings(findings)
+	for _, want := range []string{"DISPATCH-OLD", "unacknowledged terminal receipt", "TASK-OLD"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing diagnosis for %s in %q", want, joined)
+		}
+	}
+	if _, err := db.Exec(`UPDATE dispatch_reservations SET state='completed' WHERE repo_id=?`, repo); err != nil {
+		t.Fatal(err)
+	}
+	findings, err = sw.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range findings {
+		if strings.Contains(f.Message, "DISPATCH-OLD") {
+			t.Fatalf("terminal reservation still diagnosed: %q", f.Message)
+		}
+	}
+}
+
 func TestStripLineSuffix(t *testing.T) {
 	cases := map[string]string{
 		"path/foo.go:42":  "path/foo.go",
