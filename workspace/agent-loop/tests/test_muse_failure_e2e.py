@@ -365,6 +365,50 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual(seen['episode_id'], 'ep-2')
         self.assertEqual(seen['sequence'], 2)
 
+    def test_boundary_consumed_once_t1_to_t5_real_backend(self):
+        """D84-12 full sequence on the real backend: exactly 2 events.
+
+        t1 fails (pending), t2 healthy flush fails, t3 replays ep-1 to
+        commit but ALL ep-2 submits fail (lost replies), t4/t5 fail with
+        no further healthy turn. The t2 boundary closes ep-1 once and is
+        cleared; t4 confirms ep-2 open (no ep-3), t5 dedupes.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        phase = {'fail_all': True}
+        original = hook._submit
+        def script(body, config, env, observation):
+            if phase['fail_all']:
+                raise subprocess.CalledProcessError(7, ['isolated-submit-transport-fixture'])
+            if phase.get('fail_ep2') and observation.get('episode_id') == 'ep-2':
+                # All in-call ep-2 submits lose their replies at t3.
+                raise subprocess.CalledProcessError(7, ['isolated-submit-transport-fixture'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            phase['fail_all'] = False
+            phase['fail_ep2'] = True
+            self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
+            phase['fail_ep2'] = False
+            pending = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+            row = pending['D-E2E|1|e2e-native']
+            self.assertTrue(row['pending'])
+            self.assertEqual(row['episode_id'], 'ep-2')
+            self.assertNotIn('healthy_boundary', row)
+            self.assertEqual(hook.run(self.config, self._hook_event('t4')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
+        finally:
+            hook._submit = original
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0][0].endswith('/ep-1'), rows[0][0])
+        self.assertTrue(rows[1][0].endswith('/ep-2'), rows[1][0])
+        self.assertIn('turn=t1 request=request-t1', rows[0][1])
+        self.assertIn('turn=t3 request=request-t3', rows[1][1])
+
     def test_commit_before_interrupt_keeps_boundary_real_backend(self):
         """D84-11 finding 2 on the real backend.
 

@@ -325,6 +325,50 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(seen['episode_id'], 'ep-2')
         self.assertEqual(seen['sequence'], 2)
 
+    def test_boundary_consumed_once_never_inherited_by_new_pending(self):
+        # D84-12: t1 fails (pending), t2 healthy flush fails, t3 replay
+        # confirms ep-1 but ALL ep-2 submits fail (lost replies), t4/t5
+        # fail with no further healthy turn. The t2 boundary belongs to
+        # ep-1 only: it is consumed once to close ep-1 and must NOT be
+        # inherited by the ep-2 pending row. t4 confirms ep-2 open (no
+        # ep-3), t5 dedupes. Exactly the ep-1 and ep-2 keys are used.
+        submits = []
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            n = len(submits)
+            if n <= 2:
+                raise subprocess.TimeoutExpired(argv, 5)
+            if n == 4:
+                # t3's in-call ep-2 submit: all replies lost.
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            healthy = payload(turn_id='t2', status='completed', error='')
+            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            data = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
+            pending = data['DISPATCH-1|1|worker-native']
+            self.assertTrue(pending['pending'])
+            self.assertEqual(pending['episode_id'], 'ep-2')
+            self.assertNotIn('healthy_boundary', pending)
+            fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
+            self.assertEqual(fourth['episode_id'], 'ep-2')
+            fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
+            self.assertEqual(fifth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-2', 'ep-2'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-1', bodies[2])
+        self.assertIn('turn=t3 request=req-3', bodies[3])
+        self.assertIn('turn=t3 request=req-3', bodies[4])
+
     def test_orphan_pending_without_snapshot_replays_and_keeps_boundary(self):
         # D84-11 finding 2: the process dies after _store_pending but
         # before any snapshot write. The orphan frozen payload must be

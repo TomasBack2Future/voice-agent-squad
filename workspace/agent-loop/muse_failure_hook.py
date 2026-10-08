@@ -614,9 +614,12 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
     """Close a replay-confirmed episode at its healthy boundary and publish.
 
     The old episode is marked closed with its recorded boundary turn; the
-    live failure becomes a NEW episode under the next key with its own
-    immutable payload. On submit failure the new episode stays pending and
-    the boundary is retained, so a later success still closes correctly.
+    boundary is CONSUMED exactly once here and then cleared. The live
+    failure becomes a NEW episode under the next key with its own
+    immutable payload. On submit failure the new episode stays pending
+    WITHOUT the boundary (D84-12): the boundary belongs only to the
+    episode it closed, so a later replay of the new episode confirms it
+    open normally instead of spawning a spurious further episode.
     """
     data = _snapshots(config)
     seen = data.get(key, {})
@@ -624,6 +627,7 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
     seen['pending'] = False
     seen['closed_at'] = int(time.time())
     seen['closed_by_turn'] = boundary
+    seen.pop('healthy_boundary', None)
     data[key] = seen
     _save(config, data)
     episode_id = 'ep-%d' % (seen.get('sequence', 0) + 1)
@@ -644,8 +648,8 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
     failed = _snapshots(config)
     row = failed.get(key, {})
     row.update({'episode_open': False, 'pending': True, 'episode_id': episode_id,
-                'first_observed_at': row.get('first_observed_at', live['observed_at']),
-                'healthy_boundary': boundary})
+                'first_observed_at': row.get('first_observed_at', live['observed_at'])})
+    row.pop('healthy_boundary', None)
     failed[key] = row
     _save(config, failed)
     raise last
