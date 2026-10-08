@@ -316,6 +316,100 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertIn('turn=t1 request=req-1', bodies[3])
         self.assertIn('turn=t4 request=req-4', bodies[4])
 
+    def test_post_boundary_outage_survives_offline_replay_and_healthy_recovery(self):
+        # D84-13: t1 fails (offline, pending), t2 healthy flush fails
+        # (boundary recorded), t3 fails while still offline (replay of
+        # ep-1 fails too). Transport recovers at t4 healthy: the old
+        # episode commits AND the post-boundary t3 outage is preserved
+        # and committed as ep-2. t5 dedupes. Exactly ep-1 then ep-2.
+        submits = []
+        online = {'yes': False}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            healthy2 = payload(turn_id='t2', status='completed', error='')
+            self.assertFalse(hook.note_progress(healthy2, self.cfg, hook._hook_env(self.cfg)))
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            online['yes'] = True
+            healthy4 = payload(turn_id='t4', status='completed', error='')
+            self.assertTrue(hook.note_progress(healthy4, self.cfg, hook._hook_env(self.cfg)))
+            fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
+            self.assertEqual(fifth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-1', bodies[0])
+        self.assertIn('turn=t3 request=req-3', bodies[1])
+
+    def test_flush_close_clears_boundary_later_outage_stays_single(self):
+        # 4f43571 review finding 1: t1 pending, t2 healthy flush fails
+        # (boundary recorded), t3 healthy flush SUCCEEDS and closes ep-1.
+        # The close must clear the boundary. A later t4 outage whose
+        # first submit fails then replays: it confirms ep-2 open and
+        # must NOT spawn ep-3 from a stale boundary. t5 dedupes.
+        submits = []
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            n = len(submits)
+            if n <= 2 or n == 4:
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            self.assertFalse(hook.note_progress(
+                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+            self.assertTrue(hook.note_progress(
+                payload(turn_id='t3', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+            closed = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
+            self.assertNotIn('healthy_boundary', closed['DISPATCH-1|1|worker-native'])
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
+            fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
+            self.assertEqual(fifth['episode_id'], 'ep-2')
+            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(sixth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-2', 'ep-2'])
+
+    def test_flush_close_saves_snapshot_before_dropping_payload(self):
+        # 4f43571 review finding 2: the healthy flush must record the
+        # snapshot close BEFORE dropping the frozen payload. If the save
+        # fails after a successful submit, the payload must still be in
+        # the store so a later turn can replay it — never a committed
+        # server row with no local body and a still-pending row.
+        stub = ok_run({'event_id': 'e1', 'state': 'pending'})
+        with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(), self.cfg, attempts=1)
+        def failing_save(config, data):
+            raise OSError('isolated snapshot failure fixture')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
+            with mock.patch.object(hook, '_save', side_effect=failing_save):
+                healthy = payload(turn_id='turn-2', status='completed', error='')
+                with self.assertRaises(OSError):
+                    hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg))
+        pending = json.loads((self.root / 'state' / 'pending.json').read_text())
+        self.assertIn('ep-1', pending)
+        self.assertEqual(pending['ep-1']['turn_id'], 'turn-1')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
+            healthy = payload(turn_id='turn-3', status='completed', error='')
+            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):

@@ -406,7 +406,10 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
                 except (OSError, ValueError, subprocess.SubprocessError) as error:
                     last = error
                     continue
-                _drop_pending(config, stored)
+                # Snapshot BEFORE dropping the payload (4f43571 review
+                # finding 2): a crash between the two must leave the frozen
+                # body recoverable, never a committed server row with no
+                # local body and a still-pending snapshot row.
                 seen['episode_open'] = False
                 seen['pending'] = False
                 seen['closed_at'] = int(time.time())
@@ -418,8 +421,17 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
                 if seen.get('advanced_episode') != seen.get('episode_id'):
                     seen['sequence'] = seen.get('sequence', 0) + 1
                     seen['advanced_episode'] = seen.get('episode_id')
+                # The flush consumed the episode: its boundary is cleared
+                # so a later episode never inherits it (4f43571 finding 1).
+                seen.pop('healthy_boundary', None)
                 data[key] = seen
                 _save(config, data)
+                _drop_pending(config, stored)
+                # D84-13: a post-boundary outage preserved while this
+                # episode was pending is delivered now, under its own key.
+                # The old episode stays closed either way; a failed queued
+                # delivery keeps its own pending payload for the next turn.
+                _flush_queued_outage(config, env, key, attempts)
                 return True
             # D84-11 finding 1: the healthy turn is verified progress even
             # when its flush attempt fails. Record the boundary durably so
@@ -430,6 +442,11 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
             _save(config, data)
             return False
         if not seen.get('episode_open'):
+            # D84-13: a closed row may still carry a queued post-boundary
+            # outage whose delivery failed on an earlier healthy turn.
+            # Retry its bounded delivery; the row stays closed either way.
+            if seen.get('queued_outage') and env is not None:
+                return _flush_queued_outage(config, env, key, attempts)
             return False
         seen['episode_open'] = False
         seen['closed_at'] = int(time.time())
@@ -438,6 +455,51 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
         _save(config, data)
         return True
     return _locked(config, close)
+
+
+def _queued_outage_id(config, key):
+    """Return the preserved post-boundary outage episode id, or None.
+
+    D84-13: at most one queued outage exists per assignment, recorded on
+    the snapshot row that preserved it. The payload itself lives in the
+    existing immutable pending store under its own episode key.
+    """
+    data = _snapshots(config)
+    queued = data.get(key, {}).get('queued_outage')
+    return queued if isinstance(queued, str) and queued else None
+
+
+def _flush_queued_outage(config, env, key, attempts):
+    """Deliver a preserved post-boundary outage under its own key.
+
+    Called after the old episode closed on a healthy turn. Bounded to
+    `attempts` submits of the single queued payload. Success opens the
+    new episode (exactly-once advance) and drops its payload; failure
+    leaves the queued payload and row untouched for the next turn.
+    Returns True when a queued outage was delivered.
+    """
+    queued = _queued_outage_id(config, key)
+    if queued is None:
+        return False
+    stored = _pending_observation(config, queued)
+    if stored is None:
+        return False
+    stored = dict(stored, episode_id=queued)
+    body = _compose_body(queued, stored)
+    for _ in range(max(1, attempts)):
+        try:
+            _submit(body, config, env, stored)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        data = _snapshots(config)
+        seen = data.get(key, {})
+        seen.pop('queued_outage', None)
+        data[key] = seen
+        _save(config, data)
+        _mark_open_unlocked(config, stored, queued)
+        _drop_pending(config, stored)
+        return True
+    return False
 
 
 def _mark_open_unlocked(config, observation, episode_id):
@@ -468,10 +530,13 @@ def _mark_pending_unlocked(config, observation):
     data = _snapshots(config)
     key = episode_key(observation, config)
     seen = data.get(key, {})
-    # A failed replay must not erase a recorded healthy boundary or the
-    # advanced-episode identity: the boundary still belongs to this
-    # episode until a confirmed replay consumes it (7a01892 review).
-    carried = {name: seen[name] for name in ('healthy_boundary', 'advanced_episode') if seen.get(name)}
+    # A failed replay must not erase a recorded healthy boundary, the
+    # advanced-episode identity, or a preserved queued outage: the
+    # boundary still belongs to this episode until a confirmed replay
+    # consumes it (7a01892 review), and the queued outage rides along
+    # until the healthy-turn flush delivers it (D84-13).
+    carried = {name: seen[name] for name in ('healthy_boundary', 'advanced_episode', 'queued_outage')
+               if seen.get(name)}
     data[key] = {'episode_open': False, 'pending': True,
                  'episode_id': observation.get('episode_id', seen.get('episode_id', '')),
                  'turns': seen.get('turns', []),
@@ -607,12 +672,53 @@ def _publish_locked(observation, config, attempts):
         if replay and boundary:
             # D84-11 finding 1: a healthy turn landed while this episode
             # was pending. The replay confirmation CLOSES the old episode
-            # at the recorded boundary, then the live failure that
-            # triggered this publish is a NEW outage with a fresh key.
-            return _publish_new_outage_after_boundary(live, config, env, boundary, attempts, key)
+            # at the recorded boundary, then the post-boundary outage is a
+            # NEW episode with a fresh key. A preserved queued outage
+            # (D84-13) wins over the live failure: both are the same
+            # continuous post-boundary outage, and the queued observation
+            # is its first failure; the live one is same-outage dedupe.
+            queued = _queued_outage_id(config, key)
+            new_outage = live
+            if queued is not None:
+                stored = _pending_observation(config, queued)
+                if stored is not None:
+                    new_outage = dict(stored, episode_id=queued)
+            return _publish_new_outage_after_boundary(new_outage, config, env, boundary, attempts, key)
         return receipt
+    if replay and _snapshots(config).get(key, {}).get('healthy_boundary'):
+        # D84-13: the replay failed but a healthy boundary is recorded,
+        # so the live failure is a post-boundary NEW outage, not a
+        # same-outage repeat. Preserve its real observation under its own
+        # episode key in the immutable pending store; the healthy-turn
+        # flush delivers it after the old episode closes. The queued
+        # payload is frozen once and never rewritten by later failures.
+        _preserve_queued_outage(config, key, live)
     _mark_pending_unlocked(config, observation)
     raise last
+
+
+def _preserve_queued_outage(config, key, live):
+    """Freeze a post-boundary live failure as a queued new outage.
+
+    Allocates the key AFTER the old episode's: the old episode is
+    still pending (its number is sequence + 1), so the queued outage is
+    sequence + 2. Stores the live observation immutably and records the
+    queued episode id on the snapshot row. Later failures never
+    overwrite the queued payload; each new outage after the same
+    boundary keeps only the first preserved observation, matching the
+    one-continuation-per-outage budget.
+    """
+    data = _snapshots(config)
+    seen = data.get(key, {})
+    if seen.get('queued_outage'):
+        return seen['queued_outage']
+    episode_id = 'ep-%d' % (seen.get('sequence', 0) + 2)
+    queued = dict(live, episode_id=episode_id)
+    _store_pending(config, queued)
+    seen['queued_outage'] = episode_id
+    data[key] = seen
+    _save(config, data)
+    return episode_id
 
 
 def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, key):
@@ -655,6 +761,9 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
     row.update({'episode_open': False, 'pending': True, 'episode_id': episode_id,
                 'first_observed_at': row.get('first_observed_at', live['observed_at'])})
     row.pop('healthy_boundary', None)
+    # The new pending row owns its payload directly through episode_id;
+    # a queued pointer to the same payload would double-deliver it.
+    row.pop('queued_outage', None)
     failed[key] = row
     _save(config, failed)
     raise last
