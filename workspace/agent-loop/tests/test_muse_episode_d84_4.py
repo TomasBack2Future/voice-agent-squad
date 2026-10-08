@@ -262,6 +262,50 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(second['state'], 'duplicate')
         self.assertEqual(len(stub.bodies), 1)
 
+    def test_pending_flushed_on_healthy_turn_then_new_episode(self):
+        # Grok round 2: a pending episode must flush (not linger) across a
+        # healthy PostLLMCall, and the next outage gets a NEW episode id.
+        publishes = []
+        bodies = []
+        def script(argv, **kwargs):
+            if argv[1] == 'stuck':
+                bodies.append(argv[-1])
+                return subprocess.CompletedProcess(argv, 0, '[stuck -> #BUG-001] %s\n' % argv[-1], '')
+            if argv[1] == 'history':
+                lines = ['history for BUG-001:']
+                lines += ['  #%d [2026-10-09 01:00] worker (stuck): %s' % (i + 1, b)
+                          for i, b in enumerate(bodies)]
+                return subprocess.CompletedProcess(argv, 0, '\n'.join(lines) + '\n', '')
+            if argv[1] == 'terminal-events' and argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            publishes.append(argv)
+            if len(publishes) == 1:
+                raise subprocess.TimeoutExpired(argv, 5)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': 'e%d' % len(publishes), 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='turn-1'), self.cfg, attempts=1)
+            healthy = payload(turn_id='turn-2', status='completed', error='')
+            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            second = hook.publish(payload(turn_id='turn-3', request_id='req-3'), self.cfg)
+            self.assertEqual(second['state'], 'pending')
+        self.assertEqual(len(publishes), 3)
+        # Flushed ep-1 body kept its identity; new outage is ep-2.
+        self.assertIn('ep-1', bodies[0])
+        self.assertIn('ep-2', bodies[1])
+
+    def test_pending_flush_failure_keeps_pending(self):
+        stub = ok_run({'event_id': 'e1', 'state': 'pending'})
+        with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(), self.cfg, attempts=1)
+        with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
+            healthy = payload(turn_id='turn-2', status='completed', error='')
+            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+        with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
+            replayed = hook.publish(payload(), self.cfg, attempts=1)
+            self.assertEqual(replayed['state'], 'pending')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -156,11 +156,45 @@ def duplicate(observation, config) -> bool:
     return _locked(config, check)
 
 
-def note_progress(event, config) -> bool:
+def _pending_observation(config):
+    """Return the stored pending observation, or None."""
+    path = Path(config['state_directory']) / 'pending.json'
+    try:
+        pending = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(pending, list) or not pending:
+        return None
+    last = pending[-1]
+    return last if isinstance(last, dict) else None
+
+
+def _drop_pending(config, observation):
+    path = Path(config['state_directory']) / 'pending.json'
+    try:
+        pending = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(pending, list):
+        return
+    pending = [p for p in pending
+               if not (isinstance(p, dict) and p.get('episode_id') == observation.get('episode_id'))]
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(pending))
+    temp.replace(path)
+
+
+def note_progress(event, config, env=None, attempts=1) -> bool:
     """Close the episode on verified healthy progress of the same native.
 
-    Returns True when an open episode was closed. Progress on another
+    Returns True when an episode was closed. Progress on another
     native, a subagent session, or a non-PostLLMCall event never closes.
+
+    A pending (never confirmed) episode is replayed first: if the flush
+    succeeds the episode is marked open-then-closed, so the delivered
+    observation keeps its identity and the next outage opens a NEW
+    episode with a fresh budget. If the flush fails the pending state
+    is kept and nothing closes.
     """
     if event.get('hook_event_name') != 'PostLLMCall':
         return False
@@ -174,7 +208,36 @@ def note_progress(event, config) -> bool:
         data = _snapshots(config)
         key = episode_key(None, config)
         seen = data.get(key)
-        if not seen or not seen.get('episode_open'):
+        if not seen:
+            return False
+        if seen.get('pending'):
+            if env is None:
+                return False
+            stored = _pending_observation(config)
+            if stored is None:
+                return False
+            body = 'runtime-failure %s %s turn=%s request=%s attempt=%d provider=%s' % (
+                stored.get('episode_id', ''), stored.get('error_class', 'unknown'),
+                stored.get('turn_id', ''), stored.get('request_id', ''),
+                stored.get('attempt', 0), stored.get('provider', ''))
+            last = None
+            for _ in range(max(1, attempts)):
+                try:
+                    _submit(body, config, env, stored)
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    last = error
+                    continue
+                _drop_pending(config, stored)
+                seen['episode_open'] = False
+                seen['pending'] = False
+                seen['closed_at'] = int(time.time())
+                seen['closed_by_turn'] = str(event.get('turn_id', ''))[:128]
+                seen['sequence'] = seen.get('sequence', 0) + 1
+                data[key] = seen
+                _save(config, data)
+                return True
+            return False
+        if not seen.get('episode_open'):
             return False
         seen['episode_open'] = False
         seen['closed_at'] = int(time.time())
@@ -316,13 +379,7 @@ def _publish_locked(observation, config, attempts):
     else:
         episode_id = 'ep-%d' % (data.get(episode_key(observation, config), {}).get('sequence', 0) + 1)
     observation['episode_id'] = episode_id
-    env = {k: v for k, v in os.environ.items()
-           if k not in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDE_SESSION_ID',
-                        'MUSE_SESSION_ID', 'SQUAD_NATIVE_SESSION_ID', 'SQUAD_SESSION_ID', 'SQUAD_AGENT')}
-    env.update(SQUAD_AGENT=config['agent_id'],
-               SQUAD_NATIVE_SESSION_ID=config['native_session_id'],
-               SQUAD_SESSION_ID='muse:' + config['native_session_id'],
-               SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1', SQUAD_NO_HYGIENE='1')
+    env = _hook_env(config)
     body = 'runtime-failure %s %s turn=%s request=%s attempt=%d provider=%s' % (
         episode_id, observation['error_class'], observation['turn_id'],
         observation['request_id'], observation['attempt'], observation['provider'])
@@ -351,13 +408,28 @@ def _publish_locked(observation, config, attempts):
     raise last
 
 
+def _hook_env(config):
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDE_SESSION_ID',
+                        'MUSE_SESSION_ID', 'SQUAD_NATIVE_SESSION_ID', 'SQUAD_SESSION_ID', 'SQUAD_AGENT')}
+    env.update(SQUAD_AGENT=config['agent_id'],
+               SQUAD_NATIVE_SESSION_ID=config['native_session_id'],
+               SQUAD_SESSION_ID='muse:' + config['native_session_id'],
+               SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1', SQUAD_NO_HYGIENE='1')
+    return env
+
+
 def run(config_path: Path, event: dict) -> int:
     config = json.loads(config_path.read_text())
     if not admits(event, config):
         # Non-failed PostLLMCall of the bound native is verified healthy
-        # progress: close the episode so the next independent failure
-        # re-publishes. Unrelated sessions never close.
-        note_progress(event, config)
+        # progress: flush a pending episode first, then close, so the next
+        # independent failure re-publishes with a fresh budget. Unrelated
+        # sessions never close. Bounded to one flush attempt.
+        try:
+            note_progress(event, config, _hook_env(config))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
         return 0
     try:
         publish(event, config)
