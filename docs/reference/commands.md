@@ -934,18 +934,37 @@ Canonical `done` also emits `reconcile-needed`; canonical `ask` mentioning the
 owner emits `decision-request`. Neither releases WIP. Leave terminal observations
 unacknowledged while termination is unresolved so the existing receiver retries.
 
+`terminal-events submit --reservation KEY --generation N --worker-session ID
+--kind KIND --body-file OUTCOME [--request-key KEY]` (MCP:
+`squad_terminal_events_submit`, fields `reservation`, `generation`,
+`worker_session`, `kind`, `body`, optional `request_key`, `expected_decision`
+and `agent_id`) is the canonical Worker outcome path: it
+validates the explicit ledger/repository plus reservation, generation, native
+session and actor, then atomically stores the canonical outcome message and
+the durable event, returning message and event IDs. Kinds: `issue-closed`,
+`handoff-complete`, `blocked`, `decision-request`. `request-key` is the stable
+request identity: retries with the same key deduplicate to the same IDs,
+distinct keys on one live assignment each record a new event, and the same key
+with a different body is a precise `payload-conflict`. Outage episodes map one
+episode to one request key, so separate outages are separate events while
+retries within one episode deduplicate. Ambiguous identity is rejected, never
+guessed across repositories. For adopted assignments, pass the observed `--expected-decision REV`
+unchanged; legacy unadopted assignments submit without one. Success means
+pending, not delivered. Published
+events use the existing 15-second durable catch-up, not a second scheduler.
+
 `terminal-events publish --reservation KEY --generation N --worker-session ID
 --kind KIND --outcome MESSAGE_ID` (MCP: `squad_terminal_events_publish`, fields
 `reservation`, `generation`, `worker_session`, `kind`, `outcome_id`, optional
-`agent_id`) inserts a fenced event atomically. Kinds: `issue-closed`,
+`agent_id`) is the legacy two-step path for a pre-posted message; it inserts a
+fenced event atomically. Kinds: `issue-closed`,
 `handoff-complete`, `blocked`, `decision-request`, `decision-resolved`,
 `reconcile-needed`. Outcome and sender must match the repository, task and current
-reservation generation. Recipient/item are ledger-derived; invalid requests fail.
-Retries are idempotent. Success means pending, not delivered. Decision replies
+reservation generation. Recipient/item are ledger-derived; invalid requests fail
+with a precise failed condition plus repair action. Decision replies
 can only be published by the reservation owner and route to the current claimant.
 New Claude launch configs set `event_executable` to enable native Worker reply
-wakeups. Without that setting, no idle reply delivery is promised. Published
-events use the existing 15-second durable catch-up, not a second scheduler.
+wakeups. Without that setting, no idle reply delivery is promised.
 
 Migration 018 adds `terminal_event_receipts`; original messages/read cursors are
 unchanged. Delivery records are separate from processing. An unacknowledged

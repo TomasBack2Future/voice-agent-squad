@@ -67,10 +67,10 @@ def config_file(path: Path) -> dict:
     if not Path(c['prompt_file']).is_file():
         raise ValidationError('prompt_file is unavailable')
     if c.get('event_executable'):
-        check = subprocess.run([c['event_executable'], 'terminal-events', 'publish', '--help'],
+        check = subprocess.run([c['event_executable'], 'terminal-events', 'submit', '--help'],
                                capture_output=True, text=True, timeout=10, check=False)
-        if check.returncode or '--outcome' not in check.stdout:
-            raise ValidationError('event_executable lacks structured terminal-events publish')
+        if check.returncode or '--body-file' not in check.stdout:
+            raise ValidationError('event_executable lacks structured terminal-events submit')
     return c
 
 

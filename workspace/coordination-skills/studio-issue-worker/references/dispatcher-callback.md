@@ -82,22 +82,35 @@ generated on each attempt.
 ## Installed Squad terminal receiver
 
 Use the installed receiver executable from coordination metadata, not a stale
-PATH wrapper. After writing the sanitized outcome on the canonical item thread,
-submit it with the structured command (MCP equivalent: `squad_terminal_events_publish`):
+PATH wrapper. Submit the sanitized outcome atomically: one call stores the
+canonical message on the item thread and the durable event, returning both IDs
+(MCP equivalent: `squad_terminal_events_submit`):
 
 ```sh
-squad terminal-events publish --reservation KEY --generation N \
-  --worker-session NATIVE_ID --kind issue-closed --outcome MESSAGE_ID
+squad terminal-events submit --reservation KEY --generation N \
+  --worker-session NATIVE_ID --kind issue-closed --body-file OUTCOME.txt
 ```
+
+Run it from the assignment ledger directory; the command validates the explicit
+ledger/repository plus reservation, generation, native session and actor, and
+rejects ambiguous identity rather than guessing across repositories. Pass a
+stable `--request-key` per logical request: retries reuse it and deduplicate,
+distinct requests on one live assignment use distinct keys and each records a
+new event (outage episodes map one episode to one key), and the same key with
+a different body is a precise `payload-conflict`.
 
 For a reservation explicitly migrated to versioned decisions, first read
 `terminal-events decision-get` with that identity and add `--expected-decision REV`
-to terminal/blocker publications. Follow [current decisions and recovery](../../../agent-loop/roles/worker/references/decision-recovery.md).
+to terminal/blocker submissions. Follow [current decisions and recovery](../../../agent-loop/roles/worker/references/decision-recovery.md).
+Unadopted assignments keep legacy behavior; decisions are never mandatory.
 
 Use `handoff-complete` or `blocked` for those outcomes. The command derives the
-recipient/item from the reservation, validates generation, binding, message
-ownership and task custody, and returns a stable event id with state `pending`.
-A rejected publish is an actionable contract error; do not relabel it transient.
+recipient/item from the reservation, validates generation, binding and task
+custody, and returns message/event IDs with state `pending`.
+A rejected submit names its exact failed condition (repo mismatch, reservation,
+generation, worker, actor, outcome, decision revision) plus a repair action;
+do not relabel it transient. The legacy two-step `say` + `publish` path keeps
+working, and `publish` now reports the same precise reasons.
 Old Workers may still write canonical/global event prose: the receiver checks
 both, including already-completed reservations, against the same identity facts.
 A canonical `done` record also emits `reconcile-needed` even if the handwritten

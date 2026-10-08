@@ -143,6 +143,65 @@ func TestMCPStructuredEventPublish(t *testing.T) {
 	}
 }
 
+func TestMCPAtomicOutcomeSubmit(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	_, err := env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,'DISPATCH-1','github:repo#1',?,1,1,0,'dispatched',1,'worker-session','','TASK')`, env.RepoID, env.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,'TASK','worker',1,2,'done')`, env.RepoID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"reservation": "DISPATCH-1", "generation": 1, "worker_session": "worker-session", "kind": "handoff-complete", "body": "factual outcome", "agent_id": "worker"}
+	var first string
+	for i := 1; i <= 2; i++ {
+		request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": map[string]any{"name": "squad_terminal_events_submit", "arguments": args}})
+		var out bytes.Buffer
+		if err = runMCP(ctx, env.DB, env.RepoID, env.Root, strings.NewReader(string(request)+"\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "pending") || !strings.Contains(out.String(), "message_id") {
+			t.Fatalf("MCP submit lost: %s", out.String())
+		}
+		var decoded struct {
+			Result struct {
+				StructuredContent map[string]any `json:"structuredContent"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+			t.Fatalf("decode MCP response: %v", err)
+		}
+		got := fmt.Sprintf("%v/%v", decoded.Result.StructuredContent["message_id"], decoded.Result.StructuredContent["event_id"])
+		if first == "" {
+			first = got
+		} else if got != first {
+			t.Fatalf("retry returned different IDs: %s vs %s", got, first)
+		}
+	}
+	s := terminalevents.Store{DB: env.DB, Repo: env.RepoID, Recipient: env.AgentID}
+	events, err := s.Pending(ctx, "dispatcher", 0)
+	if err != nil || len(events) != 1 || events[0].Kind != "handoff-complete" {
+		t.Fatalf("MCP submit not routed %v %v", events, err)
+	}
+	var n int
+	if err = env.DB.QueryRow("SELECT count(*) FROM messages WHERE thread='TASK'").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("duplicate messages: %d %v", n, err)
+	}
+	// Wrong repo: reservation exists only in another ledger.
+	other := map[string]any{"reservation": "DISPATCH-1", "generation": 1, "worker_session": "worker-session", "kind": "blocked", "body": "x", "agent_id": "worker"}
+	request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": "squad_terminal_events_submit", "arguments": other}})
+	env2 := newTestEnv(t)
+	var out bytes.Buffer
+	if err = runMCP(ctx, env2.DB, env2.RepoID, env2.Root, strings.NewReader(string(request)+"\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "reservation-repo-mismatch") && !strings.Contains(out.String(), "absent-reservation") {
+		t.Fatalf("ambiguous identity guessed: %s", out.String())
+	}
+}
+
 func TestMCPDecisionCASAndGet(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -88,8 +89,41 @@ func newTerminalEventsCmd() *cobra.Command {
 	publish.Flags().StringVar(&request.Kind, "kind", "", "issue-closed, handoff-complete, blocked, decision-request or decision-resolved")
 	publish.Flags().Int64Var(&request.OutcomeID, "outcome", 0, "Durable Squad outcome/decision message id")
 	publish.Flags().Int64Var(&request.ExpectedDecision, "expected-decision", 0, "Current adopted decision revision for Worker outcomes")
+	var submit terminalevents.SubmitRequest
+	var bodyFile string
+	submitCmd := &cobra.Command{Use: "submit", Short: "Atomically store one Worker outcome message and its durable terminal event", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		if bodyFile != "" {
+			raw, err := os.ReadFile(bodyFile)
+			if err != nil {
+				return err
+			}
+			submit.Body = string(raw)
+		}
+		out, err := (terminalevents.Store{DB: bc.db, Repo: bc.repoID}).Submit(cmd.Context(), bc.agentID, submit)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"message_id": out.MessageID, "event_id": out.EventID, "state": "pending"})
+	}}
+	submitCmd.Flags().StringVar(&submit.Reservation, "reservation", "", "Exact dispatch reservation key")
+	submitCmd.Flags().Int64Var(&submit.Generation, "generation", 0, "Reservation generation")
+	submitCmd.Flags().StringVar(&submit.WorkerSession, "worker-session", "", "Bound native Worker session")
+	submitCmd.Flags().StringVar(&submit.Kind, "kind", "", "issue-closed, handoff-complete, blocked or decision-request")
+	submitCmd.Flags().StringVar(&submit.Body, "body", "", "Outcome body text (or --body-file)")
+	submitCmd.Flags().StringVar(&bodyFile, "body-file", "", "Read outcome body from file")
+	submitCmd.Flags().StringVar(&submit.RequestKey, "request-key", "", "Stable request identity: retries reuse it, distinct requests use distinct keys (#84 episodes map one episode to one key)")
+	submitCmd.Flags().Int64Var(&submit.ExpectedDecision, "expected-decision", 0, "Current adopted decision revision for Worker outcomes")
+	_ = submitCmd.MarkFlagRequired("reservation")
+	_ = submitCmd.MarkFlagRequired("generation")
+	_ = submitCmd.MarkFlagRequired("worker-session")
+	_ = submitCmd.MarkFlagRequired("kind")
 	cmd.AddCommand(terminalDecisionCommands()...)
-	cmd.AddCommand(listen, poll, delivered, ack, publish)
+	cmd.AddCommand(listen, poll, delivered, ack, publish, submitCmd)
 	return cmd
 }
 

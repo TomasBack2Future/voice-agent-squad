@@ -851,6 +851,28 @@ func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		return map[string]string{"event_id": id, "state": "pending"}, nil
 	}})
 
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_submit", Description: "Atomically store one Worker outcome message and its durable terminal event; returns message and event IDs. Same request_key retries deduplicate; distinct keys record distinct events.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","generation","worker_session","kind","body"],"properties":{"reservation":{"type":"string"},"generation":{"type":"integer","minimum":1},"worker_session":{"type":"string"},"kind":{"enum":["issue-closed","handoff-complete","blocked","decision-request"]},"body":{"type":"string"},"request_key":{"type":"string"},"expected_decision":{"type":"integer","minimum":0},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			terminalevents.SubmitRequest
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := resolveAgentID(a.AgentID)
+		if err != nil {
+			return nil, err
+		}
+		out, err := (terminalevents.Store{DB: db, Repo: repoID}).Submit(ctx, actor, a.SubmitRequest)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"message_id": out.MessageID, "event_id": out.EventID, "state": "pending"}, nil
+	}})
+
 	srv.Register(mcp.Tool{Name: "squad_terminal_events_ack", Description: "Acknowledge one delivered terminal event after recipient reconciliation.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","note"],"properties":{"event_id":{"type":"string"},"note":{"type":"string"},"native_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			EventID string `json:"event_id"`

@@ -85,8 +85,13 @@ func TestDecisionRejectsStaleBlockedAndForeignAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	event := PublishRequest{Reservation: q.Reservation, Generation: 1, WorkerSession: q.WorkerSession, Kind: "blocked", OutcomeID: id}
-	if _, err := s.Publish(ctx, "worker", event); !errors.Is(err, ErrStaleDecision) {
+	if _, err := s.Publish(ctx, "worker", event); !isExpectedRejection(err) {
 		t.Fatal("legacy stale outcome accepted", err)
+	} else {
+		var rejection *Rejection
+		if !errors.As(err, &rejection) || rejection.Condition != "stale-decision" {
+			t.Fatalf("want precise stale-decision, got %v", err)
+		}
 	}
 	event.ExpectedDecision = 1
 	if _, err := s.Publish(ctx, "worker", event); err != nil {

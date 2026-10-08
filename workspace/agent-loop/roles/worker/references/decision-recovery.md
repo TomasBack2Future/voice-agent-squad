@@ -16,8 +16,10 @@ explicit user stop has been lifted from elapsed time or a dependency transition.
 Worker: upon wake and before pausing or reporting completion, read the effective
 decision again. A received older event is not authority to overwrite it. Record
 its revision in the existing checkpoint and acknowledge the current event after
-reading. Publish a new blocker or terminal outcome with `--expected-decision REV`.
-If rejected as stale, reload and reconcile before ending the turn. Released
+reading. Submit a new blocker or terminal outcome with
+`terminal-events submit --reservation KEY --generation N --worker-session ID --kind KIND --body-file OUTCOME --expected-decision REV`
+(pass the observed revision unchanged; never auto-refresh). If rejected as
+stale, reload and reconcile before ending the turn. Released
 claims can receive a wake through proven custody history; reclaim normally
 before any protected write. Do not restart or create another Worker for recovery.
 
