@@ -93,8 +93,11 @@ squad terminal-events submit --reservation KEY --generation N \
 
 Run it from the assignment ledger directory; the command validates the explicit
 ledger/repository plus reservation, generation, native session and actor, and
-rejects ambiguous identity rather than guessing across repositories. Retries
-are idempotent and return the same IDs.
+rejects ambiguous identity rather than guessing across repositories. Pass a
+stable `--request-key` per logical request: retries reuse it and deduplicate,
+distinct requests on one live assignment use distinct keys and each records a
+new event (outage episodes map one episode to one key), and the same key with
+a different body is a precise `payload-conflict`.
 
 For a reservation explicitly migrated to versioned decisions, first read
 `terminal-events decision-get` with that identity and add `--expected-decision REV`

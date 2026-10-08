@@ -151,7 +151,7 @@ assert 'CODEX_SESSION_ID' not in os.environ
     def test_worker_receiver_is_child_owned_and_preflight_is_read_only(self):
         self.prepare()
         binary = self.root / 'events'
-        binary.write_text('#!' + sys.executable + '\nprint("--outcome")\n')
+        binary.write_text('#!' + sys.executable + '\nprint("--body-file")\n')
         binary.chmod(0o700)
         self.config['event_executable'] = str(binary)
         self.config_path.write_text(json.dumps(self.config))

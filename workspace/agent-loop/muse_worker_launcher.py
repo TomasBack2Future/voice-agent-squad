@@ -27,18 +27,51 @@ from muse_worker_view import LiveView
 FINGERPRINT = native.FINGERPRINT
 
 
-def submit_outcome(c, env, pin, kind, body_file):
+def read_decision(c, env, pin):
+    """Read the currently adopted decision for this assignment, if any.
+
+    Returns the decision object or None for legacy unadopted assignments.
+    The caller passes the observed revision back unchanged; a changed
+    revision surfaces as stale at submit time for Worker reconciliation.
+    Never auto-proceeds: holds are returned as-is for the caller to honor.
+    """
+    result = subprocess.run([c['coordination_executable'], 'terminal-events', 'decision-get',
+                             '--reservation', pin['reservation'], '--generation', str(pin['generation']),
+                             '--worker-session', pin['native']],
+                            cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10, check=False)
+    if result.returncode:
+        if 'no rows' in (result.stderr or ''):
+            return None
+        raise ValidationError('decision read failed: ' + diagnostic(result.stderr or result.stdout))
+    try:
+        decision = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValidationError('decision read returned invalid JSON') from error
+    if not isinstance(decision, dict) or not decision.get('revision'):
+        raise ValidationError('decision read returned no revision')
+    return decision
+
+
+def submit_outcome(c, env, pin, kind, body_file, decision_revision=None, request_key=None):
     """Submit one Worker outcome atomically via terminal-events submit.
 
-    Returns the stored message/event IDs. Retries are idempotent server-side;
-    a rejection carries a precise condition plus repair action instead of the
-    legacy generic error.
+    decision_revision is the actually observed revision (or None for legacy
+    unadopted assignments); it is passed unchanged, never refreshed. request_key
+    is the stable request identity: retries reuse it, distinct requests use
+    distinct keys (None keeps the legacy single default slot). Returns the
+    stored message/event IDs. A rejection carries a precise condition plus
+    repair action instead of the legacy generic error.
     """
-    result = subprocess.run([c['coordination_executable'], 'terminal-events', 'submit',
-                             '--reservation', pin['reservation'], '--generation', str(pin['generation']),
-                             '--worker-session', pin['native'], '--kind', kind,
-                             '--body-file', str(body_file)],
-                            cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10, check=False)
+    argv = [c['coordination_executable'], 'terminal-events', 'submit',
+           '--reservation', pin['reservation'], '--generation', str(pin['generation']),
+           '--worker-session', pin['native'], '--kind', kind,
+           '--body-file', str(body_file)]
+    if request_key:
+        argv += ['--request-key', str(request_key)]
+    if decision_revision:
+        argv += ['--expected-decision', str(decision_revision)]
+    result = subprocess.run(argv, cwd=c['ledger_directory'], env=env,
+                            capture_output=True, text=True, timeout=10, check=False)
     if result.returncode:
         raise ValidationError('outcome submit rejected: ' + diagnostic(result.stderr or result.stdout))
     try:
@@ -367,13 +400,18 @@ def run(assignment_path, config_path, resume=False):
                 if terminal == 'completed' and report_path.exists():
                     report = json.loads(report_path.read_text())
                     kind = 'handoff-complete' if report['status'] == 'completed' else 'blocked'
+                    decision = read_decision(c, env, pin)
+                    if decision is not None and decision.get('action') != 'proceed':
+                        raise ValidationError('assignment is on hold; resolve the hold before submitting completion')
                     # Atomic outcome submission: one call stores the canonical
                     # message and the durable event, returning both IDs. No
                     # manual message-ID extraction, so a cross-repo mixup
-                    # cannot strand completion.
+                    # cannot strand completion. The observed revision passes
+                    # through unchanged; a changed one surfaces as stale.
                     body_file = state / 'outcome-body.txt'
                     body_file.write_text(report.get('summary', '') or report.get('status', ''))
-                    submitted = submit_outcome(c, env, pin, kind, body_file)
+                    submitted = submit_outcome(c, env, pin, kind, body_file,
+                                               decision_revision=decision['revision'] if decision else None)
                     native.atomic(state / 'outcome.json', submitted)
                 coordination(c, 'close', str(state / 'join.json'))
                 for op in operations:

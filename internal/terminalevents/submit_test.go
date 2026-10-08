@@ -50,7 +50,7 @@ func TestSubmitDecisionStates(t *testing.T) {
 		s := newCase(t)
 		publisher := s
 		publisher.Recipient = ""
-		out, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "blocked", "stuck note", 0})
+		out, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "blocked", "stuck note", 0, ""})
 		if err != nil {
 			t.Fatalf("unadopted submit: %v", err)
 		}
@@ -65,7 +65,7 @@ func TestSubmitDecisionStates(t *testing.T) {
 		}
 		publisher := s
 		publisher.Recipient = ""
-		if _, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "handoff-complete", "done", 2}); err != nil {
+		if _, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "handoff-complete", "done", 2, ""}); err != nil {
 			t.Fatalf("adopted current submit: %v", err)
 		}
 	})
@@ -76,7 +76,7 @@ func TestSubmitDecisionStates(t *testing.T) {
 		}
 		publisher := s
 		publisher.Recipient = ""
-		_, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "handoff-complete", "done", 1})
+		_, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "handoff-complete", "done", 1, ""})
 		var rejection *Rejection
 		if !errors.As(err, &rejection) || rejection.Condition != "stale-decision" {
 			t.Fatalf("want stale-decision, got %v", err)
@@ -89,7 +89,7 @@ func TestSubmitDecisionStates(t *testing.T) {
 		}
 		publisher := s
 		publisher.Recipient = ""
-		_, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "handoff-complete", "done", 2})
+		_, err := publisher.Submit(context.Background(), "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "handoff-complete", "done", 2, ""})
 		var rejection *Rejection
 		if !errors.As(err, &rejection) || rejection.Condition != "decision-hold" {
 			t.Fatalf("want decision-hold, got %v", err)
@@ -113,7 +113,7 @@ func TestSubmitConcurrentIsIdempotent(t *testing.T) {
 	results := make(chan error, 8)
 	for range 8 {
 		go func() {
-			_, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "blocked", "same stuck", 0})
+			_, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "blocked", "same stuck", 0, ""})
 			results <- err
 		}()
 	}
@@ -128,6 +128,39 @@ func TestSubmitConcurrentIsIdempotent(t *testing.T) {
 	}
 	if err := s.DB.QueryRow("SELECT count(*) FROM terminal_event_receipts").Scan(&events); err != nil || events != 1 {
 		t.Fatalf("events=%d %v", events, err)
+	}
+}
+
+// Stable request identity: the same request retries to the same IDs; a
+// distinct legitimate request on the same live assignment records a new
+// event; the same identity with a different payload is a precise conflict.
+func TestSubmitDistinctRequests(t *testing.T) {
+	s := fixture(t)
+	if _, err := s.DB.Exec(`INSERT INTO claims(item_id,repo_id,agent_id,claimed_at,last_touch) VALUES('TASK','repo','worker',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	publisher := s
+	publisher.Recipient = ""
+	first, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "decision-request", "phase A design question", 0, "phase-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "decision-request", "phase A design question", 0, "phase-a"})
+	if err != nil || retry != first {
+		t.Fatalf("same-request retry must retain IDs: first=%+v retry=%+v err=%v", first, retry, err)
+	}
+	second, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "decision-request", "phase B installation question", 0, "phase-b"})
+	if err != nil {
+		t.Fatalf("second distinct legitimate request must publish: %v", err)
+	}
+	if second == first {
+		t.Fatal("distinct request must have distinct message/event IDs")
+	}
+	_, err = publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "decision-request", "changed body", 0, "phase-a"})
+	var rejection *Rejection
+	if !errors.As(err, &rejection) || rejection.Condition != "payload-conflict" {
+		t.Fatalf("want payload-conflict, got %v", err)
 	}
 }
 
