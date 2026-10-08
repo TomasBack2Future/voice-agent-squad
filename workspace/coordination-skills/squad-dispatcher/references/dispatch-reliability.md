@@ -26,6 +26,11 @@ Report that limit; preserve explicit pauses and do not silently enable, retarget
 duplicate or replace a controller. Repair an evidenced route fault within existing
 authority, using the session-continuity contract for any actual migration.
 
+Read [assignment continuity](../../../agent-loop/lifecycle-continuity.md) before
+creating a session from another chat, recovering a failed model connection or
+rolling out changed instructions. An outside observer must distinguish transport
+health from Goal continuation and verify actual resumed execution.
+
 ## Asynchronous creation
 Before creation, persist reservation key/generation and a creation-attempt identifier.
 Persist the returned clientThreadId immediately when setup is queued. A queued or
