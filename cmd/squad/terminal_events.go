@@ -33,6 +33,20 @@ func newTerminalEventsCmd() *cobra.Command {
 	listen.Flags().StringVar(&session, "delivery-session", "", "Receiver incarnation, unique for each client start/resume")
 	listen.Flags().DurationVar(&max, "max", 23*time.Hour, "Maximum receiver lifetime")
 	listen.Flags().BoolVar(&deferDelivery, "defer-delivery", false, "Leave events pending until structured transport confirms acceptance")
+	poll := &cobra.Command{Use: "poll", Short: "Read a bounded pending event batch without marking it delivered", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		events, err := pollTerminalEvents(cmd.Context(), terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}, session)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(events)
+	}}
+	poll.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound native session")
+	poll.Flags().StringVar(&session, "delivery-session", "", "Current receiver incarnation")
 	var deliveredSession string
 	delivered := &cobra.Command{Use: "delivered <event-id>", Short: "Record native transport acceptance without acknowledging handling", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		bc, err := bootClaimContext(cmd.Context())
@@ -75,7 +89,7 @@ func newTerminalEventsCmd() *cobra.Command {
 	publish.Flags().Int64Var(&request.OutcomeID, "outcome", 0, "Durable Squad outcome/decision message id")
 	publish.Flags().Int64Var(&request.ExpectedDecision, "expected-decision", 0, "Current adopted decision revision for Worker outcomes")
 	cmd.AddCommand(terminalDecisionCommands()...)
-	cmd.AddCommand(listen, delivered, ack, publish)
+	cmd.AddCommand(listen, poll, delivered, ack, publish)
 	return cmd
 }
 
@@ -128,4 +142,17 @@ func receiveTerminalEvents(ctx context.Context, s terminalevents.Store, session 
 			return err
 		}
 	}
+}
+
+// Poll exposes the existing bounded/fenced receiver read without holding a
+// service execution slot for a long-lived listener. Transport and handling
+// acknowledgements remain separate explicit operations.
+func pollTerminalEvents(ctx context.Context, s terminalevents.Store, session string) ([]terminalevents.Event, error) {
+	if session == "" {
+		return nil, fmt.Errorf("delivery-session required")
+	}
+	if err := s.Discover(ctx); err != nil {
+		return nil, err
+	}
+	return s.Pending(ctx, session, 2*time.Minute)
 }

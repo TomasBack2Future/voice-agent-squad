@@ -70,6 +70,11 @@ with tempfile.TemporaryDirectory(prefix='squad-remote-test-') as tmp:
         item=re.search(r'(TASK-\d+)',created.stdout).group(1)
         replay=command(0,'new','task','remote race','--ready',key='create-once-123456')
         assert replay.stdout==created.stdout
+        reserve=command(2,'dispatch','reserve','TEST-REMOTE-RESERVATION','--source','test:remote','--json')
+        assert reserve.returncode==0,reserve.stderr
+        reservation=json.loads(reserve.stdout)
+        attached=command(2,'dispatch','attach','TEST-REMOTE-RESERVATION','--item',item,'--generation',str(reservation['generation']))
+        assert attached.returncode==0,attached.stderr
         with concurrent.futures.ThreadPoolExecutor(2) as pool:
             results=list(pool.map(lambda i:command(i,'claim',item,'--intent','remote atomic race'),[0,1]))
         assert sum(r.returncode==0 for r in results)==1,[(r.returncode,r.stdout,r.stderr) for r in results]
@@ -92,13 +97,38 @@ with tempfile.TemporaryDirectory(prefix='squad-remote-test-') as tmp:
         # Distinct token cannot forge an actor even with a valid command shape.
         denied=command(0,'register','--as','agent-1')
         assert denied.returncode!=0
-        reserve=command(2,'dispatch','reserve','TEST-REMOTE-RESERVATION','--source','test:remote','--json')
-        assert reserve.returncode==0,reserve.stderr
-        reservation=json.loads(reserve.stdout)
-        attached=command(2,'dispatch','attach','TEST-REMOTE-RESERVATION','--item',item,'--generation',str(reservation['generation']))
-        assert attached.returncode==0,attached.stderr
         stale=command(2,'dispatch','attach','TEST-REMOTE-RESERVATION','--item',item,'--generation',str(reservation['generation']+1))
         assert stale.returncode!=0,'stale generation admitted'
+        # Exercise event pointers through remote transports under real custody.
+        bound=command(2,'dispatch','bind','TEST-REMOTE-RESERVATION','--thread-id',f'native-{winner}','--generation',str(reservation['generation']))
+        assert bound.returncode==0,bound.stderr
+        bound=command(2,'dispatch','controller-bind','--native-session','native-2')
+        assert bound.returncode==0,bound.stderr
+        epoch=json.loads(bound.stdout)['epoch']
+        receiver=command(2,'dispatch','receiver-bind','--native-session','native-2','--incarnation','test-receiver','--epoch',str(epoch))
+        assert receiver.returncode==0,receiver.stderr
+        import sqlite3
+        with sqlite3.connect(next(home.rglob('global.db'))) as db:
+            outcome=db.execute("SELECT max(id) FROM messages WHERE agent_id=?",(f'agent-{winner}',)).fetchone()[0]
+        event_args=['terminal-events','publish','--reservation','TEST-REMOTE-RESERVATION','--generation',str(reservation['generation']),'--worker-session',f'native-{winner}','--kind','handoff-complete','--outcome',str(outcome)]
+        published=command(winner,*event_args)
+        assert published.returncode==0,published.stderr
+        event=json.loads(published.stdout)['event_id']
+        again=command(winner,*event_args)
+        assert again.returncode==0 and json.loads(again.stdout)['event_id']==event
+        early=command(2,'terminal-events','ack',event,'--native-session','native-2','--note','fixture handled')
+        assert early.returncode!=0,'undelivered event was acknowledged'
+        polled=mcp(2,'squad_terminal_events_poll',{'native_session':'native-2','delivery_session':'test-receiver'})
+        assert event in str(polled) and 'error' not in polled,polled
+        stale=command(2,'terminal-events','poll','--native-session','native-2','--delivery-session','stale-receiver')
+        assert stale.returncode!=0,'stale receiver read accepted'
+        delivered=command(2,'terminal-events','delivered',event,'--native-session','native-2','--delivery-session','test-receiver')
+        assert delivered.returncode==0,delivered.stderr
+        for _ in range(2):
+            ack=command(2,'terminal-events','ack',event,'--native-session','native-2','--note','fixture handled')
+            assert ack.returncode==0,ack.stderr
+        polled=command(2,'terminal-events','poll','--native-session','native-2','--delivery-session','test-receiver')
+        assert polled.returncode==0 and json.loads(polled.stdout)==[],polled.stderr
         proc.terminate();proc.wait(timeout=10)
         proc=start()
         after=command(0,'new','task','remote race','--ready',key='create-once-123456')
@@ -114,6 +144,6 @@ with tempfile.TemporaryDirectory(prefix='squad-remote-test-') as tmp:
         assert 'error' in closed and 'verification gates failed' in str(closed),'MCP skipped false verification gate'
         released=command(winner,'release',item)
         assert released.returncode==0,released.stderr
-        print('PASS: real CLI/MCP identities, writes, atomic claim race, nonowner and identity rejection, reservation fencing, durable restart and request replay')
+        print('PASS: real CLI/MCP identities, writes, atomic claim race, nonowner and identity rejection, reservation fencing, event publish/poll/delivered/ack fences and idempotency, durable restart and request replay')
     finally:
         proc.terminate();proc.wait(timeout=10)

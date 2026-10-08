@@ -76,7 +76,11 @@ Operations use the existing CLI/MCP handlers under isolated, server-selected
 identity and environment. One bounded execution queue serializes file mutations
 and SQLite transactions; no client-supplied shell, cwd or environment is run.
 At most 32 requests queue, each execution has a two-minute limit. Long polling
-and host event receivers must run separately. The service does not own cmux or
+and native wakeup receivers must run separately. Remote receivers can use
+`terminal-events poll --native-session … --delivery-session …` or MCP
+`squad_terminal_events_poll` for a bounded batch (at most 16 pointers). They must
+record `delivered` only after native transport accepts it and `ack` only after
+handling; polling itself performs neither acknowledgement. The service does not own cmux or
 wake remote native sessions by itself.
 
 ## Retry and durability

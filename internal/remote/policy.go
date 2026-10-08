@@ -11,7 +11,7 @@ var readCommands = strings.Fields("version whoami status who next inbox ready cl
 var writeCommands = strings.Fields("register new accept reject claim release done handoff blocked say ask thinking stuck milestone fyi progress review-request tick heartbeat touch untouch")
 var controllerCommands = strings.Fields("dispatch terminal-events resources")
 var readTools = strings.Fields("squad_whoami squad_status squad_who squad_next squad_list_items squad_get_item squad_claim_inspect squad_history squad_stats squad_resources_check squad_terminal_decision_get")
-var writeTools = strings.Fields("squad_register squad_new squad_accept squad_reject squad_done squad_handoff squad_claim squad_release squad_blocked squad_say squad_ask squad_tick squad_progress squad_review_request squad_heartbeat squad_touch squad_untouch squad_terminal_events_publish squad_terminal_events_ack squad_terminal_events_delivered")
+var writeTools = strings.Fields("squad_register squad_new squad_accept squad_reject squad_done squad_handoff squad_claim squad_release squad_blocked squad_say squad_ask squad_tick squad_progress squad_review_request squad_heartbeat squad_touch squad_untouch squad_terminal_events_poll squad_terminal_events_publish squad_terminal_events_ack squad_terminal_events_delivered")
 var controllerTools = strings.Fields("squad_dispatch_controller_bind squad_dispatch_controller_status squad_dispatch_continue squad_terminal_decision_set")
 
 func contains(xs []string, x string) bool {
@@ -44,7 +44,7 @@ func CheckCommand(c Client, args []string) error {
 	// Workers need their own event publication and decision reads; server ownership
 	// checks still enforce the exact reservation and native generation.
 	if c.Role == "worker" && len(args) > 1 && args[0] == "terminal-events" {
-		allowed = contains([]string{"publish", "ack", "delivered", "decision-get"}, args[1])
+		allowed = contains([]string{"poll", "publish", "ack", "delivered", "decision-get"}, args[1])
 	}
 	if c.Role == "worker" && len(args) > 1 && args[0] == "resources" {
 		allowed = args[1] == "check"
@@ -85,7 +85,7 @@ func CheckCommand(c Client, args []string) error {
 	if args[0] == "resources" && (len(args) < 2 || args[1] != "check") {
 		return fmt.Errorf("resource policy is managed locally")
 	}
-	if args[0] == "terminal-events" && (len(args) < 2 || !contains(strings.Fields("publish ack delivered decision-get decision-set"), args[1])) {
+	if args[0] == "terminal-events" && (len(args) < 2 || !contains(strings.Fields("poll publish ack delivered decision-get decision-set"), args[1])) {
 		return fmt.Errorf("event operation not available remotely")
 	}
 	return nil

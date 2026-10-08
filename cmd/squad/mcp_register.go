@@ -790,6 +790,23 @@ func registerInspectionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot strin
 
 func registerEvidenceTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
 	registerDecisionTools(srv, db, repoID, repoRoot)
+	srv.Register(mcp.Tool{Name: "squad_terminal_events_poll", Description: "Read at most 16 pending event pointers under the native receiver fence; does not mark delivery or handling.", InputSchema: json.RawMessage(`{"type":"object","required":["delivery_session"],"properties":{"delivery_session":{"type":"string"},"native_session":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			Session string `json:"delivery_session"`
+			Native  string `json:"native_session"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := identity.AgentID()
+		if err != nil {
+			return nil, err
+		}
+		return pollTerminalEvents(ctx, terminalevents.Store{DB: db, Repo: repoID, Recipient: actor, NativeSession: a.Native}, a.Session)
+	}})
 	srv.Register(mcp.Tool{Name: "squad_terminal_events_delivered", Description: "Record fenced native transport acceptance. This does not acknowledge handling.", InputSchema: json.RawMessage(`{"type":"object","required":["event_id","delivery_session"],"properties":{"event_id":{"type":"string"},"delivery_session":{"type":"string"},"native_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			EventID string `json:"event_id"`
