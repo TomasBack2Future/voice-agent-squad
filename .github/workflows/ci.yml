@@ -38,6 +38,11 @@ jobs:
         env:
           CGO_ENABLED: "1"
       - run: go build ./...
+      - name: real remote CLI and MCP acceptance
+        run: |
+          go build -o /tmp/squad-remote-acceptance ./cmd/squad
+          python3 scripts/test_remote_service.py /tmp/squad-remote-acceptance
+          python3 -m unittest discover -s deploy -v
 
   cross-build:
     runs-on: ubuntu-latest

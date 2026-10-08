@@ -30,6 +30,9 @@ func newMCPCmd() *cobra.Command {
 				return err
 			}
 			defer closeFn()
+			if os.Getenv("SQUAD_SERVICE_CHILD") == "1" {
+				return runMCP(cmd.Context(), db, repoID, repoRoot, os.Stdin, os.Stdout)
+			}
 			return runMCP(cmd.Context(), db, repoID, repoRoot, os.Stdin, os.Stdout, WithBootstrap(realBootstrap))
 		},
 	}

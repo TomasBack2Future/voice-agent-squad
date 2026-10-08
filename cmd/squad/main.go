@@ -94,6 +94,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newGoCmd())
 	root.AddCommand(newWorkspaceCmd())
 	root.AddCommand(newServeCmd())
+	root.AddCommand(newServiceCmd())
 	root.AddCommand(newTUICmd())
 	root.AddCommand(newInstallPluginCmd())
 	root.AddCommand(newInstallHooksCmd())
@@ -203,6 +204,14 @@ func main() {
 			fmt.Fprintf(os.Stderr, "squad: arg %d contains NUL byte; refusing to truncate silently\n", i+1)
 			os.Exit(2)
 		}
+	}
+	if os.Getenv("SQUAD_REMOTE_URL") != "" {
+		code, err := executeRemote(os.Args[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		os.Exit(code)
 	}
 	if err := newRootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

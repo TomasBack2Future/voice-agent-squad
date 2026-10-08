@@ -288,6 +288,9 @@ func newClaimCmd() *cobra.Command {
 }
 
 func worktreeDefault() bool {
+	if os.Getenv("SQUAD_SERVICE_CHILD") == "1" {
+		return false
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return false
