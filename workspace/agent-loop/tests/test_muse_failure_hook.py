@@ -83,6 +83,16 @@ class HookAdapterTests(unittest.TestCase):
             ('your API key was rejected', 'auth'),
             ('quota exceeded for model', 'quota'),
             ('unknown model selected', 'config'),
+            # Muse 1.4.4 text for a 404 model_not_found (#84 run-5 capture).
+            ('model `muse-spark-1.3-contributor` does not exist or you lack access', 'config'),
+            ('model failed: model `muse-spark-1.3-contributor` does not exist or you lack access', 'config'),
+            ('model_not_found', 'config'),
+            # Auth markers keep precedence over the model-not-found phrase.
+            ('API error 401: your API key was rejected', 'auth'),
+            ('unauthorized: you lack access', 'auth'),
+            ('model `muse-spark-1.3-contributor` does not exist or you lack access: api key rejected', 'auth'),
+            ('you lack access to this resource', 'unknown'),
+            ('workspace path does not exist', 'unknown'),
             ('weird new failure mode', 'unknown'),
         ]
         for error, want in cases:
