@@ -735,6 +735,57 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertTrue(event_id.endswith('/' + key), event_id)
             self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
 
+    def test_interrupted_boundary_confirm_without_queue_real_backend(self):
+        """d714909 review on the real backend: exactly 2 events.
+
+        t1 fails offline with no queued outage yet, t2 records the
+        boundary, then the t3 replay confirms ep-1 but the process dies
+        after the open save and before the boundary close (drop OSError
+        here). The t4 failure must consume the stranded boundary, close
+        ep-1, and publish the live failure as ep-2; t5 dedupes.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        phase = {'offline': True}
+        kill_once = {'die': True}
+        original = hook._submit
+        real_drop = hook._drop_pending
+        def script(body, config, env, observation):
+            if phase['offline']:
+                raise subprocess.CalledProcessError(7, ['isolated-stranded-boundary'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        def dying_drop(config, observation):
+            if kill_once['die'] and observation.get('episode_id') == 'ep-1':
+                kill_once['die'] = False
+                raise OSError('isolated crash between confirm and boundary close')
+            return real_drop(config, observation)
+        hook._submit = script
+        hook._drop_pending = dying_drop
+        try:
+            self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            phase['offline'] = False
+            # The interrupted replay dies mid-call but run() maps the
+            # crash window OSError to exit 0 (observation-only).
+            self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
+            stranded = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())[
+                'D-E2E|1|e2e-native']
+            self.assertTrue(stranded['episode_open'])
+            self.assertEqual(stranded.get('healthy_boundary'), 't2')
+            self.assertEqual(stranded.get('queued_outage'), None)
+            self.assertEqual(hook.run(self.config, self._hook_event('t4')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
+        finally:
+            hook._submit = original
+            hook._drop_pending = real_drop
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0][0].endswith('/ep-1'), rows[0][0])
+        self.assertTrue(rows[1][0].endswith('/ep-2'), rows[1][0])
+        self.assertIn('turn=t1 request=request-t1', rows[0][1])
+        self.assertIn('turn=t4 request=request-t4', rows[1][1])
+
     def test_commit_before_interrupt_keeps_boundary_real_backend(self):
         """D84-11 finding 2 on the real backend.
 

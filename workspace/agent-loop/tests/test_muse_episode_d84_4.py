@@ -754,6 +754,58 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertIn('turn=t3 request=req-t3', bodies[1])
         self.assertIn('turn=t5 request=req-5', bodies[2])
 
+    def test_interrupted_boundary_confirm_without_queue_recovers_live_outage(self):
+        # d714909 review: t1 fails offline, t2 records the boundary with
+        # NO post-boundary failure queued yet (the common D84-11 shape).
+        # The t3 replay confirms ep-1 but the process dies after the open
+        # save and before the boundary close (drop OSError here). The row
+        # is open WITH the boundary and an empty queue. The t4 failure
+        # must NOT short-circuit to duplicate: it consumes the stranded
+        # boundary, closes ep-1, and publishes the live failure as ep-2.
+        # t5 dedupes against ep-2.
+        submits = []
+        online = {'yes': False}
+        kill_once = {'yes': True}
+        real_drop = hook._drop_pending
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        def dying_drop(config, observation):
+            if kill_once['yes'] and observation.get('episode_id') == 'ep-1':
+                kill_once['yes'] = False
+                raise OSError('isolated crash between confirm and boundary close')
+            return real_drop(config, observation)
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            hook.note_progress(payload(turn_id='t2', status='completed', error=''),
+                               self.cfg, hook._hook_env(self.cfg), attempts=1)
+            online['yes'] = True
+            with mock.patch.object(hook, '_drop_pending', side_effect=dying_drop):
+                with self.assertRaises(OSError):
+                    hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            stranded = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())[
+                'DISPATCH-1|1|worker-native']
+            self.assertTrue(stranded['episode_open'])
+            self.assertFalse(stranded['pending'])
+            self.assertEqual(stranded.get('healthy_boundary'), 't2')
+            self.assertEqual(stranded.get('queued_outage'), None)
+            fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
+            self.assertEqual(fourth['episode_id'], 'ep-2')
+            fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
+            self.assertEqual(fifth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-1', bodies[0])
+        self.assertIn('turn=t4 request=req-4', bodies[1])
+
     def test_open_row_close_clears_stale_boundary(self):
         # 1b417f3 review finding 1 (second half): closing an open row
         # must clear a stale healthy boundary so the next episode never

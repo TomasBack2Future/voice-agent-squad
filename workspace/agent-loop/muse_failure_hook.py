@@ -563,7 +563,7 @@ def _flush_queued_outage(config, env, key, attempts, closing_turn=''):
     return delivered
 
 
-def _mark_open_unlocked(config, observation, episode_id):
+def _mark_open_unlocked(config, observation, episode_id, drop_boundary=False):
     data = _snapshots(config)
     key = episode_key(observation, config)
     seen = data.get(key, {})
@@ -573,9 +573,13 @@ def _mark_open_unlocked(config, observation, episode_id):
     # episode never re-advance, a new episode advances again, and close
     # paths never advance. A stale 'advanced' boolean from an older head
     # is dropped, not carried. A recorded healthy boundary (D84-11) is
-    # carried, not dropped: the replay-confirmation path consumes it.
+    # carried, not dropped: the replay-confirmation path consumes it —
+    # except when opening a NEW outage after a queue drain: that boundary
+    # belonged to an already-closed episode and must not leak onto the
+    # new open row, or the next failure misreads it as an interrupted
+    # boundary confirm (d714909 review).
     bump = 0 if seen.get('advanced_episode') == episode_id else 1
-    boundary = seen.get('healthy_boundary')
+    boundary = None if drop_boundary else seen.get('healthy_boundary')
     # A confirmed replay must not drop preserved queued outages: the
     # boundary branch below delivers the head and keeps the tail
     # (4c756a4 review finding 1).
@@ -726,7 +730,7 @@ def _publish_after_queue_drain(observation, config, attempts):
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             last = error
             continue
-        _mark_open_unlocked(config, live, episode_id)
+        _mark_open_unlocked(config, live, episode_id, drop_boundary=True)
         _drop_pending(config, live)
         receipt.setdefault('episode_id', episode_id)
         # c3b0d81 review: the pre-drain may have been partial, so a
@@ -761,6 +765,17 @@ def _publish_locked(observation, config, attempts):
         if adopted is not None:
             seen = adopted
     if seen is not None and not seen.get('pending'):
+        if seen.get('healthy_boundary') and not _queued_outage_ids(config, key):
+            # d714909 review: an open row carrying a boundary with an
+            # empty queue is an interrupted boundary confirm — the
+            # replay of the old episode committed but the process died
+            # before the boundary close. The live failure is the
+            # post-boundary NEW outage: consume the stranded boundary
+            # by closing the old episode at it, then publish the live
+            # failure under the next key instead of a duplicate.
+            return _publish_new_outage_after_boundary(
+                dict(observation), config, _hook_env(config),
+                seen['healthy_boundary'], attempts, key)
         if _queued_outage_ids(config, key):
             # 2813cac review (extending 1b417f3 finding 1): an open row
             # with an undelivered queue must drain it on a failure turn
