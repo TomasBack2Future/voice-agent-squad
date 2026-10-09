@@ -634,6 +634,53 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertTrue(event_id.endswith('/' + key), event_id)
             self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
 
+    def test_failed_head_then_replay_drains_tail_real_backend(self):
+        """c3b0d81 review on the real backend: exactly 4 events.
+
+        ep-1 pending with queued ep-2/ep-3. The t6 failure turn
+        confirms ep-1 but ALL ep-2 submits fail. The t7 replay of ep-2
+        succeeds and drains ep-3 on the same failure turn; t8 is a new
+        ep-4 outage and t9 dedupes.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        phase = {'offline': True, 'fail_ep2': True}
+        original = hook._submit
+        seen_keys = []
+        def script(body, config, env, observation):
+            if phase['offline']:
+                raise subprocess.CalledProcessError(7, ['isolated-failed-head'])
+            key = observation.get('episode_id', '')
+            if phase['fail_ep2'] and key == 'ep-2' and seen_keys == ['ep-1']:
+                raise subprocess.CalledProcessError(7, ['isolated-head-single-shot'])
+            seen_keys.append(key)
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
+            phase['offline'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
+            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+            mid_row = mid['D-E2E|1|e2e-native']
+            self.assertTrue(mid_row['pending'])
+            self.assertEqual(mid_row['episode_id'], 'ep-2')
+            self.assertEqual(mid_row.get('queued_outage'), ['ep-3'])
+            phase['fail_ep2'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t7')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t8')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t9')), 0)
+        finally:
+            hook._submit = original
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 4)
+        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't5', 't8'),
+                                               ('ep-1', 'ep-2', 'ep-3', 'ep-4')):
+            self.assertTrue(event_id.endswith('/' + key), event_id)
+            self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
+
     def test_commit_before_interrupt_keeps_boundary_real_backend(self):
         """D84-11 finding 2 on the real backend.
 

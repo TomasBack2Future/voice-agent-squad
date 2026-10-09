@@ -660,6 +660,53 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertIn('turn=t5 request=req-t5', bodies[2])
         self.assertIn('turn=t7 request=req-7', bodies[3])
 
+    def test_replay_success_after_failed_head_drains_tail(self):
+        # c3b0d81 review: ep-1 pending with queued ep-2/ep-3. The t6
+        # failure turn confirms ep-1 but ALL ep-2 submits fail, leaving
+        # ep-2 pending with ep-3 still queued. The t7 replay of ep-2
+        # succeeds: the tail must drain on that same failure turn —
+        # ep-3 submits, no open row strands it. Exactly ep-1/2/3.
+        submits = []
+        online = {'yes': False}
+        fail_ep2 = {'yes': True}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            if fail_ep2['yes'] and key == 'ep-2' and len(submits) == 1:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                if status == 'failed':
+                    with self.assertRaises(subprocess.SubprocessError):
+                        hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
+                else:
+                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                                       self.cfg, hook._hook_env(self.cfg), attempts=1)
+            online['yes'] = True
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            fail_ep2['yes'] = False
+            seventh = hook.publish(payload(turn_id='t7', request_id='req-7'), self.cfg, attempts=1)
+            self.assertEqual(seventh['episode_id'], 'ep-3')
+            eighth = hook.publish(payload(turn_id='t8', request_id='req-8'), self.cfg, attempts=1)
+            self.assertEqual(eighth['episode_id'], 'ep-4')
+            ninth = hook.publish(payload(turn_id='t9', request_id='req-9'), self.cfg, attempts=1)
+            self.assertEqual(ninth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3', 'ep-4'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-t1', bodies[0])
+        self.assertIn('turn=t3 request=req-t3', bodies[1])
+        self.assertIn('turn=t5 request=req-t5', bodies[2])
+        self.assertIn('turn=t8 request=req-8', bodies[3])
+
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):

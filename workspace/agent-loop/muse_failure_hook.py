@@ -724,6 +724,12 @@ def _publish_after_queue_drain(observation, config, attempts):
         _mark_open_unlocked(config, live, episode_id)
         _drop_pending(config, live)
         receipt.setdefault('episode_id', episode_id)
+        # c3b0d81 review: the pre-drain may have been partial, so a
+        # remainder can still sit on this now-open row; drain it on
+        # this same failure turn instead of stranding it.
+        if _queued_outage_ids(config, key):
+            _flush_queued_outage(config, env, key, attempts,
+                                 closing_turn=observation.get('turn_id', ''))
         return receipt
     row = _snapshots(config).get(key, {})
     row.update({'episode_open': False, 'pending': True, 'episode_id': episode_id,
@@ -783,6 +789,17 @@ def _publish_locked(observation, config, attempts):
         _drop_pending(config, observation)
         receipt.setdefault('episode_id', episode_id)
         boundary = _snapshots(config).get(key, {}).get('healthy_boundary')
+        if replay and not boundary and _queued_outage_ids(config, key):
+            # c3b0d81 review: a replay success without a boundary leaves
+            # the row open with the queue still attached; the tail must
+            # drain on this same failure turn instead of stranding until
+            # a healthy turn that may never come during the outage.
+            _flush_queued_outage(config, env, key, attempts, closing_turn=observation.get('turn_id', ''))
+            tail = _queued_outage_ids(config, key)
+            if not tail:
+                final = _snapshots(config)
+                receipt['episode_id'] = final.get(key, {}).get('episode_id', episode_id)
+            return receipt
         if replay and boundary:
             # D84-11 finding 1: a healthy turn landed while this episode
             # was pending. The replay confirmation CLOSES the old episode
