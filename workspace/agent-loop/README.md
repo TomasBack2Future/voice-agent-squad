@@ -1039,10 +1039,15 @@ and only while that pid still runs the configured client in the workspace; there
 is no SIGKILL. It starts `muse serve` with the Worker's hooks and runs
 `session/resume` on the same native. The resumed session must be idle, have its
 original model and have a failed last turn. It sets max effort and allowAll,
-rechecks custody, and only then continues. A goal that the failure blocked
-(`goals.db` status `blocked`) gets `goal/resume`. With no live goal, the session
-gets one `turn/start` carrying the configured continuation prompt. A paused,
-active or unknown goal is refused, so user pauses stay paused. The executor
+rechecks custody, and only then continues. The native's durable goal state
+(`goals.db`) selects the only admitted continuation:
+
+- `active`: one bounded `turn/start` with the configured continuation prompt;
+  the goal itself is untouched.
+- `blocked` by the failure: `goal/resume`.
+- user `paused` or unknown: stop, so user pauses stay paused.
+- no live goal (none or completed): stop. `recovery-ep-N.json` records it as
+  an unsupported gap, and no budget is spent. The executor
 follows the chained turns until none runs and none starts within
 `quiet_seconds` (bounded by `max_seconds`). It then writes `recovery-ep-N.json`
 and closes the host.

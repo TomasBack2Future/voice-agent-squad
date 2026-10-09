@@ -237,14 +237,25 @@ def _resume(host, config):
         raise NotAdmitted('resumed session is not the idle failed native with its original model')
 
 
+class Unsupported(NotAdmitted):
+    """No admitted continuation exists for this goal state; recorded, nothing runs."""
+
+
 def continuation_mode(config):
-    """A goal blocked by the failure resumes; a user-paused or active goal is never touched."""
+    """Map the native's durable goal state to its only admitted continuation.
+
+    active -> one turn/start, leaving the goal untouched; blocked by the
+    failure -> goal/resume; user-paused or unknown -> stop; no live goal
+    (none or completed) -> stop as a recorded unsupported gap.
+    """
     status = goal_status(config)
-    if status is None:
+    if status == 'active':
         return 'turn'
     if status == 'blocked':
         return 'goal'
-    raise NotAdmitted('goal is %s; only a goal blocked by the failure is resumed' % status)
+    if status is None:
+        raise Unsupported('unsupported: no live goal to continue on this native')
+    raise NotAdmitted('goal is %s; it is never resumed by recovery' % status)
 
 
 def _continue(host, config, mode):
@@ -294,7 +305,12 @@ def recover(event, config, **flags):
     """Admit, spend the episode budget, stop the failed client, continue the same native."""
     env = msp.child_environment(config)
     admitted = admit(event, config, **flags)
-    mode = continuation_mode(config)
+    try:
+        mode = continuation_mode(config)
+    except Unsupported as gap:
+        evidence = {'event_id': event['event_id'], 'episode': admitted['episode'], 'stopped': str(gap)}
+        msp.atomic(Path(config['state_directory']) / ('recovery-%s.json' % admitted['episode']), evidence)
+        return evidence
     check_custody(config, env)
     spend_attempt(event, config)
     evidence = {'event_id': event['event_id'], 'episode': admitted['episode']}

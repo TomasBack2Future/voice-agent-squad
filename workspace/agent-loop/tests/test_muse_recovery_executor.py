@@ -240,6 +240,7 @@ class RecoveryBackendTests(RecoveryFixture):
         return [c['method'] for c in self.calls() if 'method' in c]
 
     def test_turn_continuation_resumes_same_native_with_original_settings(self):
+        self.set_goal('active')
         child = self.client()
         self.failed_log(pid=child.pid)
         evidence = executor.recover(self.event, self.cfg)
@@ -266,20 +267,40 @@ class RecoveryBackendTests(RecoveryFixture):
         self.assertEqual(evidence['turn_terminals'], ['completed', 'completed'])
         self.assertNotIn('turn/start', self.methods())
 
-    def test_paused_or_active_goal_is_never_resumed(self):
+    def test_goal_state_matrix(self):
+        # D84-33: active -> one turn/start (goal untouched); fault-blocked ->
+        # goal/resume; user-paused/unknown -> stop; completed/none -> stop
+        # with a recorded unsupported gap. Nothing runs on a stop.
         child = self.client()
         self.failed_log(pid=child.pid)
-        for status in ('paused', 'active', 'unknown-future-status'):
+        self.set_goal('active')
+        self.assertEqual(executor.continuation_mode(self.cfg), 'turn')
+        self.set_goal('blocked')
+        self.assertEqual(executor.continuation_mode(self.cfg), 'goal')
+        for status in ('paused', 'unknown-future-status'):
             with self.subTest(status=status):
                 self.set_goal(status)
                 with self.assertRaisesRegex(executor.NotAdmitted, 'goal is'):
                     executor.recover(self.event, self.cfg)
                 self.assertIsNone(child.poll())
                 self.assertEqual(self.calls(), [])
-        self.set_goal('completed')
-        self.assertEqual(executor.continuation_mode(self.cfg), 'turn')
+        for status in ('completed', None):
+            with self.subTest(status=status):
+                if status is None:
+                    (self.session_dir / 'goals.db').unlink()
+                else:
+                    self.set_goal(status)
+                evidence = executor.recover(self.event, self.cfg)
+                self.assertIn('unsupported', evidence['stopped'])
+                self.assertIsNone(child.poll())
+                self.assertEqual(self.calls(), [])
+                recorded = json.loads((Path(self.cfg['state_directory']) / 'recovery-ep-1.json').read_text())
+                self.assertIn('unsupported', recorded['stopped'])
+        self.set_goal('active')
+        self.assertEqual(executor.admit(self.event, self.cfg)['action'], 'continue')
 
     def test_custody_lost_before_turn_start_sends_no_turn(self):
+        self.set_goal('active')
         self.set_muse(flip_claim_on_resume=True)
         self.failed_log()
         evidence = executor.recover(self.event, self.cfg)
@@ -290,6 +311,7 @@ class RecoveryBackendTests(RecoveryFixture):
             executor.recover(self.event, self.cfg)
 
     def test_hold_decision_or_closed_reservation_changes_nothing(self):
+        self.set_goal('active')
         child = self.client()
         self.failed_log(pid=child.pid)
         for squad in ({'decision': {'revision': 4, 'action': 'hold'}}, {'reservation_state': 'completed'}):
@@ -303,6 +325,7 @@ class RecoveryBackendTests(RecoveryFixture):
         self.assertEqual(executor.admit(self.event, self.cfg)['action'], 'continue')
 
     def test_unqualified_host_or_unexpected_session_starts_no_turn(self):
+        self.set_goal('active')
         for muse in ({'version': '1.4.3'}, {'last_terminal': 'completed'}, {'model': 'other-model'}):
             with self.subTest(muse=muse):
                 self.muse_log.unlink(missing_ok=True)
