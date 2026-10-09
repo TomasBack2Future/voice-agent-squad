@@ -1,6 +1,6 @@
 // Read-only evidence preflight. It neither claims resources nor executes mutations.
-import {readFileSync} from 'node:fs';
-import {pathToFileURL} from 'node:url';
+import {readFileSync,realpathSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 
 const text = x => typeof x === 'string' && x.trim().length > 0;
 const sha = x => typeof x === 'string' && /^[0-9a-f]{40}$/.test(x);
@@ -152,7 +152,12 @@ export function controllableDuration(start, end, exclusions) {
   return {elapsed:end-start,excluded,controllable:end-start-excluded};
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isMainEntry() {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+}
+
+if (isMainEntry()) {
   try {
     const result=checkDelivery(JSON.parse(readFileSync(process.argv[2], 'utf8')));
     console.log(JSON.stringify(result)); process.exitCode=result.ok?0:2;

@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
+import {mkdtempSync,mkdirSync,symlinkSync,writeFileSync,realpathSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,dirname,relative} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {checkDelivery,controllableDuration} from './delivery-check.mjs';
 const schema='squad.delivery-check.v1', head='a'.repeat(40), base='b'.repeat(40);
 const freeze=()=>({diffSha256:'c'.repeat(64),prBodySha256:'d'.repeat(64),workingTreeClean:true,remoteHeadVerified:true,fastChecksPassed:true,knownCorrectionsResolved:true,stabilityEvidence:'local head equals remote PR head after fast gates',companionsRequired:['source','tests','docs'],companionsComplete:['source','tests','docs']});
@@ -122,4 +127,46 @@ test('new evidence actions reject malformed collections without throwing',()=>{
  for(const previousAttempts of [null,{},[null]])assert(!checkDelivery({...sharedFailure(),previousAttempts}).ok);
  assert(!checkDelivery({...sharedFailure(),failure:null}).ok);
  assert(!checkDelivery({...blocker(),nextAction:null}).ok);
+});
+
+const realScript=fileURLToPath(new URL('./delivery-check.mjs',import.meta.url));
+const negative={schema,action:'dependency',kind:'acceptance',evidence:'read-only negative fixture',blockedPhase:'staging',accepted:false};
+const positive={schema,action:'dependency',kind:'implementation',issueState:'OPEN',integratedSha:head,ancestorVerified:true,evidence:'merge-and-diff',blockedPhase:'implementation'};
+function install(){
+ const root=realpathSync(mkdtempSync(join(tmpdir(),'delivery-check-')));
+ mkdirSync(join(root,'real'));mkdirSync(join(root,'skills/studio-issue-worker/scripts'),{recursive:true});
+ const hop1=join(root,'hop1.mjs');symlinkSync(realScript,hop1);
+ const installed=join(root,'skills/studio-issue-worker/scripts/delivery-check.mjs');symlinkSync(hop1,installed);
+ const input=(name,value)=>{const f=join(root,name);writeFileSync(f,typeof value==='string'?value:JSON.stringify(value));return f;};
+ return {root,installed,input};
+}
+function run(script,args,cwd){const r=spawnSync(process.execPath,[script,...args],{cwd,encoding:'utf8'});return {...r,json:(()=>{try{return JSON.parse(r.stdout);}catch{return null;}})()};}
+test('CLI through installation symlinks validates like the real path',()=>{
+ const {root,installed,input}=install();
+ try{
+  const bad=input('bad.json',negative),good=input('good.json',positive);
+  for(const script of [realScript,installed]){
+   const rejected=run(script,[bad],root);assert.equal(rejected.status,2);assert.equal(rejected.json.ok,false);assert(rejected.json.errors.includes('acceptance-pending'));
+   const accepted=run(script,[good],root);assert.equal(accepted.status,0);assert.equal(accepted.json.ok,true);
+  }
+  const rel=relative(root,installed);
+  const viaRelative=run(rel,[bad],root);assert.equal(viaRelative.status,2);assert.equal(viaRelative.json.ok,false);
+  const viaDotted=run(join('skills','..',rel),['bad.json'],root);assert.equal(viaDotted.status,2);assert.equal(viaDotted.json.ok,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+test('CLI through installation symlink fails nonzero for malformed, missing or absent input',()=>{
+ const {root,installed,input}=install();
+ try{
+  for(const args of [[input('malformed.json','{not json')],[join(root,'missing.json')],[]]){
+   const r=run(installed,args,root);assert.equal(r.status,2);assert.equal(r.stdout,'');assert.match(r.stderr,/Invalid or unreadable/);
+  }
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+test('importing the module never runs the CLI branch or sets the exit code',()=>{
+ const {root,installed}=install();
+ try{
+  const code=`const m=await import(${JSON.stringify(installed)});process.stdout.write(typeof m.checkDelivery+':'+String(process.exitCode));`;
+  const r=spawnSync(process.execPath,['--input-type=module','-e',code,'--','nonexistent.json'],{cwd:root,encoding:'utf8'});
+  assert.equal(r.status,0);assert.equal(r.stdout,'function:undefined');assert.equal(r.stderr,'');
+ }finally{rmSync(root,{recursive:true,force:true});}
 });
