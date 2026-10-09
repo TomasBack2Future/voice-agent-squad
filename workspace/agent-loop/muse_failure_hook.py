@@ -460,6 +460,11 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
         seen['episode_open'] = False
         seen['closed_at'] = int(time.time())
         seen['closed_by_turn'] = str(event.get('turn_id', ''))[:128]
+        # A stale boundary on an open row dies with the close: the next
+        # episode must never inherit and re-consume it (1b417f3 finding
+        # 1). The pre-close boundary is still honored for the drain
+        # below, which only runs when a queue was preserved under it.
+        seen.pop('healthy_boundary', None)
         data[key] = seen
         _save(config, data)
         # Closing an open episode may reveal queued outages preserved
@@ -756,6 +761,14 @@ def _publish_locked(observation, config, attempts):
         if adopted is not None:
             seen = adopted
     if seen is not None and not seen.get('pending'):
+        if seen.get('healthy_boundary') and _queued_outage_ids(config, key):
+            # 1b417f3 finding 1: an open row with a boundary and an
+            # undelivered queue is an interrupted boundary confirm —
+            # the live post-boundary failure was never stored. Recover
+            # by draining the queue first, then publishing the live
+            # failure as the next new outage instead of duplicate.
+            _drain_queued_before_live(config, key, attempts)
+            return _publish_after_queue_drain(observation, config, attempts)
         return {'state': 'duplicate'}
     live = dict(observation)
     if seen is not None and seen.get('pending') and seen.get('episode_id'):

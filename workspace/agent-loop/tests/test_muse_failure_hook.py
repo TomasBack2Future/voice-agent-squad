@@ -284,6 +284,37 @@ class HandlingTests(unittest.TestCase):
         second = handling.episode_key(self.event(outcome_id=8, source_message_id=8))
         self.assertEqual(first, second)
 
+    def test_episode_key_uses_persisted_episode_suffix_and_class(self):
+        # 1b417f3 review finding 2: the durable episode identity is the
+        # event-id suffix /ep-N and the class is the closed-enum token
+        # in the message body. Receipts carrying only event_id (plus an
+        # optional body) must still key distinct outages distinctly —
+        # no shared |unknown|ep-? key that one budget suppresses all.
+        one = {'event_id': 'worker-terminal-v1/D/1/n/runtime-failure/3/ep-1',
+               'kind': 'runtime-failure', 'outcome_id': 3,
+               'body': 'runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta'}
+        two = {'event_id': 'worker-terminal-v1/D/1/n/runtime-failure/4/ep-2',
+               'kind': 'runtime-failure', 'outcome_id': 4,
+               'body': 'runtime-failure ep-2 auth turn=t5 request=r5 attempt=1 provider=meta'}
+        key_one = handling.episode_key(one)
+        key_two = handling.episode_key(two)
+        self.assertEqual(key_one, 'D|1|n|exhausted|ep-1')
+        self.assertEqual(key_two, 'D|1|n|auth|ep-2')
+        self.assertNotEqual(key_one, key_two)
+        bare = {'event_id': 'worker-terminal-v1/D/1/n/runtime-failure/9/ep-7',
+                'kind': 'runtime-failure', 'outcome_id': 9}
+        self.assertEqual(handling.episode_key(bare), 'D|1|n|unknown|ep-7')
+        # Auth from the body token never continues once terminal.
+        action, _ = handling.decide(two, terminal=True, seen=set())
+        self.assertEqual(action, 'stop')
+        # Distinct persisted outages get distinct budgets.
+        action, _ = handling.decide(two, terminal=True, seen={key_one})
+        self.assertEqual(action, 'stop')
+        other = dict(two, event_id='worker-terminal-v1/D/1/n/runtime-failure/5/ep-3',
+                     body='runtime-failure ep-3 exhausted turn=t6 request=r6 attempt=1 provider=meta')
+        action, _ = handling.decide(other, terminal=True, seen={key_one})
+        self.assertEqual(action, 'continue')
+
 
 if __name__ == '__main__':
     unittest.main()
