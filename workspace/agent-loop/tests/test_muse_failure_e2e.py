@@ -132,7 +132,7 @@ class MuseFailureE2ETests(unittest.TestCase):
         with self.db() as db:
             count = db.execute("SELECT count(*) FROM terminal_event_receipts WHERE kind='runtime-failure'").fetchone()[0]
         self.assertEqual(count, 1)
-        healthy = dict(event, turn_id='t2', status='completed', error='')
+        healthy = dict(event, turn_id='t2', status='success', error='')
         hook = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
                                '--config', str(self.config), '--event', json.dumps(healthy)],
                               env=self.env, capture_output=True, text=True, timeout=15)
@@ -212,7 +212,7 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual(rows, [committed])
         self.assertEqual(body, 'runtime-failure ep-1 exhausted turn=t1 request=req-1 attempt=10 provider=meta')
         # Healthy progress closes the episode after reconciling pending.
-        healthy = dict(first, turn_id='t3', status='completed', error='')
+        healthy = dict(first, turn_id='t3', status='success', error='')
         run = subprocess.run([sys.executable, str(ROOT / 'muse_failure_hook.py'),
                               '--config', str(self.config), '--event', json.dumps(healthy)],
                              env=self.env, capture_output=True, text=True, timeout=15)
@@ -308,6 +308,48 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual([e['event_id'] for e in receipt['events']], [event_id])
         self.assertEqual(receipt['events'][0]['kind'], 'runtime-failure')
 
+    def _timed_out_144(self, turn):
+        """Muse 1.4.4 failed-PostLLMCall key shape (captured 401 chain) for the
+        stream-first-event timeout observed live on 1372: the model task ends
+        `timed_out`, never `failed`, after its bounded provider attempts."""
+        return {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native', 'turn_id': turn,
+                'status': 'timed_out', 'attempt': 9, 'step': 1,
+                'request_id': turn + ':0:9', 'provider': 'model.meta.response',
+                'response_id': None, 'usage': None, 'finish_reason': None,
+                'error': 'no first model event within 300000ms', 'output_text_preview': None,
+                'tool_call_count': 0, 'messages': [{'role': 'user', 'content': 'private prompt'}],
+                'message_count': 1, 'tools': [], 'tool_count': 0, 'options': {},
+                'cwd': str(self.root), 'transcript_path': None, 'model': 'muse-spark-1.3-contributor',
+                'permission_mode': 'yolo', 'model_provider': 'meta', 'agent_id': None, 'agent_type': None}
+
+    def test_real_144_timed_out_failure_publishes_connection_event(self):
+        """1372 live break: a timed_out PostLLMCall must publish, never count as health."""
+        self._run_hook(self._timed_out_144('t1'))
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0][0].endswith('/ep-1'), rows[0][0])
+        self.assertEqual(rows[0][1], 'runtime-failure ep-1 connection turn=t1 request=t1.0.9 '
+                                     'attempt=9 provider=model.meta.response')
+        self.assertNotIn('private prompt', rows[0][1])
+
+    def test_timed_out_and_cancelled_never_close_an_outage(self):
+        """Only explicit success ends an outage; cancelled/unknown are audited, not health."""
+        self._run_hook(self._hook_event('t1'))
+        self._run_hook(self._timed_out_144('t2'))
+        self._run_hook(self._hook_event('t3', 'cancelled'))
+        self._run_hook(self._hook_event('t4', 'some-future-status'))
+        self._run_hook(self._hook_event('t5'))
+        self.assertEqual(len(self._failure_rows()), 1)
+        self.assertTrue(self._state_row()['episode_open'])
+        ignored = json.loads((self.root / 'hook-state' / 'ignored.json').read_text())
+        self.assertEqual([(entry['turn_id'], entry['status']) for entry in ignored],
+                         [('t3', 'cancelled'), ('t4', 'some-future-status')])
+        self._run_hook(self._hook_event('t6', 'success'))
+        self._run_hook(self._timed_out_144('t7'))
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 2)
+        self.assertIn('ep-2 connection turn=t7', rows[1][1])
+
     def _hook_event(self, turn, status='failed'):
         return {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native',
                 'turn_id': turn, 'status': status, 'attempt': 1,
@@ -355,7 +397,7 @@ class MuseFailureE2ETests(unittest.TestCase):
         hook._submit = script
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'success')), 0)
             mid_row = self._state_row()
             self.assertFalse(mid_row['episode_open'])
             self.assertEqual(mid_row['closed_by_turn'], 't2')
@@ -399,7 +441,7 @@ class MuseFailureE2ETests(unittest.TestCase):
         hook._submit = script
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'success')), 0)
             phase['fail_all'] = False
             phase['fail_ep2'] = True
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
@@ -440,14 +482,14 @@ class MuseFailureE2ETests(unittest.TestCase):
         hook._submit = script
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'success')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
             self.assertTrue(self._state_row()['episode_open'])
             self.assertEqual(self._outbox_ids(), ['ep-1', 'ep-2'])
             self.assertEqual(self._failure_rows(), [])
             phase['offline'] = False
-            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t5', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'success')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t5', 'success')), 0)
         finally:
             hook._submit = original
         rows = self._failure_rows()
@@ -477,12 +519,12 @@ class MuseFailureE2ETests(unittest.TestCase):
         hook._submit = script
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'success')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
             phase['offline'] = False
-            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'success')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t6', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t6', 'success')), 0)
         finally:
             hook._submit = original
         rows = self._failure_rows()
@@ -526,15 +568,15 @@ class MuseFailureE2ETests(unittest.TestCase):
         hook._submit = script
         try:
             self.assertEqual(hook.run(self.config, real_first[0]), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'success')), 0)
             self.assertEqual(hook.run(self.config, real_first[1]), 0)
-            for turn, status in (('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t4', 'success'), ('t5', 'failed')):
                 self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
             self.assertEqual(self._outbox_ids(), ['ep-1', 'ep-2', 'ep-3'])
             self.assertEqual(self._failure_rows(), [])
             phase['offline'] = False
             for turn in ('t6', 't7', 't8'):
-                self.assertEqual(hook.run(self.config, self._hook_event(turn, 'completed')), 0)
+                self.assertEqual(hook.run(self.config, self._hook_event(turn, 'success')), 0)
         finally:
             hook._submit = original
         rows = self._failure_rows()
@@ -567,8 +609,8 @@ class MuseFailureE2ETests(unittest.TestCase):
             return original(body, config, env, observation)
         hook._submit = script
         try:
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
@@ -576,7 +618,7 @@ class MuseFailureE2ETests(unittest.TestCase):
             # the open outage that began at t5.
             self.assertEqual(self._outbox_ids(), [])
             self.assertTrue(self._state_row()['episode_open'])
-            self.assertEqual(hook.run(self.config, self._hook_event('t7', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t7', 'success')), 0)
         finally:
             hook._submit = original
         rows = self._failure_rows()
@@ -610,15 +652,15 @@ class MuseFailureE2ETests(unittest.TestCase):
         hook._submit = script
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'success')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
             phase['offline'] = False
-            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'success')), 0)
             self.assertFalse(self._state_row()['episode_open'])
             self.assertEqual(self._outbox_ids(), ['ep-2'])
             phase['fail_queued_once'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t6', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t6', 'success')), 0)
         finally:
             hook._submit = original
         rows = self._failure_rows()
@@ -652,8 +694,8 @@ class MuseFailureE2ETests(unittest.TestCase):
             return original(body, config, env, observation)
         hook._submit = script
         try:
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
@@ -698,8 +740,8 @@ class MuseFailureE2ETests(unittest.TestCase):
             return original(body, config, env, observation)
         hook._submit = script
         try:
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
@@ -756,7 +798,7 @@ class MuseFailureE2ETests(unittest.TestCase):
         """
         sys.path.insert(0, str(ROOT))
         import muse_failure_hook as hook
-        self._offline_until(hook, (('t1', 'failed', False), ('t2', 'completed', False),
+        self._offline_until(hook, (('t1', 'failed', False), ('t2', 'success', False),
                                    ('t3', 'failed', False), ('t4', 'failed', True),
                                    ('t5', 'failed', True)))
         self._assert_outages(('t1', 't3'))
@@ -771,9 +813,9 @@ class MuseFailureE2ETests(unittest.TestCase):
         """
         sys.path.insert(0, str(ROOT))
         import muse_failure_hook as hook
-        self._offline_until(hook, (('t1', 'failed', False), ('t2', 'completed', False),
-                                   ('t3', 'failed', False), ('t4', 'completed', False),
-                                   ('t5', 'failed', True), ('t6', 'completed', True)))
+        self._offline_until(hook, (('t1', 'failed', False), ('t2', 'success', False),
+                                   ('t3', 'failed', False), ('t4', 'success', False),
+                                   ('t5', 'failed', True), ('t6', 'success', True)))
         self._assert_outages(('t1', 't3', 't5'))
 
     def test_interrupted_boundary_confirm_without_queue_real_backend(self):
@@ -806,7 +848,7 @@ class MuseFailureE2ETests(unittest.TestCase):
         hook._save = dying_save
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
-            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'success')), 0)
             phase['offline'] = False
             # The interrupted delivery dies mid-call but run() maps the
             # crash window OSError to exit 0 (observation-only).
@@ -853,7 +895,7 @@ class MuseFailureE2ETests(unittest.TestCase):
         # Allocation was saved before Submit, so the crash leaves the
         # frozen ep-1 payload in the outbox for an identical replay.
         self.assertEqual(self._outbox_ids(), ['ep-1'])
-        self._run_hook(self._hook_event('t2', 'completed'))
+        self._run_hook(self._hook_event('t2', 'success'))
         self._run_hook(self._hook_event('t3'))
         rows = self._failure_rows()
         self.assertEqual(len(rows), 2)
