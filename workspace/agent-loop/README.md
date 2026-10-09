@@ -1034,9 +1034,13 @@ anything it requires:
   `proceed` (or absent) decision.
 
 It then compare-and-sets the episode's single attempt in its state directory.
-It sends SIGTERM only to the client pid recorded in that session's route facts,
-and only while that pid still runs the configured client in the workspace; there
-is no SIGKILL. It starts `muse serve` with the Worker's hooks and runs
+Immediately before the signal it re-reads the session log. The last run must
+still be the failed terminal, and the route-facts pid must still be the admitted
+client; otherwise it stops without signalling. It sends SIGTERM only to that pid,
+and only while the pid still runs the configured client in the workspace; there
+is no SIGKILL. Any stop after the attempt is spent, including a coordination read
+timeout, is still recorded in `recovery-ep-N.json`. The episode is then left to
+the Dispatcher rather than retried. It starts `muse serve` with the Worker's hooks and runs
 `session/resume` on the same native. The resumed session must be idle, have its
 original model and have a failed last turn. It sets max effort and allowAll,
 rechecks custody, and only then continues. The native's durable goal state

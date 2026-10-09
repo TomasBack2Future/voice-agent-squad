@@ -170,9 +170,17 @@ for line in sys.stdin:
 """
 
 FAKE_SQUAD = r"""
-import json, os, sys
+import json, os, sys, time
 state = json.load(open(os.environ['FAKE_SQUAD_STATE']))
 args = sys.argv[1:]
+if args[:1] == ['who']:
+    state['who_calls'] = state.get('who_calls', 0) + 1
+    json.dump(state, open(os.environ['FAKE_SQUAD_STATE'], 'w'))
+    if state.get('append_on_first_who') and state['who_calls'] == 1:
+        with open(state['session_log'], 'a') as log:
+            log.write(json.dumps(state['append_on_first_who']) + '\n')
+    if state.get('hang_on_who_call') == state['who_calls']:
+        time.sleep(5)
 if args[:2] == ['dispatch', 'list']:
     print(json.dumps([{'reservation_key': 'DISPATCH-1', 'generation': 1, 'state': state.get('reservation_state', 'dispatched'),
                        'worker_thread_id': state['native'], 'reserved_by': 'dispatcher'}]))
@@ -230,6 +238,12 @@ class RecoveryBackendTests(RecoveryFixture):
                        'status TEXT, percent_complete INTEGER)')
             db.execute('DELETE FROM goals')
             db.execute('INSERT INTO goals VALUES (?, ?, ?, ?, 0)', (NATIVE, 'goal-1', 'fixture', status))
+
+    def squad_state(self):
+        return json.loads(self.squad_state_path().read_text())
+
+    def squad_state_path(self):
+        return self.squad_state
 
     def calls(self):
         if not self.muse_log.exists():
@@ -344,6 +358,42 @@ class RecoveryBackendTests(RecoveryFixture):
                 self.assertNotIn('turn/start', self.methods())
                 self.assertNotIn('goal/resume', self.methods())
 
+
+    def test_newer_run_before_sigterm_leaves_client_alone(self):
+        # 160e0e7 review finding 1: the client starts a newer run between
+        # admission and termination; recheck right before SIGTERM refuses.
+        self.set_goal('active')
+        child = self.client()
+        self.failed_log(pid=child.pid)
+        for appended in (record('run', kind='model_request_configured'),
+                         {'payload_type': 'runtime.session.route_facts',
+                          'payload': {'kind': 'route_facts', 'record': {'cwd': str(self.workspace), 'pid': 4242}}}):
+            with self.subTest(appended=appended['payload']['kind']):
+                self.failed_log(pid=child.pid)
+                (Path(self.cfg['state_directory']) / 'recovery-attempts.json').unlink(missing_ok=True)
+                self.set_squad(append_on_first_who=appended,
+                               session_log=str(self.session_dir / 'session.jsonl'))
+                evidence = executor.recover(self.event, self.cfg)
+                self.assertIn('stopped', evidence)
+                self.assertIsNone(child.poll())
+                self.assertEqual(self.calls(), [])
+
+    def test_coordination_timeout_after_sigterm_still_records_evidence(self):
+        # 160e0e7 review finding 2: a TimeoutExpired in the second custody
+        # read must be handled fail-closed and still write recovery-ep-1.json.
+        self.set_goal('active')
+        child = self.client()
+        self.failed_log(pid=child.pid)
+        self.set_squad(hang_on_who_call=2)
+        self.cfg['coordination_timeout_seconds'] = 1
+        evidence = executor.recover(self.event, self.cfg)
+        self.assertIn('timed out', evidence['stopped'])
+        self.assertIsNotNone(child.poll())
+        self.assertNotIn('turn/start', self.methods())
+        recorded = json.loads((Path(self.cfg['state_directory']) / 'recovery-ep-1.json').read_text())
+        self.assertEqual(recorded['stopped'], evidence['stopped'])
+        attempts = json.loads((Path(self.cfg['state_directory']) / 'recovery-attempts.json').read_text())
+        self.assertEqual([a['stage'] for a in attempts.values()], ['stopped'])
 
 if __name__ == '__main__':
     unittest.main()

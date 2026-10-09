@@ -168,16 +168,23 @@ def _process_args(pid):
     return None if stat.startswith('Z') else args.strip()
 
 
-def terminate_failed_client(config, client_marker):
+def terminate_failed_client(config, client_marker, expected_pid=None):
     """SIGTERM the session's own recorded client; refuse any other process.
 
-    The pid comes from the native log's route facts. It must still run the
-    configured Muse client in this workspace, so a reused pid or a bystander
-    is never signalled. No SIGKILL: a client that ignores SIGTERM stays running
-    and the recovery stops with that fact.
+    The session log is re-read immediately before the signal: its last run
+    record must still be the failed terminal, and its route-facts pid must
+    still be the one admission saw, so a client that started a newer run or
+    was replaced meanwhile is never signalled. The pid must also still run
+    the configured Muse client in this workspace, so a reused pid or a
+    bystander is never signalled. No SIGKILL: a client that ignores SIGTERM
+    stays running and the recovery stops with that fact.
     """
-    route = _client_route(_session_log(config))
-    pid = route.get('pid')
+    records = _session_log(config)
+    if _last_run_terminal(records) != 'failed':
+        raise NotAdmitted('session changed since admission: last run is no longer the failed terminal')
+    pid = _client_route(records).get('pid')
+    if expected_pid is not None and pid != expected_pid:
+        raise NotAdmitted('session changed since admission: client pid %r is not the admitted %r' % (pid, expected_pid))
     if not isinstance(pid, int) or pid <= 1:
         raise NotAdmitted('session route facts carry no client pid')
     args = _process_args(pid)
@@ -195,8 +202,14 @@ def terminate_failed_client(config, client_marker):
 
 
 def _coordination(config, env, *args):
-    result = subprocess.run([config['coordination_executable'], *args], cwd=config['ledger_directory'],
-                            env=env, capture_output=True, text=True, timeout=30)
+    try:
+        result = subprocess.run([config['coordination_executable'], *args], cwd=config['ledger_directory'],
+                                env=env, capture_output=True, text=True,
+                                timeout=config.get('coordination_timeout_seconds', 30))
+    except subprocess.TimeoutExpired:
+        raise NotAdmitted('coordination read %s timed out' % args[0]) from None
+    except (OSError, subprocess.SubprocessError):
+        raise NotAdmitted('coordination read %s could not run' % args[0]) from None
     if result.returncode:
         raise NotAdmitted('coordination read %s failed' % args[0])
     return result.stdout
@@ -319,7 +332,8 @@ def recover(event, config, **flags):
     spend_attempt(event, config)
     evidence = {'event_id': event['event_id'], 'episode': admitted['episode']}
     try:
-        evidence['client'] = terminate_failed_client(config, config['client_marker'])
+        evidence['client'] = terminate_failed_client(config, config['client_marker'],
+                                                     admitted['client'].get('pid'))
         record_attempt(event, config, 'client-stopped')
         state = Path(config['state_directory'])
         host = msp.Host(dict(config, serve_config=['hooks=' + json.dumps(config['hooks'], separators=(',', ':'))]
@@ -341,10 +355,11 @@ def recover(event, config, **flags):
             record_attempt(event, config, 'turn-' + str(evidence['terminal']))
         finally:
             host.close()
-    except (NotAdmitted, ValueError, OSError) as error:
+    except (NotAdmitted, ValueError, OSError, queue.Empty, subprocess.SubprocessError) as error:
         record_attempt(event, config, 'stopped')
-        evidence['stopped'] = str(error)
-    msp.atomic(Path(config['state_directory']) / ('recovery-%s.json' % admitted['episode']), evidence)
+        evidence['stopped'] = str(error) or type(error).__name__
+    finally:
+        msp.atomic(Path(config['state_directory']) / ('recovery-%s.json' % admitted['episode']), evidence)
     return evidence
 
 
@@ -366,7 +381,7 @@ def main(argv=None):
             print(json.dumps(dict(admit(event, config, **flags), admitted=True)))
             return 0
         evidence = recover(event, config, **flags)
-    except (NotAdmitted, OSError, ValueError, KeyError) as error:
+    except (NotAdmitted, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print(json.dumps({'admitted': False, 'reason': str(error)}))
         return 3
     print(json.dumps(evidence))
