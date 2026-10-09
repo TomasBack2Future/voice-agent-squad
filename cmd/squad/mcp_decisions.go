@@ -27,7 +27,7 @@ func registerDecisionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		}
 		return (terminalevents.Store{DB: db, Repo: repoID}).Decide(ctx, actor, a.DecisionRequest)
 	}})
-	srv.Register(mcp.Tool{Name: "squad_terminal_decision_get", Description: "Read the latest decision for an exact live assignment.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","generation","worker_session"],"properties":{"reservation":{"type":"string"},"generation":{"type":"integer","minimum":1},"worker_session":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+	srv.Register(mcp.Tool{Name: "squad_terminal_decision_get", Description: "Read the latest decision for an exact live assignment.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","generation","worker_session"],"properties":{"reservation":{"type":"string","minLength":1},"generation":{"type":"integer","minimum":1},"worker_session":{"type":"string","minLength":1}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var q terminalevents.DecisionRequest
 		if err := json.Unmarshal(raw, &q); err != nil {
 			return nil, err

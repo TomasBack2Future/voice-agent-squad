@@ -59,13 +59,67 @@ func workerRecipient(ctx context.Context, tx *sql.Tx, repo, key string, generati
 	return agents[0], nil
 }
 
+// DecisionLookupError names why a decision lookup could not locate its
+// assignment, so "no decision recorded" (revision zero) is never confused with
+// a request that identified no live assignment.
+type DecisionLookupError struct {
+	Condition string
+	Detail    string
+}
+
+func (e *DecisionLookupError) Error() string {
+	return fmt.Sprintf("decision lookup %s: %s", e.Condition, e.Detail)
+}
+
+func (s Store) diagnoseLookup(ctx context.Context, key string, generation int64) error {
+	rows, err := s.DB.QueryContext(ctx, `SELECT generation,state FROM dispatch_reservations WHERE repo_id=? AND item_id=?`, s.Repo, key)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var g int64
+		var state string
+		if err = rows.Scan(&g, &state); err != nil {
+			return err
+		}
+		found = true
+		if g != generation {
+			continue
+		}
+		if state != "dispatched" {
+			return &DecisionLookupError{"not-dispatched", fmt.Sprintf("reservation %s generation %d is %s, not dispatched", key, generation, state)}
+		}
+		return &DecisionLookupError{"worker-session-mismatch", fmt.Sprintf("--worker-session is not the native session bound to reservation %s generation %d", key, generation)}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if !found {
+		return &DecisionLookupError{"reservation-not-found", fmt.Sprintf("no reservation %q in this ledger", key)}
+	}
+	return &DecisionLookupError{"generation-mismatch", fmt.Sprintf("reservation %s has no generation %d", key, generation)}
+}
+
 // CurrentDecision excludes completed/transferred generations and canonical-item
 // continuations. Revision zero means this assignment has not adopted decisions.
 func (s Store) CurrentDecision(ctx context.Context, key string, generation int64, session string) (Decision, error) {
 	var d Decision
+	switch {
+	case key == "":
+		return d, &DecisionLookupError{"missing-reservation", "--reservation is required"}
+	case generation < 1:
+		return d, &DecisionLookupError{"invalid-generation", "--generation is required and must be at least 1"}
+	case session == "":
+		return d, &DecisionLookupError{"missing-worker-session", "--worker-session is required: decision-get never resolves a session implicitly"}
+	}
 	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,'')
  FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation AND d.item_id=r.canonical_item_id
  WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return d, s.diagnoseLookup(ctx, key, generation)
+	}
 	return d, err
 }
 

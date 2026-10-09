@@ -31,7 +31,7 @@ func terminalDecisionCommands() []*cobra.Command {
 	set.Flags().StringVar(&q.Condition, "condition", "", "Specific hold condition or verified recovery reference")
 	var key, session string
 	var generation, expected int64
-	get := &cobra.Command{Use: "decision-get", Short: "Read the latest decision; optionally reject an outdated revision", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	get := &cobra.Command{Use: "decision-get", Short: "Read the latest decision; --reservation, --generation and --worker-session are all required", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		bc, err := bootClaimContext(cmd.Context())
 		if err != nil {
 			return err
@@ -49,9 +49,9 @@ func terminalDecisionCommands() []*cobra.Command {
 		}
 		return nil
 	}}
-	get.Flags().StringVar(&key, "reservation", "", "Exact reservation")
-	get.Flags().Int64Var(&generation, "generation", 0, "Generation")
-	get.Flags().StringVar(&session, "worker-session", "", "Bound native session")
+	get.Flags().StringVar(&key, "reservation", "", "Exact reservation (required)")
+	get.Flags().Int64Var(&generation, "generation", 0, "Generation (required, at least 1)")
+	get.Flags().StringVar(&session, "worker-session", "", "Bound native session (required; never resolved implicitly)")
 	get.Flags().Int64Var(&expected, "expected-revision", -1, "Assert this revision remains current")
 	return []*cobra.Command{set, get}
 }

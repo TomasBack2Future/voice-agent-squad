@@ -2,6 +2,7 @@ package terminalevents
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 )
@@ -168,5 +169,54 @@ func TestConcurrentDecisionsHaveOneWinner(t *testing.T) {
 	}
 	if wins != 1 {
 		t.Fatal("lost update", wins)
+	}
+}
+
+func TestCurrentDecisionLookupFailuresArePrecise(t *testing.T) {
+	s := fixture(t)
+	s.Recipient = ""
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		key     string
+		gen     int64
+		session string
+		want    string
+	}{
+		"missing session":  {"DISPATCH-1", 1, "", "missing-worker-session"},
+		"wrong session":    {"DISPATCH-1", 1, "other-session", "worker-session-mismatch"},
+		"unknown":          {"DISPATCH-X", 1, "worker-session", "reservation-not-found"},
+		"wrong generation": {"DISPATCH-1", 9, "worker-session", "generation-mismatch"},
+	} {
+		_, err := s.CurrentDecision(ctx, tc.key, tc.gen, tc.session)
+		var lookup *DecisionLookupError
+		if errors.Is(err, sql.ErrNoRows) || !errors.As(err, &lookup) || lookup.Condition != tc.want {
+			t.Errorf("%s: want %s, got %v", name, tc.want, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		key, want string
+		gen       int64
+	}{"no reservation": {"", "missing-reservation", 1}, "zero generation": {"DISPATCH-1", "invalid-generation", 0}} {
+		_, err := s.CurrentDecision(ctx, tc.key, tc.gen, "worker-session")
+		var lookup *DecisionLookupError
+		if !errors.As(err, &lookup) || lookup.Condition != tc.want {
+			t.Errorf("%s: want %s, got %v", name, tc.want, err)
+		}
+	}
+	d, err := s.CurrentDecision(ctx, "DISPATCH-1", 1, "worker-session")
+	if err != nil || d.Revision != 0 || d.Action != "" {
+		t.Fatalf("no decision must stay revision 0: %+v %v", d, err)
+	}
+}
+
+func TestCurrentDecisionReportsNotDispatched(t *testing.T) {
+	s := fixture(t)
+	if _, err := s.DB.Exec("UPDATE dispatch_reservations SET state='completed'"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.CurrentDecision(context.Background(), "DISPATCH-1", 1, "worker-session")
+	var lookup *DecisionLookupError
+	if !errors.As(err, &lookup) || lookup.Condition != "not-dispatched" {
+		t.Fatal(err)
 	}
 }
