@@ -1042,12 +1042,12 @@ original model and have a failed last turn. It sets max effort and allowAll,
 rechecks custody, and only then continues. The native's durable goal state
 (`goals.db`) selects the only admitted continuation:
 
-- `active`: one bounded `turn/start` with the configured continuation prompt;
-  the goal itself is untouched.
+- `active` or no goal: one bounded `turn/start` with the configured
+  continuation prompt. No goal is created or touched.
 - `blocked` by the failure: `goal/resume`.
 - user `paused` or unknown: stop, so user pauses stay paused.
-- no live goal (none or completed): stop. `recovery-ep-N.json` records it as
-  an unsupported gap, and no budget is spent. The executor
+- `completed`: stop. `recovery-ep-N.json` records it as an unsupported gap, and
+  no budget is spent. The executor
 follows the chained turns until none runs and none starts within
 `quiet_seconds` (bounded by `max_seconds`). It then writes `recovery-ep-N.json`
 and closes the host.

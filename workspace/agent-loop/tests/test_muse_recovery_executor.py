@@ -268,11 +268,12 @@ class RecoveryBackendTests(RecoveryFixture):
         self.assertNotIn('turn/start', self.methods())
 
     def test_goal_state_matrix(self):
-        # D84-33: active -> one turn/start (goal untouched); fault-blocked ->
-        # goal/resume; user-paused/unknown -> stop; completed/none -> stop
-        # with a recorded unsupported gap. Nothing runs on a stop.
+        # D84-34: active or no goal -> one turn/start (no goal created or
+        # touched); fault-blocked -> goal/resume; user-paused/unknown -> stop;
+        # completed -> stop with a recorded unsupported gap. Nothing runs on a stop.
         child = self.client()
         self.failed_log(pid=child.pid)
+        self.assertEqual(executor.continuation_mode(self.cfg), 'turn')
         self.set_goal('active')
         self.assertEqual(executor.continuation_mode(self.cfg), 'turn')
         self.set_goal('blocked')
@@ -284,20 +285,25 @@ class RecoveryBackendTests(RecoveryFixture):
                     executor.recover(self.event, self.cfg)
                 self.assertIsNone(child.poll())
                 self.assertEqual(self.calls(), [])
-        for status in ('completed', None):
-            with self.subTest(status=status):
-                if status is None:
-                    (self.session_dir / 'goals.db').unlink()
-                else:
-                    self.set_goal(status)
-                evidence = executor.recover(self.event, self.cfg)
-                self.assertIn('unsupported', evidence['stopped'])
-                self.assertIsNone(child.poll())
-                self.assertEqual(self.calls(), [])
-                recorded = json.loads((Path(self.cfg['state_directory']) / 'recovery-ep-1.json').read_text())
-                self.assertIn('unsupported', recorded['stopped'])
-        self.set_goal('active')
+        self.set_goal('completed')
+        evidence = executor.recover(self.event, self.cfg)
+        self.assertIn('unsupported', evidence['stopped'])
+        self.assertIsNone(child.poll())
+        self.assertEqual(self.calls(), [])
+        recorded = json.loads((Path(self.cfg['state_directory']) / 'recovery-ep-1.json').read_text())
+        self.assertIn('unsupported', recorded['stopped'])
         self.assertEqual(executor.admit(self.event, self.cfg)['action'], 'continue')
+
+    def test_no_goal_gets_one_turn_without_creating_a_goal(self):
+        child = self.client()
+        self.failed_log(pid=child.pid)
+        evidence = executor.recover(self.event, self.cfg)
+        self.assertEqual((evidence['mode'], evidence['terminal']), ('turn', 'completed'))
+        self.assertNotIn('goal/resume', self.methods())
+        self.assertFalse(any(m.startswith('goal/') for m in self.methods()))
+        self.assertFalse((self.session_dir / 'goals.db').exists())
+        with self.assertRaisesRegex(executor.NotAdmitted, 'budget'):
+            executor.recover(self.event, self.cfg)
 
     def test_custody_lost_before_turn_start_sends_no_turn(self):
         self.set_goal('active')

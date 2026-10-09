@@ -67,16 +67,20 @@ def _session_log(config):
 
 
 def goal_status(config):
-    """Durable goal status of the native, or None when it has no live goal."""
+    """Durable goal status of the native: its live goal's status, `completed`
+    when only finished goals remain, or None when it never had a goal."""
     path = _session_directory(config) / 'goals.db'
     if not path.exists():
         return None
     with sqlite3.connect('file:%s?mode=ro' % path, uri=True) as db:
-        rows = db.execute('SELECT status FROM goals WHERE session_id=?', (config['native_session_id'],)).fetchall()
-    statuses = [row[0] for row in rows if row[0] not in ('completed', 'cleared')]
-    if len(statuses) > 1:
+        rows = [row[0] for row in db.execute('SELECT status FROM goals WHERE session_id=?',
+                                             (config['native_session_id'],))]
+    live = [status for status in rows if status not in ('completed', 'cleared')]
+    if len(live) > 1:
         raise NotAdmitted('native has more than one live goal')
-    return statuses[0] if statuses else None
+    if live:
+        return live[0]
+    return 'completed' if rows else None
 
 
 def _last_run_terminal(records):
@@ -244,17 +248,17 @@ class Unsupported(NotAdmitted):
 def continuation_mode(config):
     """Map the native's durable goal state to its only admitted continuation.
 
-    active -> one turn/start, leaving the goal untouched; blocked by the
-    failure -> goal/resume; user-paused or unknown -> stop; no live goal
-    (none or completed) -> stop as a recorded unsupported gap.
+    active or no goal -> one turn/start (no goal is created or touched);
+    blocked by the failure -> goal/resume; user-paused or unknown -> stop;
+    completed -> stop as a recorded unsupported gap.
     """
     status = goal_status(config)
-    if status == 'active':
+    if status in (None, 'active'):
         return 'turn'
     if status == 'blocked':
         return 'goal'
-    if status is None:
-        raise Unsupported('unsupported: no live goal to continue on this native')
+    if status == 'completed':
+        raise Unsupported('unsupported: the native goal is completed')
     raise NotAdmitted('goal is %s; it is never resumed by recovery' % status)
 
 
