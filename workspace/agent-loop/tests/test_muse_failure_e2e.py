@@ -635,12 +635,13 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
 
     def test_failed_head_then_replay_drains_tail_real_backend(self):
-        """c3b0d81 review on the real backend: exactly 4 events.
+        """c3b0d81 review on the real backend, D84-18: exactly 3 events.
 
-        ep-1 pending with queued ep-2/ep-3. The t6 failure turn
-        confirms ep-1 but ALL ep-2 submits fail. The t7 replay of ep-2
-        succeeds and drains ep-3 on the same failure turn; t8 is a new
-        ep-4 outage and t9 dedupes.
+        Offline t1/t3/t5 fail with verified healthy t2/t4 between them,
+        so ep-1/ep-2/ep-3 are frozen. The t6 failure turn delivers ep-1
+        but ALL ep-2 submits fail; t7 delivers ep-2 and ep-3. t6-t9 are
+        one continuous outage that began at t5: replay/transport
+        recovery is not native health and never opens ep-4.
         """
         sys.path.insert(0, str(ROOT))
         import muse_failure_hook as hook
@@ -663,11 +664,7 @@ class MuseFailureE2ETests(unittest.TestCase):
                 self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
-            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-            mid_row = mid['D-E2E|1|e2e-native']
-            self.assertTrue(mid_row['pending'])
-            self.assertEqual(mid_row['episode_id'], 'ep-2')
-            self.assertEqual(mid_row.get('queued_outage'), ['ep-3'])
+            self.assertEqual(len(self._failure_rows()), 1)
             phase['fail_ep2'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t7')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t8')), 0)
@@ -675,20 +672,20 @@ class MuseFailureE2ETests(unittest.TestCase):
         finally:
             hook._submit = original
         rows = self._failure_rows()
-        self.assertEqual(len(rows), 4)
-        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't5', 't8'),
-                                               ('ep-1', 'ep-2', 'ep-3', 'ep-4')):
+        self.assertEqual(len(rows), 3)
+        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't5'),
+                                               ('ep-1', 'ep-2', 'ep-3')):
             self.assertTrue(event_id.endswith('/' + key), event_id)
             self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
 
     def test_open_row_with_queued_drains_on_failure_real_backend(self):
-        """2813cac review on the real backend: exactly 5 events.
+        """2813cac review on the real backend, D84-18: exactly 3 events.
 
-        ep-1 pending with queued ep-2/ep-3. t6 confirms ep-1/ep-2 with
-        ep-3 stalled; t7 drains ep-3 and loses ep-4; t7b replays ep-4
-        open with ep-3 still attached. The t8 failure drains ep-3 and
-        publishes ep-5 — never duplicate with a queue attached. t9
-        dedupes.
+        Offline t1/t3/t5 fail with verified healthy t2/t4 between them.
+        t6 delivers ep-1/ep-2 with ep-3 stalled; ep-3 keeps failing at
+        t7 and t7b; t8 finally delivers it and t9 dedupes. Every
+        failure turn retries the undelivered tail, and t6-t9 stay one
+        outage: no ep-4/ep-5 without verified healthy progress.
         """
         sys.path.insert(0, str(ROOT))
         import muse_failure_hook as hook
@@ -720,20 +717,71 @@ class MuseFailureE2ETests(unittest.TestCase):
             # the tail commits before the live outage, like the unit test.
             fail_keys['ep-3'] = 3
             self.assertEqual(hook.run(self.config, self._hook_event('t7b')), 0)
-            row = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())[
-                'D-E2E|1|e2e-native']
-            self.assertTrue(row['episode_open'])
-            self.assertEqual(row.get('queued_outage'), ['ep-3'])
+            self.assertEqual(len(self._failure_rows()), 2)
             self.assertEqual(hook.run(self.config, self._hook_event('t8')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t9')), 0)
         finally:
             hook._submit = original
         rows = self._failure_rows()
-        self.assertEqual(len(rows), 5)
-        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't7', 't5', 't8'),
-                                               ('ep-1', 'ep-2', 'ep-4', 'ep-3', 'ep-5')):
+        self.assertEqual(len(rows), 3)
+        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't5'),
+                                               ('ep-1', 'ep-2', 'ep-3')):
             self.assertTrue(event_id.endswith('/' + key), event_id)
             self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
+
+    def _offline_until(self, hook, sequence):
+        """Run (turn, status, online) hooks; submit is offline when not online."""
+        phase = {'online': False}
+        original = hook._submit
+        def script(body, config, env, observation):
+            if not phase['online']:
+                raise subprocess.CalledProcessError(7, ['isolated-transport-offline'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            for turn, status, online in sequence:
+                phase['online'] = online
+                self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
+        finally:
+            hook._submit = original
+
+    def _assert_outages(self, turns):
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), len(turns), rows)
+        for index, ((event_id, body), turn) in enumerate(zip(rows, turns), 1):
+            self.assertTrue(event_id.endswith('/ep-%d' % index), event_id)
+            self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
+
+    def test_ongoing_queued_tail_stays_one_outage_real_backend(self):
+        """D84-16 on the real backend: exactly 2 events, t1 and t3.
+
+        Offline F(t1) C(t2) F(t3), then online F(t4) F(t5). Only t2 is
+        verified healthy progress, so t3-t5 are one continuous outage:
+        delivering ep-2 must not close it at the t2 boundary that
+        started it, and t5 must not open ep-3.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        self._offline_until(hook, (('t1', 'failed', False), ('t2', 'completed', False),
+                                   ('t3', 'failed', False), ('t4', 'failed', True),
+                                   ('t5', 'failed', True)))
+        self._assert_outages(('t1', 't3'))
+
+    def test_ended_queue_then_new_live_outage_real_backend(self):
+        """D84-17 on the real backend: exactly 3 events, t1, t3 and t5.
+
+        Offline F(t1) C(t2) F(t3) C(t4), then online F(t5) C(t6). The
+        healthy t4 ended the queued t3 outage, so t5 is a new outage
+        published with its own first observation, never replaced by
+        the replayed t3 body or by a later turn.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        self._offline_until(hook, (('t1', 'failed', False), ('t2', 'completed', False),
+                                   ('t3', 'failed', False), ('t4', 'completed', False),
+                                   ('t5', 'failed', True), ('t6', 'completed', True)))
+        self._assert_outages(('t1', 't3', 't5'))
 
     def test_interrupted_boundary_confirm_without_queue_real_backend(self):
         """d714909 review on the real backend: exactly 2 events.
