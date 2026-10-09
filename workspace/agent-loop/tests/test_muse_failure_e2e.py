@@ -308,6 +308,17 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual([e['event_id'] for e in receipt['events']], [event_id])
         self.assertEqual(receipt['events'][0]['kind'], 'runtime-failure')
 
+    def test_real_144_model_not_found_publishes_config_event(self):
+        """#84 run-5: Muse 1.4.4 reports a 404 model_not_found as a non-retryable
+        failed call whose text names neither 'not found' nor 'unknown model'."""
+        event = dict(self._timed_out_144('t1'), status='failed', attempt=1, request_id='t1:0:1',
+                     error='model `muse-spark-1.3-contributor` does not exist or you lack access')
+        self._run_hook(event)
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][1], 'runtime-failure ep-1 config turn=t1 request=t1.0.1 '
+                                     'attempt=1 provider=model.meta.response')
+
     def _timed_out_144(self, turn):
         """Muse 1.4.4 failed-PostLLMCall key shape (captured 401 chain) for the
         stream-first-event timeout observed live on 1372: the model task ends

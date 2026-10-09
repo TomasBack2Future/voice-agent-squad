@@ -48,7 +48,10 @@ _PATTERNS = [
     ('auth', re.compile(r'api[ _-]?key|unauthori|rejected|invalid.?token|forbidden', re.I)),
     ('quota', re.compile(r'quota|rate.?limit|too many requests|429', re.I)),
     ('exhausted', re.compile(r'after \d+ provider attempts|exhaust', re.I)),
-    ('config', re.compile(r'unknown model|catalog|not found|invalid.?model|misconfig', re.I)),
+    # Muse 1.4.4 reports a 404 model_not_found as "model `<id>` does not exist
+    # or you lack access" (#84 run-5 capture).
+    ('config', re.compile(r'unknown model|catalog|not[ _]found|invalid.?model|misconfig'
+                          r'|model\b[^\n]{0,160}\bdoes not exist', re.I)),
     ('connection', re.compile(r'connection|refused|reset|timeout|timed out|no first model event|network|unreachable|5\d\d|econn|socket', re.I)),
 ]
 
