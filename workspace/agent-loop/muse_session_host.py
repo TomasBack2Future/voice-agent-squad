@@ -78,6 +78,8 @@ def server_arguments(c):
             '--model', c['model'], '--disable-sandbox', '--trust-workspace']
     if c.get('execution_mode') == 'mediated-worker':
         argv += ['--disable-write', '--disable-shell']
+    for setting in c.get('serve_config', ()):
+        argv += ['-c', setting]
     return argv
 
 

@@ -481,6 +481,15 @@ Managed starts through this lifecycle probe fail before spawning a server or rec
 Deployer, Reviewer and Investigator execution has no adapter here. This does not
 exclude Muse from interactive roles under their ordinary operation authority.
 
+One user-approved exception (#84, option B) reuses this host:
+`muse_recovery_executor.py` may continue an existing interactive `--yolo` Worker
+on its own native after a confirmed runtime failure. It runs only on a Dispatcher
+`continue` decision, visibly in that Worker's cmux workspace, and keeps the
+Worker's original posture: model, max effort, allowAll and hooks. It is parity
+with the interactive TUI, not a new fence. A claim lost mid-turn is still unfenced,
+exactly as for the TUI it replaces. No other Muse task execution is admitted
+through MSP.
+
 Probe configuration requires absolute client/coordination/ledger/workspace/state
 and prompt paths, a native UUID, `agent_id`, `role: "probe"`,
 `model: "muse-spark-1.3-contributor"`, `provider: "meta"`,
@@ -1013,6 +1022,44 @@ confirms it, so a lost reply or a crash after commit replays idempotently.
 Transport recovery never opens or closes an episode. The hook returns
 quickly and never waits for its own turn to end (D84-2 ordering).
 
+`muse_recovery_executor.py` performs that one continuation for an interactive
+`--yolo` Worker (`--check` admits only and changes nothing). Before changing
+anything it requires:
+
+- the delivered keyed `runtime-failure` event of this exact
+  reservation/generation/native;
+- the native session log's last run record showing `terminal: failed`;
+- `decide` returning `continue`;
+- a dispatched reservation bound to that native, the Worker's claim and a
+  `proceed` (or absent) decision.
+
+It then compare-and-sets the episode's single attempt in its state directory.
+Immediately before the signal it re-reads the session log. The last run must
+still be the failed terminal, and the route-facts pid must still be the admitted
+client; otherwise it stops without signalling. It sends SIGTERM only to that pid,
+and only while the pid still runs the configured client in the workspace; there
+is no SIGKILL. Any stop after the attempt is spent, including a coordination read
+timeout, is still recorded in `recovery-ep-N.json`. The episode is then left to
+the Dispatcher rather than retried. It starts `muse serve` with the Worker's hooks and runs
+`session/resume` on the same native. The resumed session must be idle, have its
+original model and have a failed last turn. It sets max effort and allowAll,
+rechecks custody, and only then continues. The native's durable goal state
+(`goals.db`) selects the only admitted continuation:
+
+- `active` or no goal: one bounded `turn/start` with the configured
+  continuation prompt. No goal is created or touched.
+- `blocked` by the failure: `goal/resume`.
+- user `paused` or unknown: stop, so user pauses stay paused.
+- `completed`: stop. `recovery-ep-N.json` records it as an unsupported gap, and
+  no budget is spent. The executor
+follows the chained turns until none runs and none starts within
+`quiet_seconds` (bounded by `max_seconds`). It then writes `recovery-ep-N.json`
+and closes the host.
+The Worker is left idle on its native for the Dispatcher's next decision. It
+never types into a composer and writes nothing to the ledger. The required
+`expected_server_version`/`expected_schema_fingerprint` pin the qualified MSP
+build.
+
 `muse_failure_handling.py` is the pure Dispatcher-side contract over that
 observation: `decide` returns `continue` (one bounded continuation per
 episode), `awaiting-terminal` (early event: never acked, consumed or dropped)
@@ -1023,4 +1070,5 @@ replay is admitted. A stopped MSP session routes through the same durable
 `runtime-failure` event as a handoff candidate for the owning Dispatcher cycle;
 MSP still lacks a qualified per-thread writer-epoch transfer (see the shared-App
 boundary above), so ownership continuity after a stop remains an adapter gap,
-not proven delivery.
+not proven delivery. The recovery executor above is the only admitted return
+path, and only for the same native under its unchanged custody.
