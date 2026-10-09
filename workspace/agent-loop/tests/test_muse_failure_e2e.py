@@ -445,7 +445,7 @@ class MuseFailureE2ETests(unittest.TestCase):
             mid_row = mid['D-E2E|1|e2e-native']
             self.assertTrue(mid_row['pending'])
             self.assertEqual(mid_row['episode_id'], 'ep-1')
-            self.assertEqual(mid_row.get('queued_outage'), 'ep-2')
+            self.assertEqual(mid_row.get('queued_outage'), ['ep-2'])
             self.assertEqual(self._failure_rows(), [])
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
@@ -458,6 +458,98 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertTrue(rows[1][0].endswith('/ep-2'), rows[1][0])
         self.assertIn('turn=t1 request=request-t1', rows[0][1])
         self.assertIn('turn=t3 request=request-t3', rows[1][1])
+
+    def test_queued_flush_closed_then_new_failure_real_backend(self):
+        """D84-15 seq 1 on the real backend: exactly 3 events.
+
+        t1 fails offline, t2 healthy offline, t3 fails offline. Online
+        at t4 healthy: ep-1 and queued ep-2 commit with ep-2 closed
+        (never reopened). The t5 failure is a NEW ep-3 outage; t6
+        healthy closes it.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        phase = {'offline': True}
+        original = hook._submit
+        def script(body, config, env, observation):
+            if phase['offline']:
+                raise subprocess.CalledProcessError(7, ['isolated-queued-healthy-boundary'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
+            phase['offline'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t6', 'completed')), 0)
+        finally:
+            hook._submit = original
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 3)
+        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't5'), ('ep-1', 'ep-2', 'ep-3')):
+            self.assertTrue(event_id.endswith('/' + key), event_id)
+            self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
+
+    def test_two_offline_boundaries_deliver_three_real_backend(self):
+        """D84-15 seq 2 on the real backend: exactly 3 events.
+
+        t1/t3/t5 fail offline with healthy t2/t4 between them. Online
+        drains at t6/t7/t8 deliver all three as ep-1/2/3 — no single
+        queued slot merges outages across the two real boundaries.
+        The first failures use the exact real capture shapes: no
+        request_id/provider (1.4.3 style) and compound request_id
+        (1.4.4 style).
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        real_first = [
+            {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native',
+             'turn_id': 'b311fc68-3cd3-4711-a545-1feaf6358654',
+             'error': 'API error 503: isolated failure fixture (fixture_error) '
+                      '(after 10 provider attempts)',
+             'error_details': None, 'status': 'failed', 'attempt': 1},
+            {'hook_event_name': 'PostLLMCall', 'session_id': 'e2e-native',
+             'turn_id': '3ff577ba-8b93-4d79-ad4b-5ea4d8d81999',
+             'status': 'failed', 'attempt': 1,
+             'error': 'your API key from META_API_KEY was rejected',
+             'request_id': '3ff577ba-8b93-4d79-ad4b-5ea4d8d81999:0:1',
+             'provider': 'model.meta.response'},
+        ]
+        phase = {'offline': True}
+        original = hook._submit
+        def script(body, config, env, observation):
+            if phase['offline']:
+                raise subprocess.CalledProcessError(7, ['isolated-multiple-healthy-boundaries'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            self.assertEqual(hook.run(self.config, real_first[0]), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, real_first[1]), 0)
+            for turn, status in (('t4', 'completed'), ('t5', 'failed')):
+                self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
+            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+            mid_row = mid['D-E2E|1|e2e-native']
+            self.assertEqual(mid_row.get('queued_outage'), ['ep-2', 'ep-3'])
+            self.assertEqual(self._failure_rows(), [])
+            phase['offline'] = False
+            for turn in ('t6', 't7', 't8'):
+                self.assertEqual(hook.run(self.config, self._hook_event(turn, 'completed')), 0)
+        finally:
+            hook._submit = original
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 3)
+        for (event_id, _), key in zip(rows, ('ep-1', 'ep-2', 'ep-3')):
+            self.assertTrue(event_id.endswith('/' + key), event_id)
+        self.assertIn('turn=b311fc68-3cd3-4711-a545-1feaf6358654 request=unknown', rows[0][1])
+        self.assertIn('request=3ff577ba-8b93-4d79-ad4b-5ea4d8d81999.0.1', rows[1][1])
+        self.assertIn('turn=t5 request=request-t5', rows[2][1])
+        self.assertNotIn('fixture_error', rows[0][1])
+        self.assertNotIn('META_API_KEY', rows[1][1])
 
     def test_commit_before_interrupt_keeps_boundary_real_backend(self):
         """D84-11 finding 2 on the real backend.

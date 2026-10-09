@@ -284,8 +284,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
         # 7a01892 review finding 1: ep-1 pending, t2 healthy flush fails
         # (boundary recorded), then the t3 replay ALSO fails. The pending
         # rewrite must keep the boundary and episode identity, so the t4
-        # replay still closes ep-1 at t2 and publishes the live t4
-        # failure as ep-2. Exactly ep-1 then ep-2 are used.
+        # replay still closes ep-1 at t2. The t3 post-boundary outage was
+        # preserved first, so ep-2 carries the frozen t3 body (one key,
+        # one body: 11a67a2 review); t3/t4 are one continuous outage.
+        # Exactly ep-1 then ep-2 are used.
         submits = []
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
@@ -314,14 +316,15 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-1', 'ep-2'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
         self.assertIn('turn=t1 request=req-1', bodies[3])
-        self.assertIn('turn=t4 request=req-4', bodies[4])
+        self.assertIn('turn=t3 request=req-3', bodies[4])
 
     def test_post_boundary_outage_survives_offline_replay_and_healthy_recovery(self):
         # D84-13: t1 fails (offline, pending), t2 healthy flush fails
         # (boundary recorded), t3 fails while still offline (replay of
         # ep-1 fails too). Transport recovers at t4 healthy: the old
         # episode commits AND the post-boundary t3 outage is preserved
-        # and committed as ep-2. t5 dedupes. Exactly ep-1 then ep-2.
+        # and committed as ep-2. D84-15: ep-2 is closed-delivered, never
+        # reopened, so the t5 failure is a NEW ep-3 outage.
         submits = []
         online = {'yes': False}
         def script(argv, **kwargs):
@@ -344,12 +347,15 @@ class EpisodeLifecycleTests(unittest.TestCase):
             healthy4 = payload(turn_id='t4', status='completed', error='')
             self.assertTrue(hook.note_progress(healthy4, self.cfg, hook._hook_env(self.cfg)))
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
-            self.assertEqual(fifth['state'], 'duplicate')
+            self.assertEqual(fifth['episode_id'], 'ep-3')
+            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(sixth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-2'])
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
         self.assertIn('turn=t1 request=req-1', bodies[0])
         self.assertIn('turn=t3 request=req-3', bodies[1])
+        self.assertIn('turn=t5 request=req-5', bodies[2])
 
     def test_flush_close_clears_boundary_later_outage_stays_single(self):
         # 4f43571 review finding 1: t1 pending, t2 healthy flush fails
@@ -409,6 +415,114 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
             healthy = payload(turn_id='turn-3', status='completed', error='')
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+
+    def test_queued_outage_wins_over_live_body_on_same_key(self):
+        # 11a67a2 review: t1 pending, t2 healthy flush fails (boundary),
+        # t3 replay fails (t3 preserved as queued ep-2). t4 replay
+        # SUCCEEDS: the boundary branch must submit the FROZEN t3 body
+        # under ep-2, never the live t4 body — one key carries exactly
+        # one body, so a later lost-reply recovery can never hit a
+        # payload-conflict. t5 dedupes.
+        submits = []
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            submits.append(argv)
+            if len(submits) <= 3:
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            self.assertFalse(hook.note_progress(
+                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
+            self.assertEqual(fourth['episode_id'], 'ep-2')
+            fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
+            self.assertEqual(fifth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-1', 'ep-2'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-1', bodies[3])
+        # ep-2 carries the frozen t3 body, not the live t4 body.
+        self.assertIn('turn=t3 request=req-3', bodies[4])
+        self.assertNotIn('turn=t4', bodies[4])
+
+    def test_queued_flush_never_reopens_new_failure_publishes(self):
+        # D84-15 seq 1: t1 fails offline, t2 healthy offline, t3 fails
+        # offline. Online at t4 healthy: ep-1 and queued ep-2 both
+        # commit, and ep-2 is CLOSED-delivered (never reopened), so the
+        # t5 failure publishes as a NEW ep-3 outage. Three events.
+        submits = []
+        online = {'yes': False}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            self.assertFalse(hook.note_progress(
+                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            online['yes'] = True
+            self.assertTrue(hook.note_progress(
+                payload(turn_id='t4', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+            fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
+            self.assertEqual(fifth['episode_id'], 'ep-3')
+            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(sixth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-1', bodies[0])
+        self.assertIn('turn=t3 request=req-3', bodies[1])
+        self.assertIn('turn=t5 request=req-5', bodies[2])
+
+    def test_two_offline_boundaries_keep_three_independent_outages(self):
+        # D84-15 seq 2: t1/t3/t5 fail offline with healthy t2/t4 between
+        # them. Online drains at t6/t7/t8 deliver all three as ep-1/2/3
+        # — no single queued slot may merge outages across the two real
+        # healthy boundaries.
+        submits = []
+        online = {'yes': False}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                if status == 'failed':
+                    with self.assertRaises(subprocess.SubprocessError):
+                        hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
+                else:
+                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                                       self.cfg, hook._hook_env(self.cfg))
+            online['yes'] = True
+            for turn in ('t6', 't7', 't8'):
+                hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                                   self.cfg, hook._hook_env(self.cfg), attempts=1)
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        for body, turn in zip(bodies, ('t1', 't3', 't5')):
+            self.assertIn('turn=%s request=req-%s' % (turn, turn), body)
 
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
