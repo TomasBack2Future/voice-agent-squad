@@ -1025,6 +1025,13 @@ script. MCP parity:
 returns the current `revision`, `outcome_id`, `action`, `condition` and
 `worker_agent`. Revision zero is an assignment not yet using this contract.
 An optional `--expected-revision N` returns nonzero if the decision changed.
+All three identity flags are required; the command never resolves the bound
+session itself. A request that identifies no live assignment fails with a precise
+condition instead of looking like "no decision recorded": `missing-reservation`,
+`invalid-generation`, `missing-worker-session`, `reservation-not-found`,
+`generation-mismatch`, `not-dispatched` or `worker-session-mismatch` (the bound
+session id is not echoed). An assignment with no decision row still returns
+revision 0 with an empty action.
 MCP: `squad_terminal_decision_get` with the same identity fields (underscores).
 
 The reservation owner posts a canonical-item message describing the decision,

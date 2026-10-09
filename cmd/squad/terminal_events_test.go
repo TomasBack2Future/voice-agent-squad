@@ -298,3 +298,50 @@ func TestDeferredNativeAcceptanceAndMCPParity(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDecisionGetRejectsMissingOrWrongSessionPrecisely(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bc, err := bootClaimContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoID := bc.repoID
+	bc.Close()
+	if _, err = env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,'D','github:repo#1','dispatcher',1,1,0,'dispatched',1,'native','','TASK')`, repoID); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"missing session": {[]string{"--reservation", "D", "--generation", "1"}, "--worker-session is required"},
+		"wrong session":   {[]string{"--reservation", "D", "--generation", "1", "--worker-session", "other"}, "worker-session-mismatch"},
+		"missing key":     {[]string{"--generation", "1", "--worker-session", "native"}, "--reservation is required"},
+	} {
+		root := newRootCmd()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(append([]string{"terminal-events", "decision-get"}, tc.args...))
+		err := root.Execute()
+		if err == nil || strings.Contains(err.Error(), "no rows") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want %q, got %v", name, tc.want, err)
+		}
+	}
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"terminal-events", "decision-get", "--reservation", "D", "--generation", "1", "--worker-session", "native"})
+	if err = root.Execute(); err != nil || !strings.Contains(out.String(), `"revision":0`) {
+		t.Fatalf("no decision must stay revision 0: %v %s", err, out.String())
+	}
+	request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "squad_terminal_decision_get", "arguments": map[string]any{"reservation": "D", "generation": 1, "worker_session": "other"}}})
+	var mcpOut bytes.Buffer
+	if err = runMCP(ctx, env.DB, repoID, env.Root, strings.NewReader(string(request)+"\n"), &mcpOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mcpOut.String(), "worker-session-mismatch") || strings.Contains(mcpOut.String(), "no rows") {
+		t.Fatal(mcpOut.String())
+	}
+}
