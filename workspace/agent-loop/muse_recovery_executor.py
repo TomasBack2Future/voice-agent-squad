@@ -218,16 +218,21 @@ def _coordination(config, env, *args):
 
 
 def check_custody(config, env):
-    """The reservation, generation, claim and decision must still allow this Worker."""
+    """The reservation, generation, exact claim and decision must still allow this Worker.
+
+    Custody is the claim row itself (item, holder, `held`, claim generation)
+    read through `claim-inspect`, never agent registration: a Muse Worker can
+    hold its claim without being a registered agent.
+    """
     rows = [r for r in json.loads(_coordination(config, env, 'dispatch', 'list', '--json', '--active'))
             if r.get('reservation_key') == config['reservation']]
     if [(r.get('generation'), r.get('state'), r.get('worker_thread_id'), r.get('reserved_by')) for r in rows] != [
             (config['generation'], 'dispatched', config['native_session_id'], config['controller_agent_id'])]:
         raise NotAdmitted('reservation, generation or native binding changed')
-    agents = [a for a in json.loads(_coordination(config, env, 'who', '--json'))
-              if a.get('AgentID') == config['agent_id']]
-    if [a.get('ClaimItem') for a in agents] != [config['item']]:
-        raise NotAdmitted('Worker no longer holds its claim')
+    claim = json.loads(_coordination(config, env, 'claim-inspect', config['item'])).get('env_claim') or {}
+    if ((claim.get('item'), claim.get('holder'), claim.get('state'), claim.get('generation'))
+            != (config['item'], config['agent_id'], 'held', config['claim_generation'])):
+        raise NotAdmitted('Worker no longer holds its claim (exact item/holder/held/generation)')
     raw = _coordination(config, env, 'terminal-events', 'decision-get', '--reservation', config['reservation'],
                         '--generation', str(config['generation']),
                         '--worker-session', config['native_session_id'])
@@ -380,7 +385,10 @@ def main(argv=None):
     try:
         event, config = json.loads(args.event_json.read_text()), json.loads(args.config.read_text())
         if args.check:
-            print(json.dumps(dict(admit(event, config, **flags), admitted=True)))
+            admitted = admit(event, config, **flags)
+            mode = continuation_mode(config)
+            revision = check_custody(config, msp.child_environment(config))
+            print(json.dumps(dict(admitted, admitted=True, mode=mode, decision_revision=revision)))
             return 0
         evidence = recover(event, config, **flags)
     except (NotAdmitted, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
