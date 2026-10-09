@@ -984,3 +984,38 @@ claim/mailbox and record a blocked report under a separate exact-custody check.
 It cannot reopen writes, request review or record completion. In-flight hold
 joins the owned container before the model handles the decision and returns the
 blocked result; the original primary claim remains with its owner.
+
+### Muse runtime-failure hook and handling contract
+
+`muse_failure_hook.py` is a PostLLMCall observation-only adapter. It admits
+only the ledger-bound Worker's native session with `status: failed`, rejecting
+unrelated/reminder/subagent sessions and unqualified StopFailure; StopFailure
+stays supplemental until exact-version proof exists. It classifies the error
+into a closed enum (`exhausted`, `connection`, `auth`, `quota`, `config`,
+`unknown`), dedupes by reservation/generation/native plus continuous episode
+under a lock, and publishes one sanitized observation through #88's atomic
+`terminal-events submit` with bounded retries: one call stores the message
+and the durable event and returns both IDs. Each failure episode maps to
+Submit's stable request key (`--request-key ep-N`): retries within one
+outage deduplicate to the same IDs, and the next independent outage after
+healthy progress uses a new key and records again. Only native health
+signals allocate episodes: the first failure with no open outage allocates
+the next `ep-N` and freezes that first observation; verified healthy
+progress of the same native (`note_progress`) ends the outage even when
+delivery is unavailable. Delivery is a separate in-order outbox: each
+frozen episode replays with its own key and immutable body until Submit
+confirms it, so a lost reply or a crash after commit replays idempotently.
+Transport recovery never opens or closes an episode. The hook returns
+quickly and never waits for its own turn to end (D84-2 ordering).
+
+`muse_failure_handling.py` is the pure Dispatcher-side contract over that
+observation: `decide` returns `continue` (one bounded continuation per
+episode), `awaiting-terminal` (early event: never acked, consumed or dropped)
+or `stop` (auth/quota/config, paused, completed, pending decision, spent
+budget). The budget key includes the episode identity. No
+hook->reply->failure loop: no duplicate Worker, relay restart or external
+replay is admitted. A stopped MSP session routes through the same durable
+`runtime-failure` event as a handoff candidate for the owning Dispatcher cycle;
+MSP still lacks a qualified per-thread writer-epoch transfer (see the shared-App
+boundary above), so ownership continuity after a stop remains an adapter gap,
+not proven delivery.

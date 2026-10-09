@@ -113,7 +113,7 @@ func newTerminalEventsCmd() *cobra.Command {
 	submitCmd.Flags().StringVar(&submit.Reservation, "reservation", "", "Exact dispatch reservation key")
 	submitCmd.Flags().Int64Var(&submit.Generation, "generation", 0, "Reservation generation")
 	submitCmd.Flags().StringVar(&submit.WorkerSession, "worker-session", "", "Bound native Worker session")
-	submitCmd.Flags().StringVar(&submit.Kind, "kind", "", "issue-closed, handoff-complete, blocked or decision-request")
+	submitCmd.Flags().StringVar(&submit.Kind, "kind", "", "issue-closed, handoff-complete, blocked, decision-request or runtime-failure")
 	submitCmd.Flags().StringVar(&submit.Body, "body", "", "Outcome body text (or --body-file)")
 	submitCmd.Flags().StringVar(&bodyFile, "body-file", "", "Read outcome body from file")
 	submitCmd.Flags().StringVar(&submit.RequestKey, "request-key", "", "Stable request identity: retries reuse it, distinct requests use distinct keys (#84 episodes map one episode to one key)")

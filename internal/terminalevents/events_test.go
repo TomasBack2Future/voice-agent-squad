@@ -237,6 +237,28 @@ func TestDoneAndAddressedAskWakeWithoutHandwrittenCallback(t *testing.T) {
 	}
 }
 
+func TestEventPatternMatchesKeyedAndLegacyIDs(t *testing.T) {
+	// D84-7(b): the real Submit keyed event carries both the message id
+	// and the request-key suffix; legacy publish IDs have no suffix.
+	// Verified against the actual keyed format, not a shortened example.
+	keyed := "worker-terminal-v1/DISPATCH-SQUAD-84/1/01a11bd3-7f39-7a13-a38b-4a82e4c9ffc3/runtime-failure/11102/ep-1"
+	if got := eventPattern.FindString(keyed); got != keyed {
+		t.Fatalf("keyed id not fully matched: %q", got)
+	}
+	legacy := "worker-terminal-v1/DISPATCH-1/1/worker-session/blocked/7"
+	if got := eventPattern.FindString(legacy); got != legacy {
+		t.Fatalf("legacy id not fully matched: %q", got)
+	}
+	parts := eventPattern.FindStringSubmatch(keyed)
+	if len(parts) != 7 || parts[4] != "runtime-failure" || parts[5] != "11102" || parts[6] != "/ep-1" {
+		t.Fatalf("keyed groups wrong: %q", parts)
+	}
+	short := "worker-terminal-v1/DISPATCH-1/1/worker-session/runtime-failure/ep-1"
+	if got := eventPattern.FindString(short); got == short {
+		t.Fatalf("shortened id without message id must not fully match")
+	}
+}
+
 func TestPublishDecisionRoundTripAndFencing(t *testing.T) {
 	s := fixture(t)
 	ctx := context.Background()

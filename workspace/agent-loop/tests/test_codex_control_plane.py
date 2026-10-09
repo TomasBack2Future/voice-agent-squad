@@ -368,6 +368,43 @@ class CodexControlPlaneTests(unittest.TestCase):
         self.assertIn('does not prove acceptance or termination',text)
         self.assertIn('After handling',text)
 
+    def test_keyed_runtime_failure_event_matches_real_submit_id(self):
+        # D84-7(b): the real Submit keyed event carries both the message id
+        # and the request-key suffix; the receiver must accept that exact
+        # form and still bind kind/outcome to the receipt row.
+        event_id = 'worker-terminal-v1/DISPATCH-SQUAD-84/1/01a11bd3-7f39-7a13-a38b-4a82e4c9ffc3/runtime-failure/11102/ep-1'
+        event = dict(item_id='BUG-018',kind='runtime-failure',outcome_id=11102,
+                     source_message_id=11102,event_id=event_id)
+        c = dict(self.rc,role='dispatcher',agent_id='dispatcher')
+        receipt = dict(type='worker-terminal-delivery-v1',recipient='dispatcher',delivery_session='one',events=[event])
+        self.assertEqual(receiver.validate_events(receipt,c),[event])
+        tampered = dict(event,outcome_id=999)
+        with self.assertRaises(ValidationError):
+            receiver.validate_events(dict(receipt,events=[tampered]),c)
+
+    def test_receipt_applies_handling_key_to_persisted_event(self):
+        # 1b417f3 review finding 2: the handling budget key must apply to
+        # the event the PR actually publishes — event_id plus the outcome
+        # body — so distinct persisted outages key distinctly and auth
+        # from the body token never continues once terminal.
+        import muse_failure_handling as handling
+        one = {'event_id': 'worker-terminal-v1/D/1/n/runtime-failure/3/ep-1',
+               'item_id': 'BUG-018', 'kind': 'runtime-failure', 'outcome_id': 3,
+               'source_message_id': 3,
+               'body': 'runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta'}
+        two = {'event_id': 'worker-terminal-v1/D/1/n/runtime-failure/4/ep-2',
+               'item_id': 'BUG-018', 'kind': 'runtime-failure', 'outcome_id': 4,
+               'source_message_id': 4,
+               'body': 'runtime-failure ep-2 auth turn=t5 request=r5 attempt=1 provider=meta'}
+        key_one = handling.episode_key(one)
+        key_two = handling.episode_key(two)
+        self.assertNotEqual(key_one, key_two)
+        self.assertEqual(handling.decide(two, terminal=True, seen=set())[0], 'stop')
+        self.assertEqual(handling.decide(two, terminal=True, seen={key_one})[0], 'stop')
+        three = dict(two, event_id='worker-terminal-v1/D/1/n/runtime-failure/5/ep-3',
+                     body='runtime-failure ep-3 exhausted turn=t6 request=r6 attempt=1 provider=meta')
+        self.assertEqual(handling.decide(three, terminal=True, seen={key_one})[0], 'continue')
+
     def test_stopped_owner_and_replaced_incarnation(self):
         path = self.write_receiver(self.rc)
         with patch.object(receiver,'process_start',return_value='process-incarnation'):

@@ -133,7 +133,7 @@ func decisionFence(ctx context.Context, tx *sql.Tx, repo string, q PublishReques
 		}
 		return nil
 	}
-	if q.Kind == "blocked" || q.Kind == "decision-request" || q.Kind == "issue-closed" || q.Kind == "handoff-complete" {
+	if q.Kind == "blocked" || q.Kind == "decision-request" || q.Kind == "issue-closed" || q.Kind == "handoff-complete" || q.Kind == "runtime-failure" {
 		if q.ExpectedDecision != revision {
 			return &Rejection{Condition: "stale-decision", Repair: fmt.Sprintf("assignment adopted decision revision %d; read terminal-events decision-get and resubmit with --expected-decision %d", revision, revision)}
 		}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -65,6 +66,18 @@ type SubmitResult struct {
 // MaxSubmitBodyBytes caps outcome bodies, mirroring the chat post cap.
 const MaxSubmitBodyBytes = 64 * 1024
 
+// failureBodyPattern is the exact sanitized runtime-failure contract:
+// one line of closed-enum pointers, no prompt, body text or credentials.
+// Fields are bounded so a hook adapter cannot smuggle prose through them.
+var failureBodyPattern = regexp.MustCompile(`\Aruntime-failure ep-[1-9][0-9]* (exhausted|connection|auth|quota|config|unknown) turn=[A-Za-z0-9_.-]{1,128} request=[A-Za-z0-9_.-]{1,128} attempt=[0-9]{1,10} provider=[A-Za-z0-9_.-]{1,64}\z`)
+
+func validateFailureBody(body string) error {
+	if !failureBodyPattern.MatchString(body) {
+		return &Rejection{Condition: "malformed-failure-body", Repair: "runtime-failure body must be exactly: runtime-failure <ep-N> <exhausted|connection|auth|quota|config|unknown> turn=<id> request=<id> attempt=<n> provider=<id>; no other text"}
+	}
+	return nil
+}
+
 // Submit validates the explicit ledger/repository plus reservation,
 // generation, native session and actor, then atomically stores the canonical
 // outcome message and the durable terminal event. It is idempotent: the same
@@ -79,11 +92,16 @@ func (s Store) Submit(ctx context.Context, actor string, q SubmitRequest) (Submi
 	if s.Repo == "" || actor == "" || q.Reservation == "" || q.WorkerSession == "" {
 		return out, &Rejection{Condition: "ambiguous-identity", Repair: "pass explicit ledger/repository, reservation, worker session and actor; nothing is guessed across repositories"}
 	}
-	if q.Generation < 1 || (q.Kind != "issue-closed" && q.Kind != "handoff-complete" && q.Kind != "blocked" && q.Kind != "decision-request") {
-		return out, &Rejection{Condition: "malformed-request", Repair: "generation must be >= 1 and kind one of issue-closed, handoff-complete, blocked, decision-request"}
+	if q.Generation < 1 || (q.Kind != "issue-closed" && q.Kind != "handoff-complete" && q.Kind != "blocked" && q.Kind != "decision-request" && q.Kind != "runtime-failure") {
+		return out, &Rejection{Condition: "malformed-request", Repair: "generation must be >= 1 and kind one of issue-closed, handoff-complete, blocked, decision-request, runtime-failure"}
 	}
 	if strings.TrimSpace(q.Body) == "" || len(q.Body) > MaxSubmitBodyBytes {
 		return out, &Rejection{Condition: "malformed-request", Repair: "outcome body must be non-empty and at most 65536 bytes"}
+	}
+	if q.Kind == "runtime-failure" {
+		if err := validateFailureBody(q.Body); err != nil {
+			return out, err
+		}
 	}
 	q.normalizeRequestKey()
 	if len(q.RequestKey) > MaxRequestKeyBytes || strings.ContainsAny(q.RequestKey, "/\x00") {
@@ -155,7 +173,7 @@ func (s Store) submitTx(ctx context.Context, tx *sql.Tx, actor string, q SubmitR
 	now := time.Now().Unix()
 	kind, mentions := "milestone", "[]"
 	switch q.Kind {
-	case "blocked":
+	case "blocked", "runtime-failure":
 		kind = "stuck"
 	case "decision-request":
 		kind = "ask"
