@@ -26,6 +26,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -330,6 +331,39 @@ def _await_quiet(host, first_turn, max_seconds, quiet_seconds):
     raise NotAdmitted('continuation still running at max_seconds')
 
 
+def serve_config_home(config):
+    """Private XDG config home for the recovery host only.
+
+    `muse serve` admits command hooks from the user settings layer, not from
+    `-c hooks=` (1.4.4 qualification: handlers=0 vs 1). The private home mirrors
+    every entry of the real config home by symlink, so other tools keep their
+    configuration and Muse credentials are never copied. Only muse/settings.json
+    is a private copy with the Worker's hooks added. Live settings are not edited
+    and nothing is written into the Worker's workspace.
+    """
+    real = Path(config.get('config_root') or os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+    home = Path(config['state_directory']) / 'serve-config-home'
+    if home.exists():
+        shutil.rmtree(home)
+    (home / 'muse').mkdir(parents=True)
+    for entry in (real.iterdir() if real.is_dir() else ()):
+        if entry.name != 'muse':
+            (home / entry.name).symlink_to(entry)
+    muse = real / 'muse'
+    settings = {}
+    for entry in (muse.iterdir() if muse.is_dir() else ()):
+        if entry.name == 'settings.json':
+            settings = json.loads(entry.read_text())
+        elif not entry.name.endswith('.lock'):
+            (home / 'muse' / entry.name).symlink_to(entry)
+    settings['hooks'] = config['hooks']
+    target = home / 'muse' / 'settings.json'
+    with target.open('w') as output:
+        os.chmod(target, 0o600)
+        output.write(json.dumps(settings))
+    return home
+
+
 def recover(event, config, **flags):
     """Admit, spend the episode budget, stop the failed client, continue the same native."""
     env = msp.child_environment(config)
@@ -348,8 +382,7 @@ def recover(event, config, **flags):
                                                      admitted['client'].get('pid'))
         record_attempt(event, config, 'client-stopped')
         state = Path(config['state_directory'])
-        host = msp.Host(dict(config, serve_config=['hooks=' + json.dumps(config['hooks'], separators=(',', ':'))]
-                             + list(config.get('serve_config', ()))), state, env)
+        host = msp.Host(config, state, dict(env, XDG_CONFIG_HOME=str(serve_config_home(config))))
         try:
             _initialize(host, config)
             _resume(host, config)

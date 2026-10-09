@@ -134,7 +134,15 @@ FAKE_SERVE = r"""
 import json, os, sys
 state = json.load(open(os.environ['FAKE_MUSE_STATE']))
 log = open(os.environ['FAKE_MUSE_LOG'], 'a')
-log.write(json.dumps({'argv': sys.argv[1:]}) + '\n'); log.flush()
+# Real 1.4.4 serve admits command hooks from the user settings layer
+# ($XDG_CONFIG_HOME/muse/settings.json), never from `-c hooks=` (handlers=0).
+settings_path = os.path.join(os.environ.get('XDG_CONFIG_HOME', ''), 'muse', 'settings.json')
+try:
+    admitted = json.load(open(settings_path)).get('hooks')
+except (OSError, ValueError):
+    admitted = None
+log.write(json.dumps({'argv': sys.argv[1:], 'admitted_hooks': admitted,
+                      'xdg_config_home': os.environ.get('XDG_CONFIG_HOME')}) + '\n'); log.flush()
 def send(message):
     sys.stdout.write(json.dumps(message) + '\n'); sys.stdout.flush()
 for line in sys.stdin:
@@ -228,7 +236,7 @@ class RecoveryBackendTests(RecoveryFixture):
                         reasoning_effort='max', hooks={'PostLLMCall': []}, claim_generation=1,
                         expected_server_version='1.4.4', expected_schema_fingerprint='sha256:qualified',
                         continuation_prompt='Continue the assigned task from its last checkpoint.',
-                        max_seconds=20, quiet_seconds=1)
+                        max_seconds=20, quiet_seconds=1, config_root=str(self.root / 'private-config-root'))
 
     def set_muse(self, **overrides):
         state = {'version': '1.4.4', 'fingerprint': 'sha256:qualified', 'model': 'muse-spark-1.3-contributor',
@@ -280,7 +288,7 @@ class RecoveryBackendTests(RecoveryFixture):
         self.assertEqual(calls['session/setApprovalMode']['mode'], 'allowAll')
         argv = self.calls()[0]['argv']
         self.assertEqual(argv[:5], ['serve', '--provider', 'meta', '--model', 'muse-spark-1.3-contributor'])
-        self.assertIn('hooks={"PostLLMCall":[]}', argv)
+        self.assertEqual(self.calls()[0]['admitted_hooks'], {'PostLLMCall': []})
         with self.assertRaisesRegex(executor.NotAdmitted, 'budget'):
             executor.recover(self.event, self.cfg)
 
@@ -457,6 +465,34 @@ class RecoveryBackendTests(RecoveryFixture):
                     executor.check_custody(self.cfg, env)
         self.set_squad(decision={'revision': 7, 'action': 'proceed'})
         self.assertEqual(executor.check_custody(self.cfg, env), 7)
+
+    def test_serve_host_admits_the_worker_hooks_through_a_private_settings_layer(self):
+        # D84-74 qualification: `muse serve -c hooks=` admits 0 handlers; the user
+        # settings layer admits them. The recovery host gets a private config home
+        # whose muse/settings.json adds the Worker hooks; nothing live is edited.
+        real = self.root / 'real-config'
+        (real / 'muse').mkdir(parents=True)
+        (real / 'gh').mkdir()
+        (real / 'muse' / 'settings.json').write_text(json.dumps({'schema_version': 1, 'model': 'live'}))
+        (real / 'muse' / 'auth.json').write_text('{"secret": "not-copied"}')
+        live_settings = (real / 'muse' / 'settings.json').read_bytes()
+        self.cfg.update(config_root=str(real), hooks={'PostLLMCall': [{'hooks': [{'type': 'command', 'command': 'x'}]}]})
+        self.set_goal('active')
+        self.failed_log()
+        evidence = executor.recover(self.event, self.cfg)
+        self.assertEqual(evidence['terminal'], 'completed', evidence)
+        start = self.calls()[0]
+        self.assertEqual(start['admitted_hooks'], self.cfg['hooks'])
+        home = Path(start['xdg_config_home'])
+        self.assertTrue(str(home).startswith(self.cfg['state_directory']))
+        self.assertNotIn('hooks=', ' '.join(start['argv']))
+        self.assertEqual((real / 'muse' / 'settings.json').read_bytes(), live_settings)
+        self.assertTrue((home / 'muse' / 'auth.json').is_symlink())
+        self.assertEqual(os.readlink(home / 'muse' / 'auth.json'), str(real / 'muse' / 'auth.json'))
+        self.assertTrue((home / 'gh').is_symlink())
+        merged = json.loads((home / 'muse' / 'settings.json').read_text())
+        self.assertEqual(merged['model'], 'live')
+        self.assertEqual(oct((home / 'muse' / 'settings.json').stat().st_mode & 0o777), '0o600')
 
 if __name__ == '__main__':
     unittest.main()
