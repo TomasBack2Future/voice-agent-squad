@@ -193,7 +193,10 @@ elif args[:1] == ['claim-inspect']:
         claim = None
     print(json.dumps({'env_claim': claim}))
 elif args[:2] == ['terminal-events', 'decision-get']:
-    print(json.dumps(state.get('decision', {})))
+    # The real Go Decision has no omitempty: "no adopted decision" is
+    # revision 0 with empty strings, never an empty object.
+    print(json.dumps(state.get('decision') or
+                     {'revision': 0, 'outcome_id': 0, 'action': '', 'condition': '', 'worker_agent': ''}))
 else:
     sys.exit(9)
 """
@@ -436,6 +439,24 @@ class RecoveryBackendTests(RecoveryFixture):
         self.assertIsNone(child.poll())
         self.assertEqual(self.calls(), [])
         self.assertFalse((Path(self.cfg['state_directory']) / 'recovery-attempts.json').exists())
+
+    def test_real_no_decision_shape_is_absent_but_adopted_must_proceed(self):
+        # D84-68 live canary: decision-get with no adopted decision returns
+        # revision 0 and an empty action; that is absent, not a refusal. An
+        # adopted revision (>0) must be exactly `proceed`.
+        self.set_goal('active')
+        self.failed_log()
+        env = executor.msp.child_environment(self.cfg)
+        self.set_squad(decision=None)
+        self.assertEqual(executor.check_custody(self.cfg, env), 0)
+        for decision in ({'revision': 4, 'action': 'hold'}, {'revision': 5, 'action': ''},
+                         {'revision': 0, 'action': 'hold'}, {'revision': 6, 'action': 'stop'}):
+            with self.subTest(decision=decision):
+                self.set_squad(decision=decision)
+                with self.assertRaisesRegex(executor.NotAdmitted, 'decision'):
+                    executor.check_custody(self.cfg, env)
+        self.set_squad(decision={'revision': 7, 'action': 'proceed'})
+        self.assertEqual(executor.check_custody(self.cfg, env), 7)
 
 if __name__ == '__main__':
     unittest.main()

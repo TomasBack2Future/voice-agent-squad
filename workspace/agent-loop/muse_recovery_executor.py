@@ -237,9 +237,14 @@ def check_custody(config, env):
                         '--generation', str(config['generation']),
                         '--worker-session', config['native_session_id'])
     decision = json.loads(raw) if raw.strip() else {}
-    if decision.get('action') not in (None, 'proceed'):
-        raise NotAdmitted('current decision is %s' % decision.get('action'))
-    return decision.get('revision')
+    revision, action = decision.get('revision') or 0, decision.get('action') or ''
+    # decision-get reports "no adopted decision" as revision 0 with an empty
+    # action; any adopted revision must be exactly `proceed`.
+    if (revision, action) == (0, ''):
+        return 0
+    if revision < 1 or action != 'proceed':
+        raise NotAdmitted('current decision revision %s is %r, not proceed' % (revision, action))
+    return revision
 
 
 def _initialize(host, config):

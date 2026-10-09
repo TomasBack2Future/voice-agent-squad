@@ -1033,7 +1033,9 @@ anything it requires:
 - `decide` returning `continue`;
 - a dispatched reservation bound to that native, the Worker's exact claim
   (`claim-inspect`: item, holder, `held`, configured `claim_generation`; agent
-  registration is not custody) and a `proceed` (or absent) decision.
+  registration is not custody). The decision must be absent (`decision-get` reports
+  revision 0 with an empty action) or an adopted revision whose action is exactly
+  `proceed`.
 
 It then compare-and-sets the episode's single attempt in its state directory.
 Immediately before the signal it re-reads the session log. The last run must
