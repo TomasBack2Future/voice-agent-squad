@@ -173,7 +173,7 @@ FAKE_SQUAD = r"""
 import json, os, sys, time
 state = json.load(open(os.environ['FAKE_SQUAD_STATE']))
 args = sys.argv[1:]
-if args[:1] == ['who']:
+if args[:1] == ['claim-inspect']:
     state['who_calls'] = state.get('who_calls', 0) + 1
     json.dump(state, open(os.environ['FAKE_SQUAD_STATE'], 'w'))
     if state.get('append_on_first_who') and state['who_calls'] == 1:
@@ -185,7 +185,13 @@ if args[:2] == ['dispatch', 'list']:
     print(json.dumps([{'reservation_key': 'DISPATCH-1', 'generation': 1, 'state': state.get('reservation_state', 'dispatched'),
                        'worker_thread_id': state['native'], 'reserved_by': 'dispatcher'}]))
 elif args[:1] == ['who']:
-    print(json.dumps([{'AgentID': 'worker', 'ClaimItem': state['claim']}]))
+    # Registration is not custody: an unregistered Muse Worker still holds claims.
+    print(json.dumps([]))
+elif args[:1] == ['claim-inspect']:
+    claim = state.get('claim_row', {'item': args[1], 'holder': 'worker', 'generation': 1, 'state': 'held'})
+    if state['claim'] != args[1]:
+        claim = None
+    print(json.dumps({'env_claim': claim}))
 elif args[:2] == ['terminal-events', 'decision-get']:
     print(json.dumps(state.get('decision', {})))
 else:
@@ -216,7 +222,7 @@ class RecoveryBackendTests(RecoveryFixture):
         self.cfg.update(agent_id='worker', item='BUG-001', client_executable=str(self.serve),
                         client_marker=str(self.client_marker), coordination_executable=str(squad),
                         ledger_directory=str(self.root), provider='meta', model='muse-spark-1.3-contributor',
-                        reasoning_effort='max', hooks={'PostLLMCall': []},
+                        reasoning_effort='max', hooks={'PostLLMCall': []}, claim_generation=1,
                         expected_server_version='1.4.4', expected_schema_fingerprint='sha256:qualified',
                         continuation_prompt='Continue the assigned task from its last checkpoint.',
                         max_seconds=20, quiet_seconds=1)
@@ -397,6 +403,39 @@ class RecoveryBackendTests(RecoveryFixture):
         self.assertEqual(recorded['stopped'], evidence['stopped'])
         attempts = json.loads((Path(self.cfg['state_directory']) / 'recovery-attempts.json').read_text())
         self.assertEqual([a['stage'] for a in attempts.values()], ['stopped'])
+
+    def test_custody_is_the_exact_claim_not_registration(self):
+        # D84-40 live: the unregistered real Muse Worker held its claim, yet
+        # `who` custody refused. Only the exact item/holder/held/generation counts.
+        self.set_goal('active')
+        self.failed_log()
+        env = executor.msp.child_environment(self.cfg)
+        self.assertEqual(executor.check_custody(self.cfg, env), 3)
+        for row in ({'item': 'BUG-001', 'holder': 'someone-else', 'generation': 1, 'state': 'held'},
+                    {'item': 'BUG-001', 'holder': 'worker', 'generation': 2, 'state': 'held'},
+                    {'item': 'BUG-001', 'holder': 'worker', 'generation': 1, 'state': 'recovering'}):
+            with self.subTest(row=row):
+                self.set_squad(claim_row=row)
+                with self.assertRaisesRegex(executor.NotAdmitted, 'claim'):
+                    executor.check_custody(self.cfg, env)
+        self.set_squad(claim='OTHER-ITEM')
+        with self.assertRaisesRegex(executor.NotAdmitted, 'claim'):
+            executor.check_custody(self.cfg, env)
+
+    def test_check_mode_runs_custody_without_changing_anything(self):
+        self.set_goal('active')
+        child = self.client()
+        self.failed_log(pid=child.pid)
+        event_file, config_file = self.root / 'event.json', self.root / 'config.json'
+        event_file.write_text(json.dumps(self.event))
+        config_file.write_text(json.dumps(self.cfg))
+        argv = ['--config', str(config_file), '--event-json', str(event_file), '--check']
+        self.assertEqual(executor.main(argv), 0)
+        self.set_squad(claim='OTHER-ITEM')
+        self.assertEqual(executor.main(argv), 3)
+        self.assertIsNone(child.poll())
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((Path(self.cfg['state_directory']) / 'recovery-attempts.json').exists())
 
 if __name__ == '__main__':
     unittest.main()

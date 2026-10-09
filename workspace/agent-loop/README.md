@@ -1023,15 +1023,17 @@ Transport recovery never opens or closes an episode. The hook returns
 quickly and never waits for its own turn to end (D84-2 ordering).
 
 `muse_recovery_executor.py` performs that one continuation for an interactive
-`--yolo` Worker (`--check` admits only and changes nothing). Before changing
+`--yolo` Worker. `--check` runs the same admission, goal matrix and custody
+reads and changes nothing. Before changing
 anything it requires:
 
 - the delivered keyed `runtime-failure` event of this exact
   reservation/generation/native;
 - the native session log's last run record showing `terminal: failed`;
 - `decide` returning `continue`;
-- a dispatched reservation bound to that native, the Worker's claim and a
-  `proceed` (or absent) decision.
+- a dispatched reservation bound to that native, the Worker's exact claim
+  (`claim-inspect`: item, holder, `held`, configured `claim_generation`; agent
+  registration is not custody) and a `proceed` (or absent) decision.
 
 It then compare-and-sets the episode's single attempt in its state directory.
 Immediately before the signal it re-reads the session log. The last run must
