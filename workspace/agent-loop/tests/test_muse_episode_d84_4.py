@@ -442,10 +442,14 @@ class EpisodeLifecycleTests(unittest.TestCase):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
             self.assertEqual(fourth['episode_id'], 'ep-2')
+            # 9c583c4 review: the delivered queued ep-2 is closed, never
+            # reopened, so the t5 failure is a NEW ep-3 outage.
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
-            self.assertEqual(fifth['state'], 'duplicate')
+            self.assertEqual(fifth['episode_id'], 'ep-3')
+            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(sixth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-1', 'ep-2'])
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-1', 'ep-2', 'ep-3'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
         self.assertIn('turn=t1 request=req-1', bodies[3])
         # ep-2 carries the frozen t3 body, not the live t4 body.
@@ -551,12 +555,14 @@ class EpisodeLifecycleTests(unittest.TestCase):
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             # Replay of ep-1 succeeds on a failure turn (not healthy):
-            # ep-1 confirms, queued ep-2 publishes, queued ep-3 stays.
+            # ep-1 confirms, queued ep-2 AND ep-3 drain on the same turn
+            # (9c583c4 review: no open row may strand the tail while the
+            # outage continues). t7 healthy then finds nothing to do.
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
-            self.assertEqual(sixth['episode_id'], 'ep-2')
+            self.assertEqual(sixth['episode_id'], 'ep-3')
             seventh = hook.note_progress(payload(turn_id='t7', status='completed', error=''),
                                          self.cfg, hook._hook_env(self.cfg), attempts=1)
-            self.assertTrue(seventh)
+            self.assertFalse(seventh)
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
         self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
@@ -608,6 +614,51 @@ class EpisodeLifecycleTests(unittest.TestCase):
             self.assertTrue(sixth)
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
         self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
+
+    def test_failure_turn_recovery_delivers_whole_tail(self):
+        # 9c583c4 review: ep-1 pending with queued ep-2/ep-3 across two
+        # offline boundaries. Transport recovers ON A FAILURE TURN: t6
+        # confirms ep-1, delivers queued ep-2, and must ALSO deliver
+        # queued ep-3 — the delivered head must not strand the tail
+        # behind an open row while the outage continues. Exactly ep-1,
+        # ep-2, ep-3, with no duplicate short-circuit.
+        submits = []
+        online = {'yes': False}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                if status == 'failed':
+                    with self.assertRaises(subprocess.SubprocessError):
+                        hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
+                else:
+                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                                       self.cfg, hook._hook_env(self.cfg), attempts=1)
+            online['yes'] = True
+            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(sixth['episode_id'], 'ep-3')
+            # All three preserved outages drained on t6; the still-down
+            # model keeps failing, so t7 is a NEW ep-4 outage and t8
+            # dedupes against it.
+            seventh = hook.publish(payload(turn_id='t7', request_id='req-7'), self.cfg, attempts=1)
+            self.assertEqual(seventh['episode_id'], 'ep-4')
+            eighth = hook.publish(payload(turn_id='t8', request_id='req-8'), self.cfg, attempts=1)
+            self.assertEqual(eighth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3', 'ep-4'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-t1', bodies[0])
+        self.assertIn('turn=t3 request=req-t3', bodies[1])
+        self.assertIn('turn=t5 request=req-t5', bodies[2])
+        self.assertIn('turn=t7 request=req-7', bodies[3])
 
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})

@@ -556,8 +556,9 @@ class MuseFailureE2ETests(unittest.TestCase):
 
         ep-1 pending with queued ep-2/ep-3 across two offline
         boundaries. A failure turn's replay of ep-1 succeeds: ep-1
-        confirms, queued ep-2 publishes, and ep-3 stays queued. The
-        next healthy turn closes ep-2 and drains ep-3.
+        confirms and the whole queued tail drains on that same turn
+        (9c583c4 review: no open row may strand queued outages while
+        the outage continues). The next healthy turn finds nothing.
         """
         sys.path.insert(0, str(ROOT))
         import muse_failure_hook as hook
@@ -577,7 +578,8 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
             mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
             mid_row = mid['D-E2E|1|e2e-native']
-            self.assertEqual(mid_row.get('queued_outage'), ['ep-3'])
+            self.assertIsNone(mid_row.get('queued_outage'))
+            self.assertFalse(mid_row['episode_open'])
             self.assertEqual(hook.run(self.config, self._hook_event('t7', 'completed')), 0)
         finally:
             hook._submit = original

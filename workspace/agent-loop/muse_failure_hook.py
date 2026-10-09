@@ -846,11 +846,14 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
     failure becomes a NEW episode under the next key with its own
     immutable payload — unless a queued outage already froze a different
     body under that key, in which case the frozen body wins so one key
-    never carries two bodies (11a67a2 review). On submit failure the new
-    episode stays pending WITHOUT the boundary (D84-12): the boundary
-    belongs only to the episode it closed, so a later replay of the new
-    episode confirms it open normally instead of spawning a spurious
-    further episode.
+    never carries two bodies (11a67a2 review). Delivered queued entries
+    are closed, never reopened, and the remaining tail keeps draining
+    on this same failure turn (9c583c4 review): no open row may strand
+    queued outages while the outage continues. On submit failure the
+    new episode stays pending WITHOUT the boundary (D84-12): the
+    boundary belongs only to the episode it closed, so a later replay
+    of the new episode confirms it open normally instead of spawning a
+    spurious further episode.
     """
     data = _snapshots(config)
     seen = data.get(key, {})
@@ -872,6 +875,11 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
         # payload-conflict (11a67a2 review). The live failure is the
         # same continuous post-boundary outage, kept as diagnostics.
         live = dict(frozen, episode_id=episode_id)
+    # The head of the queue is being delivered on this call whenever
+    # the allocated key is a queued entry: a preserved queued outage
+    # always wins over any live failure, whether the caller passed the
+    # live observation or the queued one (9c583c4 review).
+    submit_queued = episode_id in _queued_outage_ids(config, key)
     _store_pending(config, live)
     body = _compose_body(episode_id, live)
     last = None
@@ -881,23 +889,24 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             last = error
             continue
+        if submit_queued:
+            # The delivered entry was a preserved queued outage: close
+            # it like the healthy-turn drain does, then keep draining
+            # the tail on this same failure turn so no later failure
+            # short-circuits to duplicate with outages still queued.
+            _close_delivered_queued(config, key, episode_id, boundary)
+            _drop_pending(config, live)
+            receipt.setdefault('episode_id', episode_id)
+            _flush_queued_outage(config, env, key, attempts, closing_turn=boundary)
+            tail = _queued_outage_ids(config, key)
+            if not tail:
+                final = _snapshots(config)
+                delivered = final.get(key, {}).get('episode_id', episode_id)
+                receipt['episode_id'] = delivered
+            return receipt
         _mark_open_unlocked(config, live, episode_id)
         _drop_pending(config, live)
         receipt.setdefault('episode_id', episode_id)
-        # The just-delivered queue head is consumed; entries behind it
-        # are later independent outages and stay queued (4c756a4 finding
-        # 1: _mark_open_unlocked now carries them, so remove only this
-        # one instead of dropping the whole tail).
-        rest = [entry for entry in _queued_outage_ids(config, key) if entry != episode_id]
-        fixed = _snapshots(config)
-        row = fixed.get(key, {})
-        if rest:
-            row['queued_outage'] = rest
-        else:
-            row.pop('queued_outage', None)
-            row.pop('queued_boundary', None)
-        fixed[key] = row
-        _save(config, fixed)
         return receipt
     failed = _snapshots(config)
     row = failed.get(key, {})
