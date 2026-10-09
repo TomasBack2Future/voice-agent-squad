@@ -33,6 +33,14 @@ import sys
 import time
 
 ERROR_CLASSES = ('exhausted', 'connection', 'auth', 'quota', 'config', 'unknown')
+#: PostLLMCall statuses that are a failed model call. Muse ends a call whose
+#: stream never produced a first event as `timed_out`, not `failed` (#84,
+#: live 1372 capture), so both open or continue an outage.
+FAILURE_STATUSES = ('failed', 'timed_out')
+#: The only status that is verified healthy progress. `cancelled` and any
+#: other value are neither failure nor health: they are audited and change
+#: no episode.
+HEALTHY_STATUS = 'success'
 MAX_ATTEMPTS = 3
 CALL_TIMEOUT = 10
 
@@ -41,7 +49,7 @@ _PATTERNS = [
     ('quota', re.compile(r'quota|rate.?limit|too many requests|429', re.I)),
     ('exhausted', re.compile(r'after \d+ provider attempts|exhaust', re.I)),
     ('config', re.compile(r'unknown model|catalog|not found|invalid.?model|misconfig', re.I)),
-    ('connection', re.compile(r'connection|refused|reset|timeout|timed out|network|unreachable|5\d\d|econn|socket', re.I)),
+    ('connection', re.compile(r'connection|refused|reset|timeout|timed out|no first model event|network|unreachable|5\d\d|econn|socket', re.I)),
 ]
 
 
@@ -53,22 +61,21 @@ def classify_error(error: str) -> str:
     return 'unknown'
 
 
+def _bound_call(event: dict, config: dict) -> bool:
+    """The bound native's own PostLLMCall: no unrelated, reminder or subagent session."""
+    return (event.get('hook_event_name') == 'PostLLMCall'
+            and event.get('session_id') == config.get('native_session_id')
+            and not event.get('agent_id') and not event.get('agent_type'))
+
+
 def admits(event: dict, config: dict) -> bool:
-    """True only for the bound native's failed PostLLMCall turn.
+    """True only for the bound native's failed or timed-out PostLLMCall.
 
     Rejects unrelated/reminder sessions (wrong session id), child agent
-    sessions (agent_id/agent_type present), non-failed turns, and every
-    other hook event including StopFailure (unqualified: never observed).
+    sessions (agent_id/agent_type present), every non-failure status, and
+    every other hook event including StopFailure (unqualified: never observed).
     """
-    if event.get('hook_event_name') != 'PostLLMCall':
-        return False
-    if event.get('status') != 'failed':
-        return False
-    if event.get('session_id') != config.get('native_session_id'):
-        return False
-    if event.get('agent_id') or event.get('agent_type'):
-        return False
-    return True
+    return _bound_call(event, config) and event.get('status') in FAILURE_STATUSES
 
 
 _SAFE_ID = re.compile(r'[A-Za-z0-9_.-]{1,128}\Z')
@@ -125,6 +132,13 @@ def _normalize_compound(value, pattern, name):
     return normalized
 
 
+def _error_class(event):
+    found = classify_error(str(event.get('error', '')))
+    if found == 'unknown' and event.get('status') == 'timed_out':
+        return 'connection'
+    return found
+
+
 def observe(event: dict, config: dict) -> dict:
     """Build the sanitized observation. Raw error text never leaves.
 
@@ -151,7 +165,7 @@ def observe(event: dict, config: dict) -> dict:
         'request_id': request_id,
         'attempt': int(event.get('attempt', 0) or 0),
         'provider': _safe_or_unknown(event.get('provider'), _SAFE_PROVIDER, 'provider'),
-        'error_class': classify_error(str(event.get('error', ''))),
+        'error_class': _error_class(event),
         'observed_at': int(time.time()),
     }
 
@@ -170,6 +184,34 @@ def _record_rejection(config, reason):
     rejected.append({'at': int(time.time()), 'reason': reason})
     temp = path.with_suffix('.tmp')
     temp.write_text(json.dumps(rejected))
+    temp.replace(path)
+
+
+_STATUS_TOKEN = re.compile(r'[a-z_-]{1,32}\Z')
+
+
+def _record_ignored(config, event):
+    """Audit a bound PostLLMCall that is neither failure nor health.
+
+    Only the closed status token (or `invalid`) and turn id are kept,
+    bounded to the most recent entries; no payload field leaves.
+    """
+    state = Path(config['state_directory'])
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / 'ignored.json'
+    try:
+        ignored = json.loads(path.read_text())
+    except (OSError, ValueError):
+        ignored = []
+    if not isinstance(ignored, list):
+        ignored = []
+    status = str(event.get('status'))
+    turn = str(event.get('turn_id') or '')
+    ignored.append({'at': int(time.time()),
+                    'status': status if _STATUS_TOKEN.fullmatch(status) else 'invalid',
+                    'turn_id': turn if _SAFE_ID.fullmatch(turn) else 'invalid'})
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(ignored[-50:]))
     temp.replace(path)
 
 
@@ -285,13 +327,7 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
     failed flush cannot merge the next outage into this one. With an
     env, undelivered episodes then get a bounded flush.
     """
-    if event.get('hook_event_name') != 'PostLLMCall':
-        return False
-    if event.get('status') == 'failed':
-        return False
-    if event.get('session_id') != config.get('native_session_id'):
-        return False
-    if event.get('agent_id') or event.get('agent_type'):
+    if not _bound_call(event, config) or event.get('status') != HEALTHY_STATUS:
         return False
     def close():
         data = _snapshots(config)
@@ -403,12 +439,16 @@ def _hook_env(config):
 def run(config_path: Path, event: dict) -> int:
     config = json.loads(config_path.read_text())
     if not admits(event, config):
-        # Non-failed PostLLMCall of the bound native is verified healthy
+        # Only an explicit success of the bound native is verified healthy
         # progress: end the open outage, then flush undelivered episodes,
         # so the next independent failure publishes with a fresh budget.
         # Unrelated sessions never close. Bounded to one flush attempt.
+        # Any other status of the bound native is audited, never health.
         try:
-            note_progress(event, config, _hook_env(config))
+            if _bound_call(event, config) and event.get('status') != HEALTHY_STATUS:
+                _record_ignored(config, event)
+            else:
+                note_progress(event, config, _hook_env(config))
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
         return 0

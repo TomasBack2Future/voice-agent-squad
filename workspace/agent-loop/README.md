@@ -988,9 +988,14 @@ blocked result; the original primary claim remains with its owner.
 ### Muse runtime-failure hook and handling contract
 
 `muse_failure_hook.py` is a PostLLMCall observation-only adapter. It admits
-only the ledger-bound Worker's native session with `status: failed`, rejecting
+only the ledger-bound Worker's native session, rejecting
 unrelated/reminder/subagent sessions and unqualified StopFailure; StopFailure
-stays supplemental until exact-version proof exists. It classifies the error
+stays supplemental until exact-version proof exists. Status `failed` or
+`timed_out` is a failure. Muse ends a model call whose stream produced no
+first event as `timed_out`, and this case is classified `connection`. Only
+`success` is verified healthy progress. `cancelled` and any other status of the
+bound native is neither: the hook appends its closed status token and turn id
+to the bounded `ignored.json` audit and changes no episode. It classifies the error
 into a closed enum (`exhausted`, `connection`, `auth`, `quota`, `config`,
 `unknown`), dedupes by reservation/generation/native plus continuous episode
 under a lock, and publishes one sanitized observation through #88's atomic

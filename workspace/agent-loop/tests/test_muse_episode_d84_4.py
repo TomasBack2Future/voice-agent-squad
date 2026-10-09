@@ -96,7 +96,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             first = hook.publish(payload(turn_id='turn-1'), self.cfg)
             self.assertEqual(first['state'], 'pending')
             # Verified healthy progress on the same native closes the episode.
-            hook.note_progress(payload(turn_id='turn-2', status='completed', error=''), self.cfg)
+            hook.note_progress(payload(turn_id='turn-2', status='success', error=''), self.cfg)
             second = hook.publish(payload(turn_id='turn-3', request_id='req-3'), self.cfg)
             self.assertEqual(second['state'], 'pending')
             self.assertNotEqual(second['event_id'], first['event_id'])
@@ -146,7 +146,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=ok_run({'event_id': 'e1', 'state': 'pending'})):
             hook.publish(payload(turn_id='turn-1'), self.cfg)
             hook.note_progress(payload(session_id='other-native', turn_id='turn-2',
-                                       status='completed', error=''), self.cfg)
+                                       status='success', error=''), self.cfg)
             retry = hook.publish(payload(turn_id='turn-1'), self.cfg)
             self.assertEqual(retry['state'], 'duplicate')
 
@@ -280,7 +280,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='turn-1'), self.cfg, attempts=1)
-            healthy = payload(turn_id='turn-2', status='completed', error='')
+            healthy = payload(turn_id='turn-2', status='success', error='')
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             second = hook.publish(payload(turn_id='turn-3', request_id='req-3'), self.cfg)
             self.assertEqual(second['state'], 'pending')
@@ -308,7 +308,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            healthy = payload(turn_id='t2', status='completed', error='')
+            healthy = payload(turn_id='t2', status='success', error='')
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
@@ -342,12 +342,12 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            healthy2 = payload(turn_id='t2', status='completed', error='')
+            healthy2 = payload(turn_id='t2', status='success', error='')
             self.assertTrue(hook.note_progress(healthy2, self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             online['yes'] = True
-            healthy4 = payload(turn_id='t4', status='completed', error='')
+            healthy4 = payload(turn_id='t4', status='success', error='')
             self.assertTrue(hook.note_progress(healthy4, self.cfg, hook._hook_env(self.cfg)))
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
             self.assertEqual(fifth['episode_id'], 'ep-3')
@@ -380,9 +380,9 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             self.assertTrue(hook.note_progress(
-                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+                payload(turn_id='t2', status='success', error=''), self.cfg, hook._hook_env(self.cfg)))
             self.assertFalse(hook.note_progress(
-                payload(turn_id='t3', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+                payload(turn_id='t3', status='success', error=''), self.cfg, hook._hook_env(self.cfg)))
             self.assertEqual(self.outbox_ids(), [])
             self.assertFalse(self.row()['episode_open'])
             with self.assertRaises(subprocess.SubprocessError):
@@ -410,7 +410,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             return real_save(config, data)
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
             with mock.patch.object(hook, '_save', side_effect=failing_save):
-                healthy = payload(turn_id='turn-2', status='completed', error='')
+                healthy = payload(turn_id='turn-2', status='success', error='')
                 with self.assertRaises(OSError):
                     hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg))
         self.assertEqual(len(stub.submits), 1)
@@ -418,7 +418,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(self.outbox_ids(), ['ep-1'])
         self.assertEqual(self.row()['outbox'][0]['turn_id'], 'turn-1')
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
-            healthy = payload(turn_id='turn-3', status='completed', error='')
+            healthy = payload(turn_id='turn-3', status='success', error='')
             self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
         self.assertEqual(self.outbox_ids(), [])
         self.assertEqual(submit_bodies(stub)[0], submit_bodies(stub)[1])
@@ -443,7 +443,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             self.assertTrue(hook.note_progress(
-                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+                payload(turn_id='t2', status='success', error=''), self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
@@ -482,12 +482,12 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             self.assertTrue(hook.note_progress(
-                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+                payload(turn_id='t2', status='success', error=''), self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             online['yes'] = True
             self.assertTrue(hook.note_progress(
-                payload(turn_id='t4', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+                payload(turn_id='t4', status='success', error=''), self.cfg, hook._hook_env(self.cfg)))
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
             self.assertEqual(fifth['episode_id'], 'ep-3')
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
@@ -516,17 +516,17 @@ class EpisodeLifecycleTests(unittest.TestCase):
             key = argv[argv.index('--request-key') + 1]
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 if status == 'failed':
                     with self.assertRaises(subprocess.SubprocessError):
                         hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
                 else:
-                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                    hook.note_progress(payload(turn_id=turn, status='success', error=''),
                                        self.cfg, hook._hook_env(self.cfg))
             online['yes'] = True
             for turn in ('t6', 't7', 't8'):
-                hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                hook.note_progress(payload(turn_id=turn, status='success', error=''),
                                    self.cfg, hook._hook_env(self.cfg), attempts=1)
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
         self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
@@ -551,13 +551,13 @@ class EpisodeLifecycleTests(unittest.TestCase):
             key = argv[argv.index('--request-key') + 1]
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 if status == 'failed':
                     with self.assertRaises(subprocess.SubprocessError):
                         hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
                 else:
-                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                    hook.note_progress(payload(turn_id=turn, status='success', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             # Replay of ep-1 succeeds on a failure turn (not healthy):
@@ -566,7 +566,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             # only ends the t5-t6 outage; nothing is left to deliver.
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
             self.assertEqual(sixth['episode_id'], 'ep-3')
-            seventh = hook.note_progress(payload(turn_id='t7', status='completed', error=''),
+            seventh = hook.note_progress(payload(turn_id='t7', status='success', error=''),
                                          self.cfg, hook._hook_env(self.cfg), attempts=1)
             self.assertTrue(seventh)
             self.assertEqual(self.outbox_ids(), [])
@@ -600,14 +600,14 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            hook.note_progress(payload(turn_id='t2', status='completed', error=''),
+            hook.note_progress(payload(turn_id='t2', status='success', error=''),
                                self.cfg, hook._hook_env(self.cfg), attempts=1)
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             online['yes'] = True
             # t4 healthy commits ep-1; queued ep-2 fails its single shot.
             self.assertTrue(hook.note_progress(
-                payload(turn_id='t4', status='completed', error=''), self.cfg,
+                payload(turn_id='t4', status='success', error=''), self.cfg,
                 hook._hook_env(self.cfg), attempts=1))
             self.assertFalse(self.row()['episode_open'])
             self.assertEqual(self.outbox_ids(), ['ep-2'])
@@ -615,7 +615,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             # t5 failure: ep-2 survives, live outage frozen as ep-3.
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
             self.assertEqual(fifth['episode_id'], 'ep-3')
-            sixth = hook.note_progress(payload(turn_id='t6', status='completed', error=''),
+            sixth = hook.note_progress(payload(turn_id='t6', status='success', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             self.assertTrue(sixth)
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
@@ -638,13 +638,13 @@ class EpisodeLifecycleTests(unittest.TestCase):
             key = argv[argv.index('--request-key') + 1]
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 if status == 'failed':
                     with self.assertRaises(subprocess.SubprocessError):
                         hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
                 else:
-                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                    hook.note_progress(payload(turn_id=turn, status='success', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
@@ -683,13 +683,13 @@ class EpisodeLifecycleTests(unittest.TestCase):
             submits.append(argv)
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 if status == 'failed':
                     with self.assertRaises(subprocess.SubprocessError):
                         hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
                 else:
-                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                    hook.note_progress(payload(turn_id=turn, status='success', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             with self.assertRaises(subprocess.SubprocessError):
@@ -737,12 +737,12 @@ class EpisodeLifecycleTests(unittest.TestCase):
                 raise OSError('isolated crash between commit and delivery record')
             return real_save(config, data)
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed')):
                 if status == 'failed':
                     with self.assertRaises(subprocess.SubprocessError):
                         hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
                 else:
-                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                    hook.note_progress(payload(turn_id=turn, status='success', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             with mock.patch.object(hook, '_save', side_effect=dying_save):
@@ -789,7 +789,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            hook.note_progress(payload(turn_id='t2', status='completed', error=''),
+            hook.note_progress(payload(turn_id='t2', status='success', error=''),
                                self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             with mock.patch.object(hook, '_save', side_effect=dying_save):
@@ -821,7 +821,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             data[key]['healthy_boundary'] = 'stale-turn'
             (self.root / 'state' / 'failure-episodes.json').write_text(json.dumps(data))
             self.assertTrue(hook.note_progress(
-                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+                payload(turn_id='t2', status='success', error=''), self.cfg, hook._hook_env(self.cfg)))
             self.assertEqual(self.row()['closed_by_turn'], 't2')
             next_outage = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             self.assertEqual(next_outage['episode_id'], 'ep-2')
@@ -851,13 +851,13 @@ class EpisodeLifecycleTests(unittest.TestCase):
             submits.append(argv)
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
-            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
-                                 ('t4', 'completed'), ('t5', 'failed')):
+            for turn, status in (('t1', 'failed'), ('t2', 'success'), ('t3', 'failed'),
+                                 ('t4', 'success'), ('t5', 'failed')):
                 if status == 'failed':
                     with self.assertRaises(subprocess.SubprocessError):
                         hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
                 else:
-                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                    hook.note_progress(payload(turn_id=turn, status='success', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             with self.assertRaises(subprocess.SubprocessError):
@@ -886,7 +886,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(), self.cfg, attempts=1)
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
-            healthy = payload(turn_id='turn-2', status='completed', error='')
+            healthy = payload(turn_id='turn-2', status='success', error='')
             # The healthy turn ends the outage even though its flush
             # fails; the frozen ep-1 payload stays undelivered.
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
@@ -915,7 +915,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            healthy = payload(turn_id='t2', status='completed', error='')
+            healthy = payload(turn_id='t2', status='success', error='')
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             receipt = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
@@ -953,7 +953,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            healthy = payload(turn_id='t2', status='completed', error='')
+            healthy = payload(turn_id='t2', status='success', error='')
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
@@ -993,7 +993,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             # payload replays under its own key.
             receipt = hook.publish(payload(turn_id='t2x', request_id='req-2x'), self.cfg, attempts=1)
             self.assertEqual(receipt['episode_id'], 'ep-1')
-            healthy = payload(turn_id='t2', status='completed', error='')
+            healthy = payload(turn_id='t2', status='success', error='')
             self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             second = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             self.assertEqual(second['episode_id'], 'ep-2')

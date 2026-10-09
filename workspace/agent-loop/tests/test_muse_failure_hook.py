@@ -57,7 +57,7 @@ class HookAdapterTests(unittest.TestCase):
         for event in (payload(session_id='other-native'),
                       payload(session_id='worker-native', agent_id='child-1', agent_type='subagent'),
                       {'hook_event_name': 'PostLLMCall', 'session_id': 'worker-native',
-                       'turn_id': 'turn-9', 'status': 'completed'}):
+                       'turn_id': 'turn-9', 'status': 'success'}):
             with self.subTest(event=event):
                 self.assertFalse(hook.admits(event, self.cfg))
 
@@ -245,6 +245,23 @@ class HookAdapterTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertLess(time.monotonic() - start, 5)
 
+
+    def test_status_contract_failure_health_and_audited_other(self):
+        # #84 live 1372: timed_out is a failure; only success is health;
+        # anything else is audited with a closed token and changes nothing.
+        self.assertTrue(hook.admits(payload(status='timed_out'), self.cfg))
+        self.assertFalse(hook.admits(payload(status='cancelled'), self.cfg))
+        self.assertEqual(hook.observe(payload(status='timed_out', error='no first model event within 300000ms'),
+                                      self.cfg)['error_class'], 'connection')
+        self.assertFalse(hook.note_progress(payload(status='cancelled'), self.cfg))
+        (self.root / 'config.json').write_text(json.dumps(self.cfg))
+        for status in ('cancelled', 'Bad Status; rm -rf /', None):
+            self.assertEqual(hook.main(['--config', str(self.root / 'config.json'),
+                                        '--event', json.dumps(payload(status=status, turn_id='t/x'))]), 0)
+        ignored = json.loads((self.root / 'state' / 'ignored.json').read_text())
+        self.assertEqual([(e['status'], e['turn_id']) for e in ignored],
+                         [('cancelled', 'invalid'), ('invalid', 'invalid'), ('invalid', 'invalid')])
+        self.assertFalse((self.root / 'state' / 'failure-episodes.json').exists())
 
 class HandlingTests(unittest.TestCase):
     def event(self, **overrides):
