@@ -142,6 +142,7 @@ type commandOutput struct {
 	CostUSD            float64                             `json:"cost_usd,omitempty"`
 	DurationMillis     int64                               `json:"duration_ms,omitempty"`
 	FailureKind        grokreview.CLIFailureKind           `json:"failure_kind,omitempty"`
+	FailureRule        grokreview.EnvelopeRule             `json:"failure_rule,omitempty"`
 	CommentID          int64                               `json:"comment_id,omitempty"`
 	CommentURL         string                              `json:"comment_url,omitempty"`
 	CheckRunID         int64                               `json:"check_run_id,omitempty"`
@@ -795,6 +796,7 @@ func newCommandOutput(report grokreview.ReviewReport) commandOutput {
 		TotalTokens: report.Audit.Usage.TotalTokens, CostUSD: report.Audit.CostUSD,
 		DurationMillis: report.Audit.Duration.Milliseconds(),
 		FailureKind:    report.Audit.FailureKind,
+		FailureRule:    report.Audit.FailureRule,
 		CommentID:      report.Publication.CommentID, CommentURL: report.Publication.CommentURL,
 		CheckRunID: report.Publication.CheckRunID, CheckURL: report.Publication.CheckURL,
 		CheckConclusion: report.Publication.Conclusion,

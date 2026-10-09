@@ -27,6 +27,12 @@ const DefaultReasoningEffort = "medium"
 // snapshot after a denied tool request consumes the first Grok agent turn.
 const MaxReviewerTurns = 3
 
+// MaxReviewerTotalModelCalls is the total model-call budget for one review
+// attempt. A denied tool request lets Grok continue inside the same turn, so
+// calls may exceed turns. The envelope reports no per-turn call counts, so no
+// per-turn bound is enforced.
+const MaxReviewerTotalModelCalls = MaxReviewerTurns * 2
+
 type Verdict string
 
 type CLIFailureKind string
@@ -96,6 +102,8 @@ type CLIAudit struct {
 	Duration        time.Duration
 	StderrSHA256    string
 	FailureKind     CLIFailureKind
+	// FailureRule is set only for invalid_output from a rejected envelope.
+	FailureRule EnvelopeRule
 }
 
 type CLIConfig struct {
@@ -492,6 +500,10 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 
 	if err != nil {
 		audit.FailureKind = CLIFailureInvalidOutput
+		var ruleErr *EnvelopeRuleError
+		if errors.As(err, &ruleErr) {
+			audit.FailureRule = ruleErr.Rule
+		}
 		return FindingsResult{}, audit, fmt.Errorf("grok CLI returned invalid structured output")
 	}
 	parsedAudit.Backend = r.config.Backend
@@ -589,50 +601,86 @@ func (r *CLIRunner) childEnvironment(workDir string) []string {
 	return append(environment, "TMPDIR="+workDir)
 }
 
+// EnvelopeRule names the Grok envelope rule a rejected review violated. The
+// values are a closed set of safe identifiers; they never carry model output.
+type EnvelopeRule string
+
+const (
+	EnvelopeRuleEnvelopeUnparseable     EnvelopeRule = "envelope_unparseable"
+	EnvelopeRuleStopReason              EnvelopeRule = "stop_reason"
+	EnvelopeRuleIdentity                EnvelopeRule = "identity"
+	EnvelopeRuleTurnsOutOfRange         EnvelopeRule = "turns_out_of_range"
+	EnvelopeRuleModelCount              EnvelopeRule = "model_count"
+	EnvelopeRuleModelCallsBelowTurns    EnvelopeRule = "model_calls_below_turns"
+	EnvelopeRuleModelCallsUnbounded     EnvelopeRule = "model_calls_unbounded"
+	EnvelopeRuleStructuredOutputMissing EnvelopeRule = "structured_output_missing"
+	EnvelopeRuleStructuredOutputInvalid EnvelopeRule = "structured_output_invalid"
+	EnvelopeRuleFindingsInvalid         EnvelopeRule = "findings_invalid"
+	EnvelopeRuleTextNotJSON             EnvelopeRule = "text_not_json"
+	EnvelopeRuleTextMismatch            EnvelopeRule = "text_mismatch"
+)
+
+// EnvelopeRuleError reports which envelope rule rejected a Grok result.
+type EnvelopeRuleError struct {
+	Rule EnvelopeRule
+	Err  error
+}
+
+func (e *EnvelopeRuleError) Error() string { return e.Err.Error() }
+func (e *EnvelopeRuleError) Unwrap() error { return e.Err }
+
+func envelopeRuleError(rule EnvelopeRule, format string, args ...any) error {
+	return &EnvelopeRuleError{Rule: rule, Err: fmt.Errorf(format, args...)}
+}
+
 func ParseCLIEnvelope(raw []byte) (FindingsResult, CLIAudit, error) {
 	var envelope cliEnvelope
 	if err := decodeStrictJSON(raw, &envelope); err != nil {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("parse Grok CLI envelope: %w", err)
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleEnvelopeUnparseable, "parse Grok CLI envelope: %w", err)
 	}
 	if envelope.StopReason != "end_turn" {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI stop reason is %q", envelope.StopReason)
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleStopReason, "grok CLI stop reason is %q", envelope.StopReason)
 	}
 	if envelope.SessionID == "" || envelope.RequestID == "" {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI envelope lacks session or request identity")
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleIdentity, "grok CLI envelope lacks session or request identity")
 	}
 	if envelope.NumTurns < 1 || envelope.NumTurns > MaxReviewerTurns {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI used %d turns, expected 1-%d", envelope.NumTurns, MaxReviewerTurns)
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleTurnsOutOfRange, "grok CLI used %d turns, expected 1-%d", envelope.NumTurns, MaxReviewerTurns)
 	}
 	if len(envelope.ModelUsage) != 1 {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI reported %d models, expected one", len(envelope.ModelUsage))
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleModelCount, "grok CLI reported %d models, expected one", len(envelope.ModelUsage))
 	}
 	model := ""
 	for name, usage := range envelope.ModelUsage {
-		if usage.ModelCalls != envelope.NumTurns {
-			return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI model %q made %d calls, expected %d", name, usage.ModelCalls, envelope.NumTurns)
+		// Calls may exceed turns after in-turn continuation, within the total budget.
+		if usage.ModelCalls < envelope.NumTurns {
+			return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleModelCallsBelowTurns, "grok CLI model %q made %d calls, fewer than %d turns", name, usage.ModelCalls, envelope.NumTurns)
+		}
+		if usage.ModelCalls > MaxReviewerTotalModelCalls {
+			return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleModelCallsUnbounded, "grok CLI model %q made %d calls, expected at most %d in total", name, usage.ModelCalls, MaxReviewerTotalModelCalls)
 		}
 		model = name
 	}
 
 	var result FindingsResult
 	if len(envelope.StructuredOutput) == 0 || bytes.Equal(envelope.StructuredOutput, []byte("null")) {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI envelope lacks structured output")
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleStructuredOutputMissing, "grok CLI envelope lacks structured output")
 	}
 	if err := decodeStrictJSON(envelope.StructuredOutput, &result); err != nil {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("parse Grok structured output: %w", err)
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleStructuredOutputInvalid, "parse Grok structured output: %w", err)
 	}
 	if err := ValidateModelFindings(result); err != nil {
-		return FindingsResult{}, CLIAudit{}, err
+		return FindingsResult{}, CLIAudit{}, &EnvelopeRuleError{Rule: EnvelopeRuleFindingsInvalid, Err: err}
 	}
 	var textValue, structuredValue any
 	if err := decodeStrictJSON([]byte(envelope.Text), &textValue); err != nil {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI text is not exact JSON: %w", err)
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleTextNotJSON, "grok CLI text is not exact JSON: %w", err)
 	}
 	if err := decodeStrictJSON(envelope.StructuredOutput, &structuredValue); err != nil {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("compare Grok structured output: %w", err)
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleStructuredOutputInvalid, "compare Grok structured output: %w", err)
 	}
 	if !reflect.DeepEqual(textValue, structuredValue) {
-		return FindingsResult{}, CLIAudit{}, fmt.Errorf("grok CLI text does not match structured output")
+		return FindingsResult{}, CLIAudit{}, envelopeRuleError(EnvelopeRuleTextMismatch, "grok CLI text does not match structured output")
 	}
 
 	return result, CLIAudit{

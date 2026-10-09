@@ -126,7 +126,13 @@ by `approved`, `blocking`, `error` or `stale`.
 describe the invocation. Missing usage is unknown, not zero.
 `failure_kind` distinguishes timeout, cancellation, argument/authentication,
 transport, output-limit and invalid-output failures; `failure_stage` identifies
-freezing, sampling, validation, identity checks or publication.
+freezing, sampling, validation, identity checks or publication. For
+`invalid_output`, `failure_rule` names the violated envelope rule from a closed
+set of safe identifiers (never model output), and the Check summary repeats it.
+Grok may continue inside one turn after a denied tool request, so a valid
+envelope allows `num_turns <= modelCalls <= 6`, a total per-attempt call budget
+(the envelope exposes no per-turn counts, so no per-turn bound is enforced);
+`text` must still equal `structuredOutput`.
 
 These records are read-only observations, not merge authority. Monitor
 availability does not change the command result.

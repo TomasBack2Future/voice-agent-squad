@@ -187,6 +187,9 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 			Summary:       reviewTitle(audit.Backend) + " did not complete; no valid review conclusion. Diagnose the operational failure before considering another attempt.",
 			Findings:      []Finding{},
 		}
+		if audit.FailureRule != "" {
+			result.Summary += " Violated envelope rule: " + string(audit.FailureRule) + "."
+		}
 		if audit.FailureKind == CLIFailureTimeout {
 			result.Summary = reviewTitle(audit.Backend) + " timed out; no valid review conclusion. Do not treat timeout as approval or blindly resample this head."
 		}

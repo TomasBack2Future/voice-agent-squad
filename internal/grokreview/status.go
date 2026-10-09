@@ -37,6 +37,7 @@ type ReviewStatus struct {
 	FailureStage       string               `json:"failure_stage,omitempty"`
 	ReviewerDurationMS int64                `json:"reviewer_duration_ms,omitempty"`
 	FailureKind        CLIFailureKind       `json:"failure_kind,omitempty"`
+	FailureRule        EnvelopeRule         `json:"failure_rule,omitempty"`
 	StartedAt          int64                `json:"started_at"`
 	DeadlineAt         int64                `json:"deadline_at"`
 	UpdatedAt          int64                `json:"updated_at"`
@@ -121,6 +122,7 @@ func (w *ReviewStatusWriter) Observe(observation ReviewObservation) error {
 		TotalTokens:        observation.Audit.Usage.TotalTokens,
 		CostUSD:            observation.Audit.CostUSD,
 		FailureKind:        observation.Audit.FailureKind,
+		FailureRule:        observation.Audit.FailureRule,
 		FailureStage:       observation.FailureStage,
 		ReasoningEffort:    boundedStatusText(observation.Audit.ReasoningEffort, 20),
 		ReviewerDurationMS: observation.Audit.Duration.Milliseconds(),
