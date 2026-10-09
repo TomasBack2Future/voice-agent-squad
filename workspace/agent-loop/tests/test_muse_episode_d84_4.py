@@ -524,6 +524,91 @@ class EpisodeLifecycleTests(unittest.TestCase):
         for body, turn in zip(bodies, ('t1', 't3', 't5')):
             self.assertIn('turn=%s request=req-%s' % (turn, turn), body)
 
+    def test_confirmed_replay_keeps_queued_tail(self):
+        # 4c756a4 review finding 1: ep-1 pending with TWO queued outages
+        # (t3 as ep-2, t5 as ep-3 across two offline boundaries). A later
+        # replay of ep-1 succeeds: the open rewrite must keep the queue
+        # tail, so ep-2 AND ep-3 both still deliver. Exactly ep-1/2/3.
+        submits = []
+        online = {'yes': False}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            key = argv[argv.index('--request-key') + 1]
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                if status == 'failed':
+                    with self.assertRaises(subprocess.SubprocessError):
+                        hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
+                else:
+                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                                       self.cfg, hook._hook_env(self.cfg), attempts=1)
+            online['yes'] = True
+            # Replay of ep-1 succeeds on a failure turn (not healthy):
+            # ep-1 confirms, queued ep-2 publishes, queued ep-3 stays.
+            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(sixth['episode_id'], 'ep-2')
+            seventh = hook.note_progress(payload(turn_id='t7', status='completed', error=''),
+                                         self.cfg, hook._hook_env(self.cfg), attempts=1)
+            self.assertTrue(seventh)
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-t1', bodies[0])
+        self.assertIn('turn=t3 request=req-t3', bodies[1])
+        self.assertIn('turn=t5 request=req-t5', bodies[2])
+
+    def test_closed_row_with_queued_keeps_queue_and_new_outage(self):
+        # 4c756a4 review finding 2: ep-1 commits on a healthy flush but
+        # its queued ep-2 delivery fails (attempts=1). The row is closed
+        # with queued ep-2 still named. The next failure must NOT adopt
+        # the queued payload as an orphan: the queue survives and the
+        # live failure preserves as the next outage. t6 healthy then
+        # delivers queued ep-2; the live outage follows under ep-3.
+        submits = []
+        online = {'yes': False}
+        fail_queued_once = {'yes': True}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            if fail_queued_once['yes'] and key == 'ep-2' and len(submits) == 1:
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
+            hook.note_progress(payload(turn_id='t2', status='completed', error=''),
+                               self.cfg, hook._hook_env(self.cfg), attempts=1)
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
+            online['yes'] = True
+            # t4 healthy commits ep-1; queued ep-2 fails its single shot.
+            self.assertTrue(hook.note_progress(
+                payload(turn_id='t4', status='completed', error=''), self.cfg,
+                hook._hook_env(self.cfg), attempts=1))
+            closed = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
+            self.assertEqual(closed['DISPATCH-1|1|worker-native'].get('queued_outage'), ['ep-2'])
+            fail_queued_once['yes'] = False
+            # t5 failure: queue survives, live outage preserved as ep-3.
+            fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
+            self.assertEqual(fifth['episode_id'], 'ep-3')
+            sixth = hook.note_progress(payload(turn_id='t6', status='completed', error=''),
+                                       self.cfg, hook._hook_env(self.cfg), attempts=1)
+            self.assertTrue(sixth)
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
+
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):

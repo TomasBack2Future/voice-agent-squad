@@ -551,6 +551,87 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertNotIn('fixture_error', rows[0][1])
         self.assertNotIn('META_API_KEY', rows[1][1])
 
+    def test_replay_confirms_then_tail_delivers_real_backend(self):
+        """Finding 1 on the real backend: exactly 3 events.
+
+        ep-1 pending with queued ep-2/ep-3 across two offline
+        boundaries. A failure turn's replay of ep-1 succeeds: ep-1
+        confirms, queued ep-2 publishes, and ep-3 stays queued. The
+        next healthy turn closes ep-2 and drains ep-3.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        phase = {'offline': True}
+        original = hook._submit
+        def script(body, config, env, observation):
+            if phase['offline']:
+                raise subprocess.CalledProcessError(7, ['isolated-replay-keeps-tail'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
+            phase['offline'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
+            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+            mid_row = mid['D-E2E|1|e2e-native']
+            self.assertEqual(mid_row.get('queued_outage'), ['ep-3'])
+            self.assertEqual(hook.run(self.config, self._hook_event('t7', 'completed')), 0)
+        finally:
+            hook._submit = original
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 3)
+        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't5'), ('ep-1', 'ep-2', 'ep-3')):
+            self.assertTrue(event_id.endswith('/' + key), event_id)
+            self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
+
+    def test_closed_row_with_queued_delivers_then_new_outage_real_backend(self):
+        """Finding 2 on the real backend: exactly 3 events.
+
+        ep-1 commits on a healthy flush but queued ep-2 fails its
+        single delivery. The next failure drains queued ep-2 first and
+        publishes the live failure as ep-3 — the queue is never adopted
+        as an orphan and the live outage is never swallowed.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        phase = {'offline': True, 'fail_queued_once': True}
+        original = hook._submit
+        seen_keys = []
+        def script(body, config, env, observation):
+            if phase['offline']:
+                raise subprocess.CalledProcessError(7, ['isolated-closed-row-queued'])
+            key = observation.get('episode_id', '')
+            if phase['fail_queued_once'] and key == 'ep-2' and seen_keys == ['ep-1']:
+                raise subprocess.CalledProcessError(7, ['isolated-queued-single-shot'])
+            seen_keys.append(key)
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
+            phase['offline'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
+            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+            mid_row = mid['D-E2E|1|e2e-native']
+            self.assertFalse(mid_row['pending'])
+            self.assertFalse(mid_row['episode_open'])
+            self.assertEqual(mid_row.get('queued_outage'), ['ep-2'])
+            phase['fail_queued_once'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t6', 'completed')), 0)
+        finally:
+            hook._submit = original
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 3)
+        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't5'), ('ep-1', 'ep-2', 'ep-3')):
+            self.assertTrue(event_id.endswith('/' + key), event_id)
+            self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
+
     def test_commit_before_interrupt_keeps_boundary_real_backend(self):
         """D84-11 finding 2 on the real backend.
 

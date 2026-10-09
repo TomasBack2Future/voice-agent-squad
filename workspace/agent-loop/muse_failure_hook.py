@@ -244,12 +244,19 @@ def _adopt_orphan_pending(config, data, key):
         entries = [e for e in pending.values() if isinstance(e, dict) and e.get('episode_id')]
     else:
         return None
+    queued = set(_queued_outage_ids(config, key))
     for entry in entries:
         if (entry.get('reservation') != config['reservation']
                 or entry.get('generation') != config['generation']
                 or entry.get('native_session_id') != config['native_session_id']):
             continue
         if seen.get('advanced_episode') == entry['episode_id']:
+            continue
+        if entry['episode_id'] in queued:
+            # Queued outages are owned by the queue drain, not by orphan
+            # adoption: adopting one would erase the queue, the boundary
+            # and the advanced identity and swallow the live failure
+            # (4c756a4 review finding 2).
             continue
         adopted = {'episode_open': False, 'pending': True,
                    'episode_id': entry['episode_id'],
@@ -455,6 +462,13 @@ def note_progress(event, config, env=None, attempts=1) -> bool:
         seen['closed_by_turn'] = str(event.get('turn_id', ''))[:128]
         data[key] = seen
         _save(config, data)
+        # Closing an open episode may reveal queued outages preserved
+        # while an earlier episode was pending (4c756a4 finding 1):
+        # drain them now under their own keys instead of leaving the
+        # queue stranded behind an open row.
+        if _queued_outage_ids(config, key) and env is not None:
+            _flush_queued_outage(config, env, key, attempts,
+                                 str(event.get('turn_id', '')))
         return True
     return _locked(config, close)
 
@@ -557,10 +571,15 @@ def _mark_open_unlocked(config, observation, episode_id):
     # carried, not dropped: the replay-confirmation path consumes it.
     bump = 0 if seen.get('advanced_episode') == episode_id else 1
     boundary = seen.get('healthy_boundary')
+    # A confirmed replay must not drop preserved queued outages: the
+    # boundary branch below delivers the head and keeps the tail
+    # (4c756a4 review finding 1).
+    carried = {name: seen[name] for name in ('queued_outage', 'queued_boundary') if seen.get(name)}
     data[key] = {'episode_open': True, 'pending': False,
                  'episode_id': episode_id,
                  'advanced_episode': episode_id,
                  **({'healthy_boundary': boundary} if boundary else {}),
+                 **carried,
                  'turns': seen.get('turns', []) + [observation['turn_id'] + '|' + observation['request_id']],
                  'first_observed_at': seen.get('first_observed_at', observation['observed_at']),
                  'sequence': seen.get('sequence', 0) + bump}
@@ -667,6 +686,52 @@ def publish(event, config, attempts=MAX_ATTEMPTS):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+def _drain_queued_before_live(config, key, attempts):
+    """Deliver queued outages ahead of a live failure on a closed row.
+
+    Each queued payload is submitted under its own key and closed on
+    success, exactly like the healthy-turn drain. Entries that fail
+    stay queued for a later turn; no live failure is ever merged into
+    a queued payload.
+    """
+    env = _hook_env(config)
+    _flush_queued_outage(config, env, key, attempts, closing_turn='failure-turn-drain')
+
+
+def _publish_after_queue_drain(observation, config, attempts):
+    """Publish the live failure after a queue drain on a closed row.
+
+    The row is closed (or still closed with a remaining queue): the
+    live failure is a NEW outage under the next key. A failure to
+    submit it leaves it pending under its own key; the remaining queue
+    is untouched.
+    """
+    data = _snapshots(config)
+    key = episode_key(observation, config)
+    seen = data.get(key, {})
+    episode_id = 'ep-%d' % (seen.get('sequence', 0) + 1 + len(_queued_outage_ids(config, key)))
+    live = dict(observation, episode_id=episode_id)
+    _store_pending(config, live)
+    body = _compose_body(episode_id, live)
+    env = _hook_env(config)
+    last = None
+    for _ in range(max(1, attempts)):
+        try:
+            receipt = _submit(body, config, env, live)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            last = error
+            continue
+        _mark_open_unlocked(config, live, episode_id)
+        _drop_pending(config, live)
+        receipt.setdefault('episode_id', episode_id)
+        return receipt
+    row = _snapshots(config).get(key, {})
+    row.update({'episode_open': False, 'pending': True, 'episode_id': episode_id,
+                'first_observed_at': row.get('first_observed_at', live['observed_at'])})
+    _save(config, dict(_snapshots(config), **{key: row}))
+    raise last
+
+
 def _publish_locked(observation, config, attempts):
     data = _snapshots(config)
     key = episode_key(observation, config)
@@ -675,6 +740,12 @@ def _publish_locked(observation, config, attempts):
         # D84-11 finding 2: adopt an orphan frozen payload before
         # allocating anything, so a possibly committed request key is
         # replayed identically instead of overwritten by a fresh body.
+        # Queued outages are never orphans: a closed row with an
+        # undelivered queue drains the queue first and preserves the
+        # live failure as a new outage (4c756a4 review finding 2).
+        if _queued_outage_ids(config, key):
+            _drain_queued_before_live(config, key, attempts)
+            return _publish_after_queue_drain(observation, config, attempts)
         adopted = _adopt_orphan_pending(config, data, key)
         if adopted is not None:
             seen = adopted
@@ -813,6 +884,20 @@ def _publish_new_outage_after_boundary(live, config, env, boundary, attempts, ke
         _mark_open_unlocked(config, live, episode_id)
         _drop_pending(config, live)
         receipt.setdefault('episode_id', episode_id)
+        # The just-delivered queue head is consumed; entries behind it
+        # are later independent outages and stay queued (4c756a4 finding
+        # 1: _mark_open_unlocked now carries them, so remove only this
+        # one instead of dropping the whole tail).
+        rest = [entry for entry in _queued_outage_ids(config, key) if entry != episode_id]
+        fixed = _snapshots(config)
+        row = fixed.get(key, {})
+        if rest:
+            row['queued_outage'] = rest
+        else:
+            row.pop('queued_outage', None)
+            row.pop('queued_boundary', None)
+        fixed[key] = row
+        _save(config, fixed)
         return receipt
     failed = _snapshots(config)
     row = failed.get(key, {})
