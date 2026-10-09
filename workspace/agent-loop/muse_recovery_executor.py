@@ -31,6 +31,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
 import muse_failure_handling as handling
@@ -331,36 +332,70 @@ def _await_quiet(host, first_turn, max_seconds, quiet_seconds):
     raise NotAdmitted('continuation still running at max_seconds')
 
 
-def serve_config_home(config):
-    """Private XDG config home for the recovery host only.
+#: Top-level live Muse settings copied into the private layer. Anything else is dropped.
+SETTINGS_ALLOWLIST = ('schema_version', 'provider', 'model', 'reasoning_effort', 'tui', 'model_catalog',
+                      'permissions', 'endpoint_transport')
+_CREDENTIAL_KEY = re.compile(r'api_?key|token|secret|passw|credential|authorization|cookie|private_key', re.I)
+
+
+def _credential_keys(value, path=''):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            here = '%s.%s' % (path, key) if path else str(key)
+            if _CREDENTIAL_KEY.search(str(key)):
+                yield here
+            yield from _credential_keys(item, here)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _credential_keys(item, '%s[%d]' % (path, index))
+
+
+def serve_config_home(config, tag):
+    """Private XDG config home for one recovery host only.
 
     `muse serve` admits command hooks from the user settings layer, not from
     `-c hooks=` (1.4.4 qualification: handlers=0 vs 1). The private home mirrors
     every entry of the real config home by symlink, so other tools keep their
     configuration and Muse credentials are never copied. Only muse/settings.json
-    is a private copy with the Worker's hooks added. Live settings are not edited
-    and nothing is written into the Worker's workspace.
+    is a private copy with the Worker's hooks added, published atomically
+    (fsync then rename). Each call gets its own directory and never removes one,
+    so overlapping recoveries cannot delete each other's live config. Live
+    settings are not edited and nothing is written into the Worker's workspace.
     """
     real = Path(config.get('config_root') or os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
-    home = Path(config['state_directory']) / 'serve-config-home'
-    if home.exists():
-        shutil.rmtree(home)
-    (home / 'muse').mkdir(parents=True)
-    for entry in (real.iterdir() if real.is_dir() else ()):
-        if entry.name != 'muse':
-            (home / entry.name).symlink_to(entry)
+    home = Path(config['state_directory']) / 'serve-config-home' / ('%s-%d-%d' % (tag, os.getpid(), time.time_ns()))
+    root = real.resolve() if real.is_dir() else None
     muse = real / 'muse'
-    settings = {}
-    for entry in (muse.iterdir() if muse.is_dir() else ()):
-        if entry.name == 'settings.json':
-            settings = json.loads(entry.read_text())
-        elif not entry.name.endswith('.lock'):
-            (home / 'muse' / entry.name).symlink_to(entry)
+    live = json.loads((muse / 'settings.json').read_text()) if (muse / 'settings.json').is_file() else {}
+    leaked = sorted(_credential_keys(live))
+    if leaked:
+        raise NotAdmitted('live Muse settings carry credential-like keys %s; private layer refused' % leaked)
+    settings = {key: live[key] for key in SETTINGS_ALLOWLIST if key in live}
     settings['hooks'] = config['hooks']
-    target = home / 'muse' / 'settings.json'
-    with target.open('w') as output:
-        os.chmod(target, 0o600)
-        output.write(json.dumps(settings))
+    (home / 'muse').mkdir(parents=True, exist_ok=False)
+
+    def mirror(entry, link):
+        # Only entries that really live inside the user config root are mirrored.
+        if root is not None and entry.resolve().is_relative_to(root):
+            link.symlink_to(entry)
+
+    for entry in (real.iterdir() if root is not None else ()):
+        if entry.name != 'muse':
+            mirror(entry, home / entry.name)
+    for entry in (muse.iterdir() if muse.is_dir() else ()):
+        if entry.name != 'settings.json' and not entry.name.endswith('.lock'):
+            mirror(entry, home / 'muse' / entry.name)
+    descriptor, temp = tempfile.mkstemp(dir=home / 'muse', prefix='.settings.', suffix='.tmp')
+    try:
+        with os.fdopen(descriptor, 'w') as output:
+            output.write(json.dumps(settings))
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temp, 0o600)
+        os.replace(temp, home / 'muse' / 'settings.json')
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
     return home
 
 
@@ -375,14 +410,21 @@ def recover(event, config, **flags):
         msp.atomic(Path(config['state_directory']) / ('recovery-%s.json' % admitted['episode']), evidence)
         return evidence
     check_custody(config, env)
-    spend_attempt(event, config)
-    evidence = {'event_id': event['event_id'], 'episode': admitted['episode']}
+    # Built and validated before anything is spent or signalled: credential-like
+    # live settings refuse here with nothing changed.
+    home = serve_config_home(config, admitted['episode'])
+    try:
+        spend_attempt(event, config)
+    except NotAdmitted:
+        shutil.rmtree(home, ignore_errors=True)
+        raise
+    evidence = {'event_id': event['event_id'], 'episode': admitted['episode'], 'config_home': str(home)}
     try:
         evidence['client'] = terminate_failed_client(config, config['client_marker'],
                                                      admitted['client'].get('pid'))
         record_attempt(event, config, 'client-stopped')
         state = Path(config['state_directory'])
-        host = msp.Host(config, state, dict(env, XDG_CONFIG_HOME=str(serve_config_home(config))))
+        host = msp.Host(config, state, dict(env, XDG_CONFIG_HOME=str(home)))
         try:
             _initialize(host, config)
             _resume(host, config)
@@ -404,6 +446,9 @@ def recover(event, config, **flags):
         record_attempt(event, config, 'stopped')
         evidence['stopped'] = str(error) or type(error).__name__
     finally:
+        # The host has exited (or never started); this config home is ours alone.
+        shutil.rmtree(home, ignore_errors=True)
+        evidence['config_home_removed'] = not home.exists()
         msp.atomic(Path(config['state_directory']) / ('recovery-%s.json' % admitted['episode']), evidence)
     return evidence
 

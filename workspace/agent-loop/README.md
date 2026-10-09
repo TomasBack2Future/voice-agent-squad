@@ -1046,9 +1046,15 @@ is no SIGKILL. Any stop after the attempt is spent, including a coordination rea
 timeout, is still recorded in `recovery-ep-N.json`. The episode is then left to
 the Dispatcher rather than retried. It starts `muse serve` with the Worker's hooks in a private settings layer
 (`muse serve -c hooks=` admits no handler; the user settings layer does). That layer
-is a per-recovery XDG config home whose `muse/settings.json` is a private copy plus
-`hooks`; every other entry, including Muse credentials, is a symlink, and nothing
-live or in the Worker workspace is edited. It then runs
+is a per-recovery XDG config home with a unique directory per attempt, never
+shared or reused. Its `muse/settings.json` copies only the allowlisted top-level
+live keys and adds `hooks`; it is published atomically (fsync, then rename). Live
+settings with any credential-like key refuse recovery before anything is spent.
+Every other entry, including Muse credentials, is a symlink, made only for entries
+that resolve inside the user config root. Nothing live or in the Worker workspace
+is edited. The home is built and validated before the attempt is spent, and it is
+removed after the host exits; `recovery-ep-N.json` records `config_home` and
+`config_home_removed`. It then runs
 `session/resume` on the same native. The resumed session must be idle, have its
 original model and have a failed last turn. It sets max effort and allowAll,
 rechecks custody, and only then continues. The native's durable goal state
