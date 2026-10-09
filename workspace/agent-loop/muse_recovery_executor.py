@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Admission for same-native recovery after a Muse runtime-failure event (#84).
+"""Same-native recovery after a Muse runtime-failure event (#84, option B).
 
-Fails closed before any return path: the delivered event must name this
-Worker's reservation/generation/native, the native session log must show the
-failed turn as its last run record, `muse_failure_handling.decide` must return
-`continue`, and each failure episode gets at most one attempt, recorded
-durably here. Termination targets only the client recorded in the session's
-own route facts and never escalates past SIGTERM. No composer input, model
-call or ledger write happens in this module.
+Admission fails closed before any return path: the delivered event must name
+this Worker's reservation/generation/native, the native session log must show
+the failed turn as its last run record, `muse_failure_handling.decide` must
+return `continue`, and each failure episode gets at most one attempt,
+recorded durably here before anything changes. Termination targets only the
+client recorded in the session's own route facts and never escalates past
+SIGTERM.
+
+The continuation is the MSP stopped-session interface on the same native:
+`muse serve` with the original model, max effort, allowAll and the Worker's
+hooks, `session/resume`, then `goal/resume` (or one `turn/start` when the
+session has no goal). Reservation, generation, claim and decision are
+rechecked immediately before the turn starts. The Dispatcher runs this
+visibly in the Worker's cmux workspace. There is no composer input, and this
+module writes nothing to the ledger. Parity with the TUI --yolo posture is
+deliberate: a claim lost mid-turn is not fenced (see README).
 """
 from __future__ import annotations
 import argparse
@@ -15,13 +24,16 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
 
 import muse_failure_handling as handling
+import muse_session_host as msp
 
 _EVENT = re.compile(r'\Aworker-terminal-v1/([A-Za-z0-9_.:-]+)/([1-9][0-9]*)/([A-Za-z0-9_.-]+)'
                     r'/runtime-failure/[1-9][0-9]*/(ep-[1-9][0-9]*)\Z')
@@ -42,12 +54,29 @@ def _event_identity(event, config):
     return episode
 
 
-def _session_log(config):
-    found = sorted(Path(config['muse_data_directory']).glob(
-        'sessions/*/*/*/%s/session.jsonl' % config['native_session_id']))
-    if len(found) != 1:
+def _session_directory(config):
+    found = sorted(Path(config['muse_data_directory']).glob('sessions/*/*/*/%s' % config['native_session_id']))
+    if len(found) != 1 or not (found[0] / 'session.jsonl').is_file():
         raise NotAdmitted('native session log not found exactly once')
-    return [json.loads(line) for line in found[0].read_text().splitlines() if line.strip()]
+    return found[0]
+
+
+def _session_log(config):
+    path = _session_directory(config) / 'session.jsonl'
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def goal_status(config):
+    """Durable goal status of the native, or None when it has no live goal."""
+    path = _session_directory(config) / 'goals.db'
+    if not path.exists():
+        return None
+    with sqlite3.connect('file:%s?mode=ro' % path, uri=True) as db:
+        rows = db.execute('SELECT status FROM goals WHERE session_id=?', (config['native_session_id'],)).fetchall()
+    statuses = [row[0] for row in rows if row[0] not in ('completed', 'cleared')]
+    if len(statuses) > 1:
+        raise NotAdmitted('native has more than one live goal')
+    return statuses[0] if statuses else None
 
 
 def _last_run_terminal(records):
@@ -96,6 +125,19 @@ def record_attempt(event, config, stage):
         attempts[key] = {'event_id': event['event_id'], 'stage': stage, 'at': int(time.time())}
     _locked_attempts(config, update)
     return key
+
+
+def spend_attempt(event, config):
+    """Compare-and-set the episode's single attempt; a concurrent or repeat run loses."""
+    key = handling.episode_key(event)
+    won = []
+    def update(attempts):
+        if key not in attempts:
+            attempts[key] = {'event_id': event['event_id'], 'stage': 'admitted', 'at': int(time.time())}
+            won.append(key)
+    _locked_attempts(config, update)
+    if not won:
+        raise NotAdmitted('continuation budget for %s already spent' % key)
 
 
 def admit(event, config, paused=False, completed=False, live_operation=False, pending_decision=False):
@@ -148,6 +190,144 @@ def terminate_failed_client(config, client_marker):
     raise NotAdmitted('failed client %d did not exit after SIGTERM' % pid)
 
 
+def _coordination(config, env, *args):
+    result = subprocess.run([config['coordination_executable'], *args], cwd=config['ledger_directory'],
+                            env=env, capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        raise NotAdmitted('coordination read %s failed' % args[0])
+    return result.stdout
+
+
+def check_custody(config, env):
+    """The reservation, generation, claim and decision must still allow this Worker."""
+    rows = [r for r in json.loads(_coordination(config, env, 'dispatch', 'list', '--json', '--active'))
+            if r.get('reservation_key') == config['reservation']]
+    if [(r.get('generation'), r.get('state'), r.get('worker_thread_id'), r.get('reserved_by')) for r in rows] != [
+            (config['generation'], 'dispatched', config['native_session_id'], config['controller_agent_id'])]:
+        raise NotAdmitted('reservation, generation or native binding changed')
+    agents = [a for a in json.loads(_coordination(config, env, 'who', '--json'))
+              if a.get('AgentID') == config['agent_id']]
+    if [a.get('ClaimItem') for a in agents] != [config['item']]:
+        raise NotAdmitted('Worker no longer holds its claim')
+    raw = _coordination(config, env, 'terminal-events', 'decision-get', '--reservation', config['reservation'],
+                        '--generation', str(config['generation']),
+                        '--worker-session', config['native_session_id'])
+    decision = json.loads(raw) if raw.strip() else {}
+    if decision.get('action') not in (None, 'proceed'):
+        raise NotAdmitted('current decision is %s' % decision.get('action'))
+    return decision.get('revision')
+
+
+def _initialize(host, config):
+    result = host.rpc('initialize', {'clientInfo': {'name': 'squad_muse_recovery', 'version': '1'}})
+    if (result.get('serverInfo', {}).get('version') != config['expected_server_version']
+            or result.get('schema') != {'version': 1, 'fingerprint': config['expected_schema_fingerprint']}):
+        raise NotAdmitted('Muse MSP identity/schema is not the qualified one')
+    host.rpc('initialized', {}, True)
+
+
+def _resume(host, config):
+    result = host.rpc('session/resume', {'commandId': msp.uuid7(), 'sessionId': config['native_session_id'],
+                                         'excludeItems': True})
+    session = result.get('session', {})
+    if (session.get('sessionId') != config['native_session_id'] or session.get('modelId') != config['model']
+            or session.get('providerId') != config['provider'] or session.get('activeTurnId') is not None
+            or session.get('status') not in ('idle', 'notLoaded') or result.get('pendingRequests')
+            or (result.get('lastTurn') or {}).get('terminal') != 'failed'):
+        raise NotAdmitted('resumed session is not the idle failed native with its original model')
+
+
+def continuation_mode(config):
+    """A goal blocked by the failure resumes; a user-paused or active goal is never touched."""
+    status = goal_status(config)
+    if status is None:
+        return 'turn'
+    if status == 'blocked':
+        return 'goal'
+    raise NotAdmitted('goal is %s; only a goal blocked by the failure is resumed' % status)
+
+
+def _continue(host, config, mode):
+    if mode == 'goal':
+        started = host.rpc('goal/resume', {'commandId': msp.uuid7(), 'sessionId': config['native_session_id']})
+    else:
+        started = host.rpc('turn/start', {'commandId': msp.uuid7(), 'sessionId': config['native_session_id'],
+                                          'reasoningEffort': config['reasoning_effort'],
+                                          'input': [{'type': 'text', 'text': config['continuation_prompt']}]})
+    if not started.get('turnId'):
+        raise NotAdmitted('continuation was not admitted as a turn')
+    return started['turnId']
+
+
+def _await_quiet(host, first_turn, max_seconds, quiet_seconds):
+    """Follow the continuation until no turn runs and none starts for quiet_seconds.
+
+    A resumed goal may chain further turns. Closing the host while one runs
+    would cut it off, so the wait ends only at a quiet idle point, or at
+    max_seconds, which is reported rather than treated as success.
+    """
+    running, terminals = {first_turn}, []
+    deadline = time.time() + max_seconds
+    quiet_since = None
+    while time.time() < deadline:
+        if not running and quiet_since is not None and time.time() - quiet_since >= quiet_seconds:
+            return terminals
+        try:
+            message = host.events.get(timeout=0.2)
+        except queue.Empty:
+            continue
+        method, params = message.get('method'), message.get('params') or {}
+        if method == 'host/exited':
+            raise NotAdmitted('Muse host exited during the continuation')
+        if method == 'turn/started':
+            running.add(params.get('turnId'))
+            quiet_since = None
+        elif method == 'turn/completed':
+            running.discard(params.get('turnId'))
+            terminals.append(params.get('terminal'))
+            if not running:
+                quiet_since = time.time()
+    raise NotAdmitted('continuation still running at max_seconds')
+
+
+def recover(event, config, **flags):
+    """Admit, spend the episode budget, stop the failed client, continue the same native."""
+    env = msp.child_environment(config)
+    admitted = admit(event, config, **flags)
+    mode = continuation_mode(config)
+    check_custody(config, env)
+    spend_attempt(event, config)
+    evidence = {'event_id': event['event_id'], 'episode': admitted['episode']}
+    try:
+        evidence['client'] = terminate_failed_client(config, config['client_marker'])
+        record_attempt(event, config, 'client-stopped')
+        state = Path(config['state_directory'])
+        host = msp.Host(dict(config, serve_config=['hooks=' + json.dumps(config['hooks'], separators=(',', ':'))]
+                             + list(config.get('serve_config', ()))), state, env)
+        try:
+            _initialize(host, config)
+            _resume(host, config)
+            host.rpc('session/setReasoningEffort', {'commandId': msp.uuid7(), 'sessionId': config['native_session_id'],
+                                                    'reasoningEffort': config['reasoning_effort']})
+            host.rpc('session/setApprovalMode', {'commandId': msp.uuid7(), 'sessionId': config['native_session_id'],
+                                                 'mode': 'allowAll'})
+            evidence['decision_revision'] = check_custody(config, env)
+            evidence['mode'] = mode
+            evidence['turn_id'] = _continue(host, config, mode)
+            record_attempt(event, config, 'turn-started')
+            evidence['turn_terminals'] = _await_quiet(host, evidence['turn_id'], config.get('max_seconds', 3600),
+                                                      config.get('quiet_seconds', 15))
+            evidence['terminal'] = evidence['turn_terminals'][-1]
+            record_attempt(event, config, 'turn-' + str(evidence['terminal']))
+        finally:
+            host.close()
+    except (NotAdmitted, ValueError, OSError) as error:
+        record_attempt(event, config, 'stopped')
+        evidence['stopped'] = str(error)
+    msp.atomic(Path(config['state_directory']) / ('recovery-%s.json' % admitted['episode']), evidence)
+    return evidence
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
@@ -156,16 +336,21 @@ def main(argv=None):
     parser.add_argument('--completed', action='store_true')
     parser.add_argument('--live-operation', action='store_true')
     parser.add_argument('--pending-decision', action='store_true')
+    parser.add_argument('--check', action='store_true', help='admission only; change nothing')
     args = parser.parse_args(argv)
+    flags = dict(paused=args.paused, completed=args.completed,
+                 live_operation=args.live_operation, pending_decision=args.pending_decision)
     try:
-        result = admit(json.loads(args.event_json.read_text()), json.loads(args.config.read_text()),
-                       paused=args.paused, completed=args.completed,
-                       live_operation=args.live_operation, pending_decision=args.pending_decision)
+        event, config = json.loads(args.event_json.read_text()), json.loads(args.config.read_text())
+        if args.check:
+            print(json.dumps(dict(admit(event, config, **flags), admitted=True)))
+            return 0
+        evidence = recover(event, config, **flags)
     except (NotAdmitted, OSError, ValueError, KeyError) as error:
         print(json.dumps({'admitted': False, 'reason': str(error)}))
         return 3
-    print(json.dumps(dict(result, admitted=True)))
-    return 0
+    print(json.dumps(evidence))
+    return 0 if evidence.get('terminal') == 'completed' else 4
 
 
 if __name__ == '__main__':

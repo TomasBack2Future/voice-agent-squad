@@ -6,6 +6,7 @@ ledger or live session is touched.
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -23,7 +24,7 @@ def record(record_kind, **event):
     return {'payload_type': 'runtime.session', 'payload': {'kind': record_kind, 'event': event}}
 
 
-class RecoveryAdmissionTests(unittest.TestCase):
+class RecoveryFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='muse-recovery ')
         self.addCleanup(self.tmp.cleanup)
@@ -57,6 +58,8 @@ class RecoveryAdmissionTests(unittest.TestCase):
         self.addCleanup(lambda: child.poll() is None and child.kill())
         return child
 
+
+class RecoveryAdmissionTests(RecoveryFixture):
     def test_admits_confirmed_terminal_failure_and_continue_decision(self):
         self.failed_log()
         result = executor.admit(self.event, self.cfg)
@@ -125,6 +128,192 @@ class RecoveryAdmissionTests(unittest.TestCase):
         child.wait()
         self.assertEqual(executor.terminate_failed_client(self.cfg, client_marker=str(self.client_marker)),
                          {'pid': child.pid, 'state': 'already-exited'})
+
+
+FAKE_SERVE = r"""
+import json, os, sys
+state = json.load(open(os.environ['FAKE_MUSE_STATE']))
+log = open(os.environ['FAKE_MUSE_LOG'], 'a')
+log.write(json.dumps({'argv': sys.argv[1:]}) + '\n'); log.flush()
+def send(message):
+    sys.stdout.write(json.dumps(message) + '\n'); sys.stdout.flush()
+for line in sys.stdin:
+    message = json.loads(line)
+    method, params = message.get('method'), message.get('params') or {}
+    log.write(json.dumps({'method': method, 'params': params}) + '\n'); log.flush()
+    if 'id' not in message:
+        continue
+    reply = {'jsonrpc': '2.0', 'id': message['id']}
+    if method == 'initialize':
+        reply['result'] = {'serverInfo': {'name': 'muse', 'version': state['version']},
+                           'schema': {'version': 1, 'fingerprint': state['fingerprint']}}
+    elif method == 'session/resume':
+        if state.get('flip_claim_on_resume'):
+            squad = json.load(open(os.environ['FAKE_SQUAD_STATE']))
+            squad['claim'] = 'OTHER-ITEM'
+            json.dump(squad, open(os.environ['FAKE_SQUAD_STATE'], 'w'))
+        reply['result'] = {'session': {'sessionId': params['sessionId'], 'modelId': state['model'],
+                                       'providerId': 'meta', 'status': 'idle', 'activeTurnId': None},
+                           'pendingRequests': [], 'lastTurn': {'terminal': state['last_terminal']}}
+    elif method == 'goal/resume':
+        reply['result'] = {'commandId': params['commandId'], 'status': 'accepted', 'turnId': 'goal-turn'}
+    elif method == 'turn/start':
+        reply['result'] = {'commandId': params['commandId'], 'disposition': 'started', 'turnId': 'task-turn'}
+    else:
+        reply['result'] = {}
+    send(reply)
+    if 'turnId' in reply.get('result', {}):
+        turns = [reply['result']['turnId']] + (['goal-turn-2'] if method == 'goal/resume' else [])
+        for turn in turns:
+            send({'jsonrpc': '2.0', 'method': 'turn/started', 'params': {'turnId': turn}})
+            send({'jsonrpc': '2.0', 'method': 'turn/completed', 'params': {'turnId': turn, 'terminal': 'completed'}})
+"""
+
+FAKE_SQUAD = r"""
+import json, os, sys
+state = json.load(open(os.environ['FAKE_SQUAD_STATE']))
+args = sys.argv[1:]
+if args[:2] == ['dispatch', 'list']:
+    print(json.dumps([{'reservation_key': 'DISPATCH-1', 'generation': 1, 'state': state.get('reservation_state', 'dispatched'),
+                       'worker_thread_id': state['native'], 'reserved_by': 'dispatcher'}]))
+elif args[:1] == ['who']:
+    print(json.dumps([{'AgentID': 'worker', 'ClaimItem': state['claim']}]))
+elif args[:2] == ['terminal-events', 'decision-get']:
+    print(json.dumps(state.get('decision', {})))
+else:
+    sys.exit(9)
+"""
+
+
+class RecoveryBackendTests(RecoveryFixture):
+    """Option B continuation against a fake MSP host and fake coordination reads."""
+
+    def setUp(self):
+        super().setUp()
+        self.serve = self.root / 'fake-muse'
+        self.serve.write_text('#!%s\n%s' % (sys.executable, FAKE_SERVE))
+        self.serve.chmod(0o755)
+        squad = self.root / 'fake-squad'
+        squad.write_text('#!%s\n%s' % (sys.executable, FAKE_SQUAD))
+        squad.chmod(0o755)
+        self.muse_state, self.muse_log = self.root / 'muse-state.json', self.root / 'muse-log.jsonl'
+        self.squad_state = self.root / 'squad-state.json'
+        self.set_muse()
+        self.set_squad()
+        for key, value in (('FAKE_MUSE_STATE', self.muse_state), ('FAKE_MUSE_LOG', self.muse_log),
+                           ('FAKE_SQUAD_STATE', self.squad_state)):
+            old = os.environ.get(key)
+            os.environ[key] = str(value)
+            self.addCleanup(lambda k=key, o=old: os.environ.pop(k) if o is None else os.environ.__setitem__(k, o))
+        self.cfg.update(agent_id='worker', item='BUG-001', client_executable=str(self.serve),
+                        client_marker=str(self.client_marker), coordination_executable=str(squad),
+                        ledger_directory=str(self.root), provider='meta', model='muse-spark-1.3-contributor',
+                        reasoning_effort='max', hooks={'PostLLMCall': []},
+                        expected_server_version='1.4.4', expected_schema_fingerprint='sha256:qualified',
+                        continuation_prompt='Continue the assigned task from its last checkpoint.',
+                        max_seconds=20, quiet_seconds=1)
+
+    def set_muse(self, **overrides):
+        state = {'version': '1.4.4', 'fingerprint': 'sha256:qualified', 'model': 'muse-spark-1.3-contributor',
+                 'last_terminal': 'failed'}
+        state.update(overrides)
+        self.muse_state.write_text(json.dumps(state))
+
+    def set_squad(self, **overrides):
+        state = {'native': NATIVE, 'claim': 'BUG-001', 'decision': {'revision': 3, 'action': 'proceed'}}
+        state.update(overrides)
+        self.squad_state.write_text(json.dumps(state))
+
+    def set_goal(self, status):
+        with sqlite3.connect(self.session_dir / 'goals.db') as db:
+            db.execute('CREATE TABLE IF NOT EXISTS goals (session_id TEXT, goal_id TEXT, objective TEXT, '
+                       'status TEXT, percent_complete INTEGER)')
+            db.execute('DELETE FROM goals')
+            db.execute('INSERT INTO goals VALUES (?, ?, ?, ?, 0)', (NATIVE, 'goal-1', 'fixture', status))
+
+    def calls(self):
+        if not self.muse_log.exists():
+            return []
+        return [json.loads(line) for line in self.muse_log.read_text().splitlines()]
+
+    def methods(self):
+        return [c['method'] for c in self.calls() if 'method' in c]
+
+    def test_turn_continuation_resumes_same_native_with_original_settings(self):
+        child = self.client()
+        self.failed_log(pid=child.pid)
+        evidence = executor.recover(self.event, self.cfg)
+        self.assertEqual(evidence['terminal'], 'completed', evidence)
+        self.assertEqual((evidence['mode'], evidence['turn_id']), ('turn', 'task-turn'))
+        self.assertEqual(evidence['client'], {'pid': child.pid, 'state': 'terminated'})
+        self.assertEqual(self.methods(), ['initialize', 'initialized', 'session/resume',
+                                          'session/setReasoningEffort', 'session/setApprovalMode', 'turn/start'])
+        calls = {c['method']: c['params'] for c in self.calls() if 'method' in c}
+        self.assertEqual(calls['session/resume']['sessionId'], NATIVE)
+        self.assertEqual(calls['session/setReasoningEffort']['reasoningEffort'], 'max')
+        self.assertEqual(calls['session/setApprovalMode']['mode'], 'allowAll')
+        argv = self.calls()[0]['argv']
+        self.assertEqual(argv[:5], ['serve', '--provider', 'meta', '--model', 'muse-spark-1.3-contributor'])
+        self.assertIn('hooks={"PostLLMCall":[]}', argv)
+        with self.assertRaisesRegex(executor.NotAdmitted, 'budget'):
+            executor.recover(self.event, self.cfg)
+
+    def test_blocked_goal_resumes_and_waits_for_its_chained_turns(self):
+        self.set_goal('blocked')
+        self.failed_log()
+        evidence = executor.recover(self.event, self.cfg)
+        self.assertEqual((evidence['mode'], evidence['turn_id']), ('goal', 'goal-turn'))
+        self.assertEqual(evidence['turn_terminals'], ['completed', 'completed'])
+        self.assertNotIn('turn/start', self.methods())
+
+    def test_paused_or_active_goal_is_never_resumed(self):
+        child = self.client()
+        self.failed_log(pid=child.pid)
+        for status in ('paused', 'active', 'unknown-future-status'):
+            with self.subTest(status=status):
+                self.set_goal(status)
+                with self.assertRaisesRegex(executor.NotAdmitted, 'goal is'):
+                    executor.recover(self.event, self.cfg)
+                self.assertIsNone(child.poll())
+                self.assertEqual(self.calls(), [])
+        self.set_goal('completed')
+        self.assertEqual(executor.continuation_mode(self.cfg), 'turn')
+
+    def test_custody_lost_before_turn_start_sends_no_turn(self):
+        self.set_muse(flip_claim_on_resume=True)
+        self.failed_log()
+        evidence = executor.recover(self.event, self.cfg)
+        self.assertIn('no longer holds its claim', evidence['stopped'])
+        self.assertNotIn('turn/start', self.methods())
+        self.assertNotIn('goal/resume', self.methods())
+        with self.assertRaisesRegex(executor.NotAdmitted, 'budget'):
+            executor.recover(self.event, self.cfg)
+
+    def test_hold_decision_or_closed_reservation_changes_nothing(self):
+        child = self.client()
+        self.failed_log(pid=child.pid)
+        for squad in ({'decision': {'revision': 4, 'action': 'hold'}}, {'reservation_state': 'completed'}):
+            with self.subTest(squad=squad):
+                self.set_squad(**squad)
+                with self.assertRaises(executor.NotAdmitted):
+                    executor.recover(self.event, self.cfg)
+                self.assertIsNone(child.poll())
+                self.assertEqual(self.calls(), [])
+        self.set_squad()
+        self.assertEqual(executor.admit(self.event, self.cfg)['action'], 'continue')
+
+    def test_unqualified_host_or_unexpected_session_starts_no_turn(self):
+        for muse in ({'version': '1.4.3'}, {'last_terminal': 'completed'}, {'model': 'other-model'}):
+            with self.subTest(muse=muse):
+                self.muse_log.unlink(missing_ok=True)
+                state = Path(self.cfg['state_directory']) / 'recovery-attempts.json'
+                state.unlink(missing_ok=True)
+                self.set_muse(**muse)
+                self.failed_log()
+                evidence = executor.recover(self.event, self.cfg)
+                self.assertIn('stopped', evidence)
+                self.assertNotIn('turn/start', self.methods())
+                self.assertNotIn('goal/resume', self.methods())
 
 
 if __name__ == '__main__':
