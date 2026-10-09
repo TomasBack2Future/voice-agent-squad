@@ -772,6 +772,70 @@ class EpisodeLifecycleTests(unittest.TestCase):
             next_outage = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             self.assertEqual(next_outage['episode_id'], 'ep-2')
 
+    def test_open_row_with_queued_drains_on_failure_turn(self):
+        # 2813cac review: ep-1 pending with queued ep-2/ep-3. The t6
+        # replay confirms ep-1 and commits the ep-2 head; ep-3 stays
+        # queued when its bounded submits fail. While ep-3 is still
+        # attached, a NEW live outage opens ep-4 on the same row. The
+        # t8 failure must NOT short-circuit to duplicate — it drains
+        # ep-3 first, then publishes the live failure as ep-5. t9
+        # dedupes against ep-5.
+        submits = []
+        online = {'yes': False}
+        fail_keys = {'ep-3': 1}
+        def script(argv, **kwargs):
+            if argv[2] == 'decision-get':
+                return subprocess.CompletedProcess(argv, 0, '{}\n', '')
+            self.assertEqual(argv[2], 'submit')
+            if not online['yes']:
+                raise subprocess.TimeoutExpired(argv, 5)
+            key = argv[argv.index('--request-key') + 1]
+            if fail_keys.get(key, 0) > 0:
+                fail_keys[key] -= 1
+                raise subprocess.TimeoutExpired(argv, 5)
+            submits.append(argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
+        with mock.patch.object(hook.subprocess, 'run', side_effect=script):
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                if status == 'failed':
+                    with self.assertRaises(subprocess.SubprocessError):
+                        hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
+                else:
+                    hook.note_progress(payload(turn_id=turn, status='completed', error=''),
+                                       self.cfg, hook._hook_env(self.cfg), attempts=1)
+            online['yes'] = True
+            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(sixth['episode_id'], 'ep-2')
+            stalled = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
+            self.assertEqual(stalled['DISPATCH-1|1|worker-native'].get('queued_outage'), ['ep-3'])
+            fail_keys['ep-3'] = 1
+            fail_keys['ep-4'] = 1
+            try:
+                hook.publish(payload(turn_id='t7', request_id='req-7'), self.cfg, attempts=1)
+                self.fail('t7 must fail: ep-3 drain fails then ep-4 lost')
+            except subprocess.SubprocessError:
+                pass
+            fail_keys['ep-3'] = 1
+            reopened = hook.publish(payload(turn_id='t7b', request_id='req-7b'), self.cfg, attempts=1)
+            self.assertEqual(reopened['episode_id'], 'ep-4')
+            row = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())[
+                'DISPATCH-1|1|worker-native']
+            self.assertTrue(row['episode_open'])
+            self.assertEqual(row.get('queued_outage'), ['ep-3'])
+            eighth = hook.publish(payload(turn_id='t8', request_id='req-8'), self.cfg, attempts=1)
+            self.assertEqual(eighth['episode_id'], 'ep-5')
+            ninth = hook.publish(payload(turn_id='t9', request_id='req-9'), self.cfg, attempts=1)
+            self.assertEqual(ninth['state'], 'duplicate')
+        keys = [argv[argv.index('--request-key') + 1] for argv in submits]
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-4', 'ep-3', 'ep-5'])
+        bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertIn('turn=t1 request=req-t1', bodies[0])
+        self.assertIn('turn=t3 request=req-t3', bodies[1])
+        self.assertIn('turn=t7 request=req-7', bodies[2])
+        self.assertIn('turn=t5 request=req-t5', bodies[3])
+        self.assertIn('turn=t8 request=req-8', bodies[4])
+
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):

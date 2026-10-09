@@ -681,6 +681,60 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertTrue(event_id.endswith('/' + key), event_id)
             self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
 
+    def test_open_row_with_queued_drains_on_failure_real_backend(self):
+        """2813cac review on the real backend: exactly 5 events.
+
+        ep-1 pending with queued ep-2/ep-3. t6 confirms ep-1/ep-2 with
+        ep-3 stalled; t7 drains ep-3 and loses ep-4; t7b replays ep-4
+        open with ep-3 still attached. The t8 failure drains ep-3 and
+        publishes ep-5 — never duplicate with a queue attached. t9
+        dedupes.
+        """
+        sys.path.insert(0, str(ROOT))
+        import muse_failure_hook as hook
+        phase = {'offline': True}
+        # hook.run retries each submit 3 times in-call: fail counts are
+        # per-attempt, so 3 kills one full call and 6 kills two.
+        fail_keys = {'ep-3': 3}
+        original = hook._submit
+        def script(body, config, env, observation):
+            if phase['offline']:
+                raise subprocess.CalledProcessError(7, ['isolated-open-queued'])
+            key = observation.get('episode_id', '')
+            if fail_keys.get(key, 0) > 0:
+                fail_keys[key] -= 1
+                raise subprocess.CalledProcessError(7, ['isolated-open-queued-shot'])
+            env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
+            return original(body, config, env, observation)
+        hook._submit = script
+        try:
+            for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed'),
+                                 ('t4', 'completed'), ('t5', 'failed')):
+                self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
+            phase['offline'] = False
+            self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
+            fail_keys['ep-3'] = 3
+            fail_keys['ep-4'] = 3
+            self.assertEqual(hook.run(self.config, self._hook_event('t7')), 0)
+            # Exactly the t7b drain fails: t8's pre-drain must succeed so
+            # the tail commits before the live outage, like the unit test.
+            fail_keys['ep-3'] = 3
+            self.assertEqual(hook.run(self.config, self._hook_event('t7b')), 0)
+            row = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())[
+                'D-E2E|1|e2e-native']
+            self.assertTrue(row['episode_open'])
+            self.assertEqual(row.get('queued_outage'), ['ep-3'])
+            self.assertEqual(hook.run(self.config, self._hook_event('t8')), 0)
+            self.assertEqual(hook.run(self.config, self._hook_event('t9')), 0)
+        finally:
+            hook._submit = original
+        rows = self._failure_rows()
+        self.assertEqual(len(rows), 5)
+        for (event_id, body), turn, key in zip(rows, ('t1', 't3', 't7', 't5', 't8'),
+                                               ('ep-1', 'ep-2', 'ep-4', 'ep-3', 'ep-5')):
+            self.assertTrue(event_id.endswith('/' + key), event_id)
+            self.assertIn('turn=%s request=request-%s' % (turn, turn), body)
+
     def test_commit_before_interrupt_keeps_boundary_real_backend(self):
         """D84-11 finding 2 on the real backend.
 

@@ -761,12 +761,13 @@ def _publish_locked(observation, config, attempts):
         if adopted is not None:
             seen = adopted
     if seen is not None and not seen.get('pending'):
-        if seen.get('healthy_boundary') and _queued_outage_ids(config, key):
-            # 1b417f3 finding 1: an open row with a boundary and an
-            # undelivered queue is an interrupted boundary confirm —
-            # the live post-boundary failure was never stored. Recover
-            # by draining the queue first, then publishing the live
-            # failure as the next new outage instead of duplicate.
+        if _queued_outage_ids(config, key):
+            # 2813cac review (extending 1b417f3 finding 1): an open row
+            # with an undelivered queue must drain it on a failure turn
+            # too — with or without a boundary. The queue belongs to
+            # earlier independent outages that must commit while the
+            # model is still down; afterwards the live failure is the
+            # next new outage instead of a duplicate.
             _drain_queued_before_live(config, key, attempts)
             return _publish_after_queue_drain(observation, config, attempts)
         return {'state': 'duplicate'}
