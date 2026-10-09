@@ -13,9 +13,9 @@ Required behavior:
   again with its own bounded budget.
 - Within ONE continuous outage, internal retries and repeated hooks for the
   same failed turn/request still dedupe.
-- If publication fails, the episode stays pending and is replayed for real
-  on the next hook invocation or turn boundary; the open marker must not be
-  set before publication is durably confirmed.
+- If publication fails, the frozen episode stays in the outbox and is
+  replayed for real on the next hook invocation or turn boundary. Delivery
+  never opens or closes an episode; only native health signals do.
 - D84-2 early-before-terminal pending still holds.
 """
 import json
@@ -76,6 +76,13 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.cfg = config(self.root)
+
+    def row(self):
+        return json.loads((self.root / 'state' / 'failure-episodes.json').read_text())[
+            'DISPATCH-1|1|worker-native']
+
+    def outbox_ids(self):
+        return [entry['episode_id'] for entry in self.row()['outbox']]
 
     def test_failure_then_healthy_then_new_failure_publishes_again(self):
         submits = []
@@ -208,16 +215,18 @@ class EpisodeLifecycleTests(unittest.TestCase):
             first = hook.publish(payload(), self.cfg)
             self.assertEqual(first['state'], 'pending')
         self.assertEqual(len(stub.submits), 1)
-        # Simulate a lost receipt: clear the marker but keep the episode
-        # identity AND the frozen payload, republish with the same key.
+        # Simulate a lost receipt: the frozen ep-1 payload is still in
+        # the outbox while the episode stays allocated and open.
         lost = hook.observe(payload(), self.cfg)
         lost['episode_id'] = 'ep-1'
-        hook._mark_pending_unlocked(self.cfg, lost)
-        hook._store_pending(self.cfg, lost)
+        data = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
+        data['DISPATCH-1|1|worker-native']['outbox'] = [lost]
+        (self.root / 'state' / 'failure-episodes.json').write_text(json.dumps(data))
         stub2 = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub2):
-            retry = hook.publish(payload(), self.cfg)
+            retry = hook.publish(payload(turn_id='turn-1b', request_id='req-1b'), self.cfg)
             self.assertEqual(retry['state'], 'pending')
+            self.assertEqual(retry['episode_id'], 'ep-1')
         self.assertEqual(len(stub2.submits), 1)
         for stubbed in (stub, stub2):
             argv = stubbed.submits[0]
@@ -281,13 +290,11 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-2'])
 
     def test_failed_replay_after_boundary_keeps_boundary_and_new_outage(self):
-        # 7a01892 review finding 1: ep-1 pending, t2 healthy flush fails
-        # (boundary recorded), then the t3 replay ALSO fails. The pending
-        # rewrite must keep the boundary and episode identity, so the t4
-        # replay still closes ep-1 at t2. The t3 post-boundary outage was
-        # preserved first, so ep-2 carries the frozen t3 body (one key,
-        # one body: 11a67a2 review); t3/t4 are one continuous outage.
-        # Exactly ep-1 then ep-2 are used.
+        # 7a01892 review finding 1: ep-1 undelivered, healthy t2 ends its
+        # outage although the t2 flush fails, then the t3 replay ALSO
+        # fails. The boundary is already durable, so t3 opened ep-2 with
+        # its own frozen body (one key, one body: 11a67a2 review); t3/t4
+        # are one continuous outage. Exactly ep-1 then ep-2 are used.
         submits = []
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
@@ -302,14 +309,12 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             healthy = payload(turn_id='t2', status='completed', error='')
-            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
-            row = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
-            pending = row['DISPATCH-1|1|worker-native']
-            self.assertTrue(pending['pending'])
-            self.assertEqual(pending['episode_id'], 'ep-1')
-            self.assertEqual(pending.get('healthy_boundary'), 't2')
+            self.assertEqual(self.row()['closed_by_turn'], 't2')
+            self.assertTrue(self.row()['episode_open'])
+            self.assertEqual(self.outbox_ids(), ['ep-1', 'ep-2'])
             fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
             self.assertEqual(fourth['episode_id'], 'ep-2')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
@@ -319,12 +324,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertIn('turn=t3 request=req-3', bodies[4])
 
     def test_post_boundary_outage_survives_offline_replay_and_healthy_recovery(self):
-        # D84-13: t1 fails (offline, pending), t2 healthy flush fails
-        # (boundary recorded), t3 fails while still offline (replay of
-        # ep-1 fails too). Transport recovers at t4 healthy: the old
-        # episode commits AND the post-boundary t3 outage is preserved
-        # and committed as ep-2. D84-15: ep-2 is closed-delivered, never
-        # reopened, so the t5 failure is a NEW ep-3 outage.
+        # D84-13: t1 fails offline, healthy t2 ends that outage although
+        # its flush fails, t3 fails while still offline and freezes ep-2.
+        # Transport recovers at healthy t4, which also ends the t3
+        # outage: ep-1 and ep-2 both commit, and t5 is a NEW ep-3.
         submits = []
         online = {'yes': False}
         def script(argv, **kwargs):
@@ -340,7 +343,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             healthy2 = payload(turn_id='t2', status='completed', error='')
-            self.assertFalse(hook.note_progress(healthy2, self.cfg, hook._hook_env(self.cfg)))
+            self.assertTrue(hook.note_progress(healthy2, self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             online['yes'] = True
@@ -358,11 +361,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertIn('turn=t5 request=req-5', bodies[2])
 
     def test_flush_close_clears_boundary_later_outage_stays_single(self):
-        # 4f43571 review finding 1: t1 pending, t2 healthy flush fails
-        # (boundary recorded), t3 healthy flush SUCCEEDS and closes ep-1.
-        # The close must clear the boundary. A later t4 outage whose
-        # first submit fails then replays: it confirms ep-2 open and
-        # must NOT spawn ep-3 from a stale boundary. t5 dedupes.
+        # 4f43571 review finding 1: t1 undelivered, healthy t2 ends the
+        # outage although its flush fails, healthy t3 delivers ep-1. A
+        # later t4 outage whose first submit fails then replays: it is
+        # ep-2 and must NOT spawn ep-3 from the old boundary. t5 dedupes.
         submits = []
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
@@ -377,12 +379,12 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            self.assertFalse(hook.note_progress(
-                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
             self.assertTrue(hook.note_progress(
+                payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
+            self.assertFalse(hook.note_progress(
                 payload(turn_id='t3', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
-            closed = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
-            self.assertNotIn('healthy_boundary', closed['DISPATCH-1|1|worker-native'])
+            self.assertEqual(self.outbox_ids(), [])
+            self.assertFalse(self.row()['episode_open'])
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
@@ -393,36 +395,40 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-2', 'ep-2'])
 
     def test_flush_close_saves_snapshot_before_dropping_payload(self):
-        # 4f43571 review finding 2: the healthy flush must record the
-        # snapshot close BEFORE dropping the frozen payload. If the save
-        # fails after a successful submit, the payload must still be in
-        # the store so a later turn can replay it — never a committed
-        # server row with no local body and a still-pending row.
+        # 4f43571 review finding 2: a healthy flush whose Submit commits
+        # but whose delivery record fails must keep the frozen payload,
+        # so a later turn replays it — never a committed server row with
+        # no local body. The outage end itself was recorded first.
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(), self.cfg, attempts=1)
+        real_save = hook._save
         def failing_save(config, data):
-            raise OSError('isolated snapshot failure fixture')
+            if not data['DISPATCH-1|1|worker-native']['outbox']:
+                raise OSError('isolated snapshot failure fixture')
+            return real_save(config, data)
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
             with mock.patch.object(hook, '_save', side_effect=failing_save):
                 healthy = payload(turn_id='turn-2', status='completed', error='')
                 with self.assertRaises(OSError):
                     hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg))
-        pending = json.loads((self.root / 'state' / 'pending.json').read_text())
-        self.assertIn('ep-1', pending)
-        self.assertEqual(pending['ep-1']['turn_id'], 'turn-1')
+        self.assertEqual(len(stub.submits), 1)
+        self.assertFalse(self.row()['episode_open'])
+        self.assertEqual(self.outbox_ids(), ['ep-1'])
+        self.assertEqual(self.row()['outbox'][0]['turn_id'], 'turn-1')
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
             healthy = payload(turn_id='turn-3', status='completed', error='')
-            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+        self.assertEqual(self.outbox_ids(), [])
+        self.assertEqual(submit_bodies(stub)[0], submit_bodies(stub)[1])
 
     def test_queued_outage_wins_over_live_body_on_same_key(self):
-        # 11a67a2 review: t1 pending, t2 healthy flush fails (boundary),
-        # t3 replay fails (t3 preserved as queued ep-2). t4 replay
-        # SUCCEEDS: the boundary branch must submit the FROZEN t3 body
-        # under ep-2, never the live t4 body — one key carries exactly
-        # one body, so a later lost-reply recovery can never hit a
-        # payload-conflict. t5 dedupes.
+        # 11a67a2 review: t1 undelivered, healthy t2 ends it (flush
+        # fails), t3 freezes ep-2 (replay fails). The t4 replay SUCCEEDS
+        # and must submit the FROZEN t3 body under ep-2, never the live
+        # t4 body — one key carries exactly one body, so a later
+        # lost-reply recovery can never hit a payload-conflict.
         submits = []
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
@@ -436,20 +442,20 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            self.assertFalse(hook.note_progress(
+            self.assertTrue(hook.note_progress(
                 payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
             self.assertEqual(fourth['episode_id'], 'ep-2')
-            # 9c583c4 review: the delivered queued ep-2 is closed, never
-            # reopened, so the t5 failure is a NEW ep-3 outage.
+            # D84-16: t3-t6 are one continuous outage. Delivering ep-2
+            # is transport recovery, not native health, so t5 dedupes.
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
-            self.assertEqual(fifth['episode_id'], 'ep-3')
+            self.assertEqual(fifth['state'], 'duplicate')
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
             self.assertEqual(sixth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-1', 'ep-2', 'ep-3'])
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-1', 'ep-1', 'ep-2'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
         self.assertIn('turn=t1 request=req-1', bodies[3])
         # ep-2 carries the frozen t3 body, not the live t4 body.
@@ -458,9 +464,9 @@ class EpisodeLifecycleTests(unittest.TestCase):
 
     def test_queued_flush_never_reopens_new_failure_publishes(self):
         # D84-15 seq 1: t1 fails offline, t2 healthy offline, t3 fails
-        # offline. Online at t4 healthy: ep-1 and queued ep-2 both
-        # commit, and ep-2 is CLOSED-delivered (never reopened), so the
-        # t5 failure publishes as a NEW ep-3 outage. Three events.
+        # offline. Online at t4 healthy: ep-1 and ep-2 both commit
+        # and t4 ends the t3 outage, so the t5 failure publishes as a NEW
+        # ep-3 outage. Three events.
         submits = []
         online = {'yes': False}
         def script(argv, **kwargs):
@@ -475,7 +481,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
-            self.assertFalse(hook.note_progress(
+            self.assertTrue(hook.note_progress(
                 payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
@@ -529,10 +535,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
             self.assertIn('turn=%s request=req-%s' % (turn, turn), body)
 
     def test_confirmed_replay_keeps_queued_tail(self):
-        # 4c756a4 review finding 1: ep-1 pending with TWO queued outages
-        # (t3 as ep-2, t5 as ep-3 across two offline boundaries). A later
-        # replay of ep-1 succeeds: the open rewrite must keep the queue
-        # tail, so ep-2 AND ep-3 both still deliver. Exactly ep-1/2/3.
+        # 4c756a4 review finding 1: ep-1 undelivered with TWO later
+        # outages (t3 as ep-2, t5 as ep-3 across two offline boundaries).
+        # A later replay of ep-1 succeeds: ep-2 AND ep-3 both still
+        # deliver. Exactly ep-1/2/3.
         submits = []
         online = {'yes': False}
         def script(argv, **kwargs):
@@ -555,14 +561,15 @@ class EpisodeLifecycleTests(unittest.TestCase):
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
             # Replay of ep-1 succeeds on a failure turn (not healthy):
-            # ep-1 confirms, queued ep-2 AND ep-3 drain on the same turn
-            # (9c583c4 review: no open row may strand the tail while the
-            # outage continues). t7 healthy then finds nothing to do.
+            # ep-1, ep-2 AND ep-3 drain on the same turn (9c583c4 review:
+            # nothing strands while the outage continues). Healthy t7
+            # only ends the t5-t6 outage; nothing is left to deliver.
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
             self.assertEqual(sixth['episode_id'], 'ep-3')
             seventh = hook.note_progress(payload(turn_id='t7', status='completed', error=''),
                                          self.cfg, hook._hook_env(self.cfg), attempts=1)
-            self.assertFalse(seventh)
+            self.assertTrue(seventh)
+            self.assertEqual(self.outbox_ids(), [])
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
         self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
@@ -572,11 +579,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
 
     def test_closed_row_with_queued_keeps_queue_and_new_outage(self):
         # 4c756a4 review finding 2: ep-1 commits on a healthy flush but
-        # its queued ep-2 delivery fails (attempts=1). The row is closed
-        # with queued ep-2 still named. The next failure must NOT adopt
-        # the queued payload as an orphan: the queue survives and the
-        # live failure preserves as the next outage. t6 healthy then
-        # delivers queued ep-2; the live outage follows under ep-3.
+        # ep-2 delivery fails (attempts=1). The healthy t4 ended the t3
+        # outage with ep-2 still undelivered. The next failure is a new
+        # ep-3 outage: ep-2 delivers first with its own frozen body,
+        # then ep-3. t6 healthy ends the t5 outage.
         submits = []
         online = {'yes': False}
         fail_queued_once = {'yes': True}
@@ -603,10 +609,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
             self.assertTrue(hook.note_progress(
                 payload(turn_id='t4', status='completed', error=''), self.cfg,
                 hook._hook_env(self.cfg), attempts=1))
-            closed = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
-            self.assertEqual(closed['DISPATCH-1|1|worker-native'].get('queued_outage'), ['ep-2'])
+            self.assertFalse(self.row()['episode_open'])
+            self.assertEqual(self.outbox_ids(), ['ep-2'])
             fail_queued_once['yes'] = False
-            # t5 failure: queue survives, live outage preserved as ep-3.
+            # t5 failure: ep-2 survives, live outage frozen as ep-3.
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
             self.assertEqual(fifth['episode_id'], 'ep-3')
             sixth = hook.note_progress(payload(turn_id='t6', status='completed', error=''),
@@ -616,12 +622,10 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
 
     def test_failure_turn_recovery_delivers_whole_tail(self):
-        # 9c583c4 review: ep-1 pending with queued ep-2/ep-3 across two
+        # 9c583c4 review: ep-1 undelivered with ep-2/ep-3 across two
         # offline boundaries. Transport recovers ON A FAILURE TURN: t6
-        # confirms ep-1, delivers queued ep-2, and must ALSO deliver
-        # queued ep-3 — the delivered head must not strand the tail
-        # behind an open row while the outage continues. Exactly ep-1,
-        # ep-2, ep-3, with no duplicate short-circuit.
+        # delivers ep-1, ep-2 AND ep-3 — nothing strands behind the open
+        # outage. Exactly ep-1, ep-2, ep-3.
         submits = []
         online = {'yes': False}
         def script(argv, **kwargs):
@@ -645,27 +649,25 @@ class EpisodeLifecycleTests(unittest.TestCase):
             online['yes'] = True
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
             self.assertEqual(sixth['episode_id'], 'ep-3')
-            # All three preserved outages drained on t6; the still-down
-            # model keeps failing, so t7 is a NEW ep-4 outage and t8
-            # dedupes against it.
+            # All three outages drained on t6. The still-down model keeps
+            # failing with no healthy turn since t5, so t7 and t8 belong
+            # to the ep-3 outage (D84-16) and dedupe.
             seventh = hook.publish(payload(turn_id='t7', request_id='req-7'), self.cfg, attempts=1)
-            self.assertEqual(seventh['episode_id'], 'ep-4')
+            self.assertEqual(seventh['state'], 'duplicate')
             eighth = hook.publish(payload(turn_id='t8', request_id='req-8'), self.cfg, attempts=1)
             self.assertEqual(eighth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3', 'ep-4'])
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
         self.assertIn('turn=t1 request=req-t1', bodies[0])
         self.assertIn('turn=t3 request=req-t3', bodies[1])
         self.assertIn('turn=t5 request=req-t5', bodies[2])
-        self.assertIn('turn=t7 request=req-7', bodies[3])
 
     def test_replay_success_after_failed_head_drains_tail(self):
-        # c3b0d81 review: ep-1 pending with queued ep-2/ep-3. The t6
-        # failure turn confirms ep-1 but ALL ep-2 submits fail, leaving
-        # ep-2 pending with ep-3 still queued. The t7 replay of ep-2
-        # succeeds: the tail must drain on that same failure turn —
-        # ep-3 submits, no open row strands it. Exactly ep-1/2/3.
+        # c3b0d81 review: ep-1 undelivered with ep-2/ep-3 behind it. The
+        # t6 failure turn delivers ep-1 but ALL ep-2 submits fail. The t7
+        # replay of ep-2 succeeds and ep-3 drains on that same failure
+        # turn. Exactly ep-1/2/3.
         submits = []
         online = {'yes': False}
         fail_ep2 = {'yes': True}
@@ -695,28 +697,29 @@ class EpisodeLifecycleTests(unittest.TestCase):
             fail_ep2['yes'] = False
             seventh = hook.publish(payload(turn_id='t7', request_id='req-7'), self.cfg, attempts=1)
             self.assertEqual(seventh['episode_id'], 'ep-3')
+            # D84-18: t6-t9 are one outage that began at t5; replay
+            # success is transport recovery and never opens ep-4.
             eighth = hook.publish(payload(turn_id='t8', request_id='req-8'), self.cfg, attempts=1)
-            self.assertEqual(eighth['episode_id'], 'ep-4')
+            self.assertEqual(eighth['state'], 'duplicate')
             ninth = hook.publish(payload(turn_id='t9', request_id='req-9'), self.cfg, attempts=1)
             self.assertEqual(ninth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3', 'ep-4'])
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
         self.assertIn('turn=t1 request=req-t1', bodies[0])
         self.assertIn('turn=t3 request=req-t3', bodies[1])
         self.assertIn('turn=t5 request=req-t5', bodies[2])
-        self.assertIn('turn=t8 request=req-8', bodies[3])
 
     def test_interrupted_boundary_confirm_recovers_live_outage(self):
-        # 1b417f3 review finding 1: the replay of ep-1 confirms and the
-        # row goes open, but the process dies (drop OSError here) before
-        # the queued head publishes. Recovery must NOT strand the live
-        # post-boundary failure as a duplicate: the next failure turn
-        # republishes the queued head and keeps the tail draining.
+        # 1b417f3 review finding 1: the replay of ep-1 commits, but the
+        # process dies (OSError on the delivery record) before ep-2 is
+        # submitted. Recovery must NOT strand the post-boundary outage:
+        # the next failure turn replays ep-1 identically and delivers
+        # ep-2 with its first actual t3 observation. t4-t6 stay one
+        # outage, so nothing new is allocated.
         submits = []
         online = {'yes': False}
         kill_once = {'yes': True}
-        real_drop = hook._drop_pending
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
                 return subprocess.CompletedProcess(argv, 0, '{}\n', '')
@@ -726,11 +729,13 @@ class EpisodeLifecycleTests(unittest.TestCase):
             submits.append(argv)
             key = argv[argv.index('--request-key') + 1]
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
-        def dying_drop(config, observation):
-            if kill_once['yes'] and observation.get('episode_id') == 'ep-1':
+        real_save = hook._save
+        def dying_save(config, data):
+            if kill_once['yes'] and 'ep-1' not in [entry['episode_id'] for entry in
+                                                   data['DISPATCH-1|1|worker-native']['outbox']]:
                 kill_once['yes'] = False
-                raise OSError('isolated crash between confirm and boundary publish')
-            return real_drop(config, observation)
+                raise OSError('isolated crash between commit and delivery record')
+            return real_save(config, data)
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             for turn, status in (('t1', 'failed'), ('t2', 'completed'), ('t3', 'failed')):
                 if status == 'failed':
@@ -740,33 +745,31 @@ class EpisodeLifecycleTests(unittest.TestCase):
                     hook.note_progress(payload(turn_id=turn, status='completed', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
-            with mock.patch.object(hook, '_drop_pending', side_effect=dying_drop):
+            with mock.patch.object(hook, '_save', side_effect=dying_save):
                 with self.assertRaises(OSError):
                     hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
+            self.assertEqual(self.outbox_ids(), ['ep-1', 'ep-2'])
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
-            self.assertEqual(fifth['episode_id'], 'ep-3')
+            self.assertEqual(fifth['episode_id'], 'ep-2')
             sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
             self.assertEqual(sixth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-2'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertEqual(bodies[0], bodies[1])
         self.assertIn('turn=t1 request=req-t1', bodies[0])
-        self.assertIn('turn=t3 request=req-t3', bodies[1])
-        self.assertIn('turn=t5 request=req-5', bodies[2])
+        self.assertIn('turn=t3 request=req-t3', bodies[2])
 
     def test_interrupted_boundary_confirm_without_queue_recovers_live_outage(self):
-        # d714909 review: t1 fails offline, t2 records the boundary with
-        # NO post-boundary failure queued yet (the common D84-11 shape).
-        # The t3 replay confirms ep-1 but the process dies after the open
-        # save and before the boundary close (drop OSError here). The row
-        # is open WITH the boundary and an empty queue. The t4 failure
-        # must NOT short-circuit to duplicate: it consumes the stranded
-        # boundary, closes ep-1, and publishes the live failure as ep-2.
-        # t5 dedupes against ep-2.
+        # d714909 review: t1 fails offline, healthy t2 ends that outage
+        # with nothing else frozen yet (the common D84-11 shape). The t3
+        # failure freezes ep-2 and its replay of ep-1 commits, but the
+        # process dies before recording that delivery. The t4 failure
+        # must NOT strand ep-2: it replays ep-1 identically and delivers
+        # ep-2 with the first post-boundary t3 observation. t5 dedupes.
         submits = []
         online = {'yes': False}
         kill_once = {'yes': True}
-        real_drop = hook._drop_pending
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
                 return subprocess.CompletedProcess(argv, 0, '{}\n', '')
@@ -776,40 +779,40 @@ class EpisodeLifecycleTests(unittest.TestCase):
             submits.append(argv)
             key = argv[argv.index('--request-key') + 1]
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
-        def dying_drop(config, observation):
-            if kill_once['yes'] and observation.get('episode_id') == 'ep-1':
+        real_save = hook._save
+        def dying_save(config, data):
+            if kill_once['yes'] and 'ep-1' not in [entry['episode_id'] for entry in
+                                                   data['DISPATCH-1|1|worker-native']['outbox']]:
                 kill_once['yes'] = False
-                raise OSError('isolated crash between confirm and boundary close')
-            return real_drop(config, observation)
+                raise OSError('isolated crash between commit and delivery record')
+            return real_save(config, data)
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             hook.note_progress(payload(turn_id='t2', status='completed', error=''),
                                self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
-            with mock.patch.object(hook, '_drop_pending', side_effect=dying_drop):
+            with mock.patch.object(hook, '_save', side_effect=dying_save):
                 with self.assertRaises(OSError):
                     hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
-            stranded = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())[
-                'DISPATCH-1|1|worker-native']
-            self.assertTrue(stranded['episode_open'])
-            self.assertFalse(stranded['pending'])
-            self.assertEqual(stranded.get('healthy_boundary'), 't2')
-            self.assertEqual(stranded.get('queued_outage'), None)
+            self.assertTrue(self.row()['episode_open'])
+            self.assertEqual(self.outbox_ids(), ['ep-1', 'ep-2'])
             fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
             self.assertEqual(fourth['episode_id'], 'ep-2')
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
             self.assertEqual(fifth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-2'])
+        self.assertEqual(keys, ['ep-1', 'ep-1', 'ep-2'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
+        self.assertEqual(bodies[0], bodies[1])
         self.assertIn('turn=t1 request=req-1', bodies[0])
-        self.assertIn('turn=t4 request=req-4', bodies[1])
+        # The first actual post-boundary failure, never a later turn.
+        self.assertIn('turn=t3 request=req-3', bodies[2])
 
     def test_open_row_close_clears_stale_boundary(self):
-        # 1b417f3 review finding 1 (second half): closing an open row
-        # must clear a stale healthy boundary so the next episode never
-        # inherits it and republishes spuriously.
+        # 1b417f3 review finding 1 (second half): only the open flag
+        # decides allocation, so a stale field left by an older head can
+        # never make the next episode republish spuriously.
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
             hook.publish(payload(), self.cfg, attempts=1)
@@ -819,19 +822,19 @@ class EpisodeLifecycleTests(unittest.TestCase):
             (self.root / 'state' / 'failure-episodes.json').write_text(json.dumps(data))
             self.assertTrue(hook.note_progress(
                 payload(turn_id='t2', status='completed', error=''), self.cfg, hook._hook_env(self.cfg)))
-            closed = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
-            self.assertNotIn('healthy_boundary', closed[key])
+            self.assertEqual(self.row()['closed_by_turn'], 't2')
             next_outage = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
             self.assertEqual(next_outage['episode_id'], 'ep-2')
+            repeat = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
+            self.assertEqual(repeat['state'], 'duplicate')
+        self.assertEqual(len(stub.submits), 2)
 
     def test_open_row_with_queued_drains_on_failure_turn(self):
-        # 2813cac review: ep-1 pending with queued ep-2/ep-3. The t6
-        # replay confirms ep-1 and commits the ep-2 head; ep-3 stays
-        # queued when its bounded submits fail. While ep-3 is still
-        # attached, a NEW live outage opens ep-4 on the same row. The
-        # t8 failure must NOT short-circuit to duplicate — it drains
-        # ep-3 first, then publishes the live failure as ep-5. t9
-        # dedupes against ep-5.
+        # 2813cac review, D84-18: ep-1 undelivered with ep-2/ep-3 behind
+        # it. t6 delivers ep-1 and ep-2; ep-3 fails at t6, t7 and t7b.
+        # Every failure turn retries it instead of short-circuiting to
+        # duplicate, and t8 delivers it. t6-t9 are one outage that began
+        # at t5, so no ep-4/ep-5 is ever allocated.
         submits = []
         online = {'yes': False}
         fail_keys = {'ep-3': 1}
@@ -857,36 +860,25 @@ class EpisodeLifecycleTests(unittest.TestCase):
                     hook.note_progress(payload(turn_id=turn, status='completed', error=''),
                                        self.cfg, hook._hook_env(self.cfg), attempts=1)
             online['yes'] = True
-            sixth = hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
-            self.assertEqual(sixth['episode_id'], 'ep-2')
-            stalled = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
-            self.assertEqual(stalled['DISPATCH-1|1|worker-native'].get('queued_outage'), ['ep-3'])
-            fail_keys['ep-3'] = 1
-            fail_keys['ep-4'] = 1
-            try:
-                hook.publish(payload(turn_id='t7', request_id='req-7'), self.cfg, attempts=1)
-                self.fail('t7 must fail: ep-3 drain fails then ep-4 lost')
-            except subprocess.SubprocessError:
-                pass
-            fail_keys['ep-3'] = 1
-            reopened = hook.publish(payload(turn_id='t7b', request_id='req-7b'), self.cfg, attempts=1)
-            self.assertEqual(reopened['episode_id'], 'ep-4')
-            row = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())[
-                'DISPATCH-1|1|worker-native']
-            self.assertTrue(row['episode_open'])
-            self.assertEqual(row.get('queued_outage'), ['ep-3'])
+            with self.assertRaises(subprocess.SubprocessError):
+                hook.publish(payload(turn_id='t6', request_id='req-6'), self.cfg, attempts=1)
+            self.assertEqual(self.outbox_ids(), ['ep-3'])
+            for turn in ('t7', 't7b'):
+                fail_keys['ep-3'] = 1
+                with self.assertRaises(subprocess.SubprocessError):
+                    hook.publish(payload(turn_id=turn, request_id='req-' + turn), self.cfg, attempts=1)
+            self.assertEqual(self.outbox_ids(), ['ep-3'])
+            self.assertTrue(self.row()['episode_open'])
             eighth = hook.publish(payload(turn_id='t8', request_id='req-8'), self.cfg, attempts=1)
-            self.assertEqual(eighth['episode_id'], 'ep-5')
+            self.assertEqual(eighth['episode_id'], 'ep-3')
             ninth = hook.publish(payload(turn_id='t9', request_id='req-9'), self.cfg, attempts=1)
             self.assertEqual(ninth['state'], 'duplicate')
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
-        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-4', 'ep-3', 'ep-5'])
+        self.assertEqual(keys, ['ep-1', 'ep-2', 'ep-3'])
         bodies = submit_bodies(type('S', (), {'submits': submits})())
         self.assertIn('turn=t1 request=req-t1', bodies[0])
         self.assertIn('turn=t3 request=req-t3', bodies[1])
-        self.assertIn('turn=t7 request=req-7', bodies[2])
-        self.assertIn('turn=t5 request=req-t5', bodies[3])
-        self.assertIn('turn=t8 request=req-8', bodies[4])
+        self.assertIn('turn=t5 request=req-t5', bodies[2])
 
     def test_pending_flush_failure_keeps_pending(self):
         stub = ok_run({'event_id': 'e1', 'state': 'pending'})
@@ -895,16 +887,21 @@ class EpisodeLifecycleTests(unittest.TestCase):
                 hook.publish(payload(), self.cfg, attempts=1)
         with mock.patch.object(hook.subprocess, 'run', side_effect=subprocess.TimeoutExpired('squad', 5)):
             healthy = payload(turn_id='turn-2', status='completed', error='')
-            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            # The healthy turn ends the outage even though its flush
+            # fails; the frozen ep-1 payload stays undelivered.
+            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+        self.assertEqual(self.outbox_ids(), ['ep-1'])
         with mock.patch.object(hook.subprocess, 'run', side_effect=stub):
-            replayed = hook.publish(payload(), self.cfg, attempts=1)
+            replayed = hook.publish(payload(turn_id='turn-3', request_id='req-3'), self.cfg, attempts=1)
             self.assertEqual(replayed['state'], 'pending')
+            self.assertEqual(replayed['episode_id'], 'ep-2')
+        self.assertEqual([argv[argv.index('--request-key') + 1] for argv in stub.submits],
+                         ['ep-1', 'ep-2'])
 
     def test_failed_flush_records_boundary_replay_closes_and_new_outage_republishes(self):
-        # D84-11 finding 1: ep-1 stays pending, the healthy flush at t2
-        # fails, and a later publish confirms the replay. The healthy
-        # boundary must survive: the replay confirmation closes ep-1,
-        # and the live t3 failure publishes as a NEW ep-2 episode.
+        # D84-11 finding 1: ep-1 stays undelivered and the healthy flush
+        # at t2 fails, but t2 still ends the outage durably. The t3
+        # failure is a NEW ep-2 episode, delivered after the ep-1 replay.
         submits = []
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
@@ -919,7 +916,7 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             healthy = payload(turn_id='t2', status='completed', error='')
-            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             receipt = hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
         keys = [argv[argv.index('--request-key') + 1] for argv in submits]
         bodies = submit_bodies(type('S', (), {'submits': submits})())
@@ -934,12 +931,11 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertEqual(seen['sequence'], 2)
 
     def test_boundary_consumed_once_never_inherited_by_new_pending(self):
-        # D84-12: t1 fails (pending), t2 healthy flush fails, t3 replay
-        # confirms ep-1 but ALL ep-2 submits fail (lost replies), t4/t5
-        # fail with no further healthy turn. The t2 boundary belongs to
-        # ep-1 only: it is consumed once to close ep-1 and must NOT be
-        # inherited by the ep-2 pending row. t4 confirms ep-2 open (no
-        # ep-3), t5 dedupes. Exactly the ep-1 and ep-2 keys are used.
+        # D84-12: t1 fails (undelivered), healthy t2 ends it although its
+        # flush fails, t3 opens ep-2 and delivers ep-1 but ALL ep-2
+        # submits fail (lost replies), t4/t5 fail with no further healthy
+        # turn. The t2 boundary ended only the t1 outage: t4 delivers ep-2
+        # (no ep-3), t5 dedupes. Exactly the ep-1 and ep-2 keys are used.
         submits = []
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
@@ -958,14 +954,12 @@ class EpisodeLifecycleTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t1', request_id='req-1'), self.cfg, attempts=1)
             healthy = payload(turn_id='t2', status='completed', error='')
-            self.assertFalse(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
+            self.assertTrue(hook.note_progress(healthy, self.cfg, hook._hook_env(self.cfg)))
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(turn_id='t3', request_id='req-3'), self.cfg, attempts=1)
-            data = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())
-            pending = data['DISPATCH-1|1|worker-native']
-            self.assertTrue(pending['pending'])
-            self.assertEqual(pending['episode_id'], 'ep-2')
-            self.assertNotIn('healthy_boundary', pending)
+            self.assertTrue(self.row()['episode_open'])
+            self.assertEqual(self.row()['episode_id'], 'ep-2')
+            self.assertEqual(self.outbox_ids(), ['ep-2'])
             fourth = hook.publish(payload(turn_id='t4', request_id='req-4'), self.cfg, attempts=1)
             self.assertEqual(fourth['episode_id'], 'ep-2')
             fifth = hook.publish(payload(turn_id='t5', request_id='req-5'), self.cfg, attempts=1)
@@ -978,16 +972,14 @@ class EpisodeLifecycleTests(unittest.TestCase):
         self.assertIn('turn=t3 request=req-3', bodies[4])
 
     def test_orphan_pending_without_snapshot_replays_and_keeps_boundary(self):
-        # D84-11 finding 2: the process dies after _store_pending but
-        # before any snapshot write. The orphan frozen payload must be
-        # adopted on the next publish, replayed identically, and — after
-        # a healthy turn lands — the next outage must be a new episode.
-        import muse_failure_hook as hook_module
-        cfg = self.cfg
-        first = hook_module.observe(payload(turn_id='t1', request_id='req-1'), cfg)
+        # D84-11 finding 2: the process dies after the allocation save
+        # and before any Submit. The frozen payload must replay
+        # identically on the next publish, and — after a healthy turn
+        # lands — the next outage must be a new episode.
+        first = hook.observe(payload(turn_id='t1', request_id='req-1'), self.cfg)
         first['episode_id'] = 'ep-1'
-        hook_module._store_pending(cfg, first)
-        self.assertFalse((self.root / 'state' / 'failure-episodes.json').exists())
+        hook._save(self.cfg, {'DISPATCH-1|1|worker-native': {
+            'sequence': 1, 'episode_id': 'ep-1', 'episode_open': True, 'outbox': [first]}})
         submits = []
         def script(argv, **kwargs):
             if argv[2] == 'decision-get':
@@ -997,8 +989,8 @@ class EpisodeLifecycleTests(unittest.TestCase):
             key = argv[argv.index('--request-key') + 1]
             return subprocess.CompletedProcess(argv, 0, json.dumps({'event_id': key, 'state': 'pending'}), '')
         with mock.patch.object(hook.subprocess, 'run', side_effect=script):
-            # Orphan adopted: no new ep-1 submit of the live body; the
-            # frozen payload replays under its own key.
+            # Same outage: no new ep-1 body from the live turn; the frozen
+            # payload replays under its own key.
             receipt = hook.publish(payload(turn_id='t2x', request_id='req-2x'), self.cfg, attempts=1)
             self.assertEqual(receipt['episode_id'], 'ep-1')
             healthy = payload(turn_id='t2', status='completed', error='')

@@ -117,9 +117,10 @@ class HookAdapterTests(unittest.TestCase):
             with self.assertRaises(subprocess.SubprocessError):
                 hook.publish(payload(), self.cfg, attempts=3)
         self.assertEqual(len(calls), 3)
-        pending = json.loads((self.root / 'state' / 'pending.json').read_text())
-        self.assertEqual(set(pending), {'ep-1'})
-        self.assertEqual(pending['ep-1']['turn_id'], 'turn-1')
+        row = json.loads((self.root / 'state' / 'failure-episodes.json').read_text())[
+            'DISPATCH-1|1|worker-native']
+        self.assertEqual([entry['episode_id'] for entry in row['outbox']], ['ep-1'])
+        self.assertEqual(row['outbox'][0]['turn_id'], 'turn-1')
 
     def test_unsafe_identifiers_rejected_precisely_not_dropped(self):
         # D84-7(c) as corrected by D84-9: turn_id is always present in
@@ -138,7 +139,6 @@ class HookAdapterTests(unittest.TestCase):
         rejected = json.loads((self.root / 'state' / 'rejected.json').read_text())
         self.assertEqual(len(rejected), 1)
         self.assertIn('turn_id', rejected[0]['reason'])
-        self.assertFalse((self.root / 'state' / 'pending.json').exists())
         self.assertFalse((self.root / 'state' / 'failure-episodes.json').exists())
 
     def test_safe_identifiers_cover_real_hook_values(self):

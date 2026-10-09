@@ -998,11 +998,14 @@ under a lock, and publishes one sanitized observation through #88's atomic
 and the durable event and returns both IDs. Each failure episode maps to
 Submit's stable request key (`--request-key ep-N`): retries within one
 outage deduplicate to the same IDs, and the next independent outage after
-healthy progress uses a new key and records again. A failure episode closes
-on verified healthy progress of the same native (`note_progress`, flushing
-a pending observation first); the next independent failure opens a new
-episode with its own budget. Failed publications stay pending and replay
-on the next hook invocation, never falsely delivered; the hook returns
+healthy progress uses a new key and records again. Only native health
+signals allocate episodes: the first failure with no open outage allocates
+the next `ep-N` and freezes that first observation; verified healthy
+progress of the same native (`note_progress`) ends the outage even when
+delivery is unavailable. Delivery is a separate in-order outbox: each
+frozen episode replays with its own key and immutable body until Submit
+confirms it, so a lost reply or a crash after commit replays idempotently.
+Transport recovery never opens or closes an episode. The hook returns
 quickly and never waits for its own turn to end (D84-2 ordering).
 
 `muse_failure_handling.py` is the pure Dispatcher-side contract over that

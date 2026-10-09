@@ -186,20 +186,16 @@ class MuseFailureE2ETests(unittest.TestCase):
                 "SELECT event_id,outcome_id FROM terminal_event_receipts WHERE kind='runtime-failure'").fetchone()
         self.assertIsNotNone(committed)
         event_id, outcome = committed
-        # Lost reply: server committed, local receipt lost -> pending.
-        # Faithful corruption: rebuild the exact pre-reply local state —
-        # frozen payload present, open marker absent, sequence still 0
-        # (nothing confirmed yet). Only the reply is lost.
+        # Lost reply: server committed, local receipt lost. Faithful
+        # corruption: rebuild the exact pre-reply local state — ep-1
+        # allocated and open, its frozen payload still in the outbox.
         cfg = json.loads(self.config.read_text())
         obs = hook.observe(first, cfg)
         obs['episode_id'] = 'ep-1'
-        hook._store_pending(cfg, obs)
         state_dir = Path(cfg['state_directory'])
         snaps = json.loads((state_dir / 'failure-episodes.json').read_text())
-        snaps['D-E2E|1|e2e-native'] = {'episode_open': False, 'pending': True,
-                                       'episode_id': 'ep-1', 'turns': [],
-                                       'first_observed_at': obs['observed_at'],
-                                       'sequence': 0}
+        snaps['D-E2E|1|e2e-native'] = {'episode_open': True, 'episode_id': 'ep-1',
+                                       'sequence': 1, 'outbox': [obs]}
         (state_dir / 'failure-episodes.json').write_text(json.dumps(snaps))
         # Second failure, same outage, different turn/request.
         second = dict(first, turn_id='t2', request_id='req-2')
@@ -325,6 +321,13 @@ class MuseFailureE2ETests(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         return run
 
+    def _state_row(self):
+        snaps = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
+        return snaps['D-E2E|1|e2e-native']
+
+    def _outbox_ids(self):
+        return [entry['episode_id'] for entry in self._state_row()['outbox']]
+
     def _failure_rows(self):
         with self.db() as db:
             return db.execute(
@@ -353,11 +356,10 @@ class MuseFailureE2ETests(unittest.TestCase):
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
-            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-            mid_row = mid['D-E2E|1|e2e-native']
-            self.assertTrue(mid_row['pending'])
-            self.assertEqual(mid_row['episode_id'], 'ep-1')
-            self.assertEqual(mid_row.get('healthy_boundary'), 't2')
+            mid_row = self._state_row()
+            self.assertFalse(mid_row['episode_open'])
+            self.assertEqual(mid_row['closed_by_turn'], 't2')
+            self.assertEqual(self._outbox_ids(), ['ep-1'])
             self.assertEqual(self._failure_rows(), [])
             phase['fail_all'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
@@ -402,11 +404,10 @@ class MuseFailureE2ETests(unittest.TestCase):
             phase['fail_ep2'] = True
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
             phase['fail_ep2'] = False
-            pending = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-            row = pending['D-E2E|1|e2e-native']
-            self.assertTrue(row['pending'])
+            row = self._state_row()
+            self.assertTrue(row['episode_open'])
             self.assertEqual(row['episode_id'], 'ep-2')
-            self.assertNotIn('healthy_boundary', row)
+            self.assertEqual(self._outbox_ids(), ['ep-2'])
             self.assertEqual(hook.run(self.config, self._hook_event('t4')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
         finally:
@@ -441,11 +442,8 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
-            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-            mid_row = mid['D-E2E|1|e2e-native']
-            self.assertTrue(mid_row['pending'])
-            self.assertEqual(mid_row['episode_id'], 'ep-1')
-            self.assertEqual(mid_row.get('queued_outage'), ['ep-2'])
+            self.assertTrue(self._state_row()['episode_open'])
+            self.assertEqual(self._outbox_ids(), ['ep-1', 'ep-2'])
             self.assertEqual(self._failure_rows(), [])
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
@@ -532,9 +530,7 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertEqual(hook.run(self.config, real_first[1]), 0)
             for turn, status in (('t4', 'completed'), ('t5', 'failed')):
                 self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
-            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-            mid_row = mid['D-E2E|1|e2e-native']
-            self.assertEqual(mid_row.get('queued_outage'), ['ep-2', 'ep-3'])
+            self.assertEqual(self._outbox_ids(), ['ep-1', 'ep-2', 'ep-3'])
             self.assertEqual(self._failure_rows(), [])
             phase['offline'] = False
             for turn in ('t6', 't7', 't8'):
@@ -576,10 +572,10 @@ class MuseFailureE2ETests(unittest.TestCase):
                 self.assertEqual(hook.run(self.config, self._hook_event(turn, status)), 0)
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t6')), 0)
-            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-            mid_row = mid['D-E2E|1|e2e-native']
-            self.assertIsNone(mid_row.get('queued_outage'))
-            self.assertFalse(mid_row['episode_open'])
+            # Every frozen episode is delivered, and t6 still belongs to
+            # the open outage that began at t5.
+            self.assertEqual(self._outbox_ids(), [])
+            self.assertTrue(self._state_row()['episode_open'])
             self.assertEqual(hook.run(self.config, self._hook_event('t7', 'completed')), 0)
         finally:
             hook._submit = original
@@ -618,11 +614,8 @@ class MuseFailureE2ETests(unittest.TestCase):
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
             phase['offline'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t4', 'completed')), 0)
-            mid = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())
-            mid_row = mid['D-E2E|1|e2e-native']
-            self.assertFalse(mid_row['pending'])
-            self.assertFalse(mid_row['episode_open'])
-            self.assertEqual(mid_row.get('queued_outage'), ['ep-2'])
+            self.assertFalse(self._state_row()['episode_open'])
+            self.assertEqual(self._outbox_ids(), ['ep-2'])
             phase['fail_queued_once'] = False
             self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t6', 'completed')), 0)
@@ -786,60 +779,59 @@ class MuseFailureE2ETests(unittest.TestCase):
     def test_interrupted_boundary_confirm_without_queue_real_backend(self):
         """d714909 review on the real backend: exactly 2 events.
 
-        t1 fails offline with no queued outage yet, t2 records the
-        boundary, then the t3 replay confirms ep-1 but the process dies
-        after the open save and before the boundary close (drop OSError
-        here). The t4 failure must consume the stranded boundary, close
-        ep-1, and publish the live failure as ep-2; t5 dedupes.
+        t1 fails offline, t2 is the healthy boundary, then the t3 failure
+        opens ep-2 and replays ep-1, which really commits, but the hook
+        dies before recording that delivery (OSError on that write).
+        The t4 failure replays ep-1 idempotently and delivers ep-2 with
+        its first actual t3 observation; t5 dedupes.
         """
         sys.path.insert(0, str(ROOT))
         import muse_failure_hook as hook
         phase = {'offline': True}
         kill_once = {'die': True}
         original = hook._submit
-        real_drop = hook._drop_pending
+        real_save = hook._save
         def script(body, config, env, observation):
             if phase['offline']:
                 raise subprocess.CalledProcessError(7, ['isolated-stranded-boundary'])
             env = dict(env, SQUAD_HOME=self.env['SQUAD_HOME'])
             return original(body, config, env, observation)
-        def dying_drop(config, observation):
-            if kill_once['die'] and observation.get('episode_id') == 'ep-1':
+        def dying_save(config, data):
+            outbox = data['D-E2E|1|e2e-native']['outbox']
+            if kill_once['die'] and 'ep-1' not in [entry['episode_id'] for entry in outbox]:
                 kill_once['die'] = False
-                raise OSError('isolated crash between confirm and boundary close')
-            return real_drop(config, observation)
+                raise OSError('isolated crash between commit and delivery record')
+            return real_save(config, data)
         hook._submit = script
-        hook._drop_pending = dying_drop
+        hook._save = dying_save
         try:
             self.assertEqual(hook.run(self.config, self._hook_event('t1')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t2', 'completed')), 0)
             phase['offline'] = False
-            # The interrupted replay dies mid-call but run() maps the
+            # The interrupted delivery dies mid-call but run() maps the
             # crash window OSError to exit 0 (observation-only).
             self.assertEqual(hook.run(self.config, self._hook_event('t3')), 0)
-            stranded = json.loads((self.root / 'hook-state' / 'failure-episodes.json').read_text())[
-                'D-E2E|1|e2e-native']
-            self.assertTrue(stranded['episode_open'])
-            self.assertEqual(stranded.get('healthy_boundary'), 't2')
-            self.assertEqual(stranded.get('queued_outage'), None)
+            self.assertFalse(kill_once['die'])
+            self.assertEqual(len(self._failure_rows()), 1)
+            self.assertEqual(self._outbox_ids(), ['ep-1', 'ep-2'])
             self.assertEqual(hook.run(self.config, self._hook_event('t4')), 0)
             self.assertEqual(hook.run(self.config, self._hook_event('t5')), 0)
         finally:
             hook._submit = original
-            hook._drop_pending = real_drop
+            hook._save = real_save
         rows = self._failure_rows()
         self.assertEqual(len(rows), 2)
         self.assertTrue(rows[0][0].endswith('/ep-1'), rows[0][0])
         self.assertTrue(rows[1][0].endswith('/ep-2'), rows[1][0])
         self.assertIn('turn=t1 request=request-t1', rows[0][1])
-        self.assertIn('turn=t4 request=request-t4', rows[1][1])
+        self.assertIn('turn=t3 request=request-t3', rows[1][1])
 
     def test_commit_before_interrupt_keeps_boundary_real_backend(self):
         """D84-11 finding 2 on the real backend.
 
-        A real Submit commits, then the hook process exits before writing
-        any snapshot. The orphan frozen payload is adopted: t2 healthy
-        flushes it, and the t3 failure publishes as a NEW ep-2 episode.
+        A real Submit commits, then the hook process exits before it
+        records the delivery. t2 healthy replays the frozen ep-1 payload
+        idempotently, and the t3 failure publishes as a NEW ep-2 episode.
         """
         sys.path.insert(0, str(ROOT))
         code = ('import importlib.util,json,os,sys\n'
@@ -858,7 +850,9 @@ class MuseFailureE2ETests(unittest.TestCase):
                                env=self.env, capture_output=True, text=True, timeout=25)
         self.assertEqual(child.returncode, 99, child.stderr)
         self.assertEqual(len(self._failure_rows()), 1)
-        self.assertFalse((self.root / 'hook-state' / 'failure-episodes.json').exists())
+        # Allocation was saved before Submit, so the crash leaves the
+        # frozen ep-1 payload in the outbox for an identical replay.
+        self.assertEqual(self._outbox_ids(), ['ep-1'])
         self._run_hook(self._hook_event('t2', 'completed'))
         self._run_hook(self._hook_event('t3'))
         rows = self._failure_rows()
