@@ -1050,8 +1050,9 @@ rechecks custody, and only then continues. The native's durable goal state
   continuation prompt. No goal is created or touched.
 - `blocked` by the failure: `goal/resume`.
 - user `paused` or unknown: stop, so user pauses stay paused.
-- `completed`: stop. `recovery-ep-N.json` records it as an unsupported gap, and
-  no budget is spent. The executor
+- `complete` (the native finished-goal status): stop. `recovery-ep-N.json`
+  records it as an unsupported gap, and no budget is spent. Any other status is
+  unknown and stops. The executor
 follows the chained turns until none runs and none starts within
 `quiet_seconds` (bounded by `max_seconds`). It then writes `recovery-ep-N.json`
 and closes the host.

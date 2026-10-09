@@ -233,11 +233,13 @@ class RecoveryBackendTests(RecoveryFixture):
         self.squad_state.write_text(json.dumps(state))
 
     def set_goal(self, status):
+        # The native Muse 1.4.4 goals.db schema: one goal row per session.
         with sqlite3.connect(self.session_dir / 'goals.db') as db:
-            db.execute('CREATE TABLE IF NOT EXISTS goals (session_id TEXT, goal_id TEXT, objective TEXT, '
-                       'status TEXT, percent_complete INTEGER)')
-            db.execute('DELETE FROM goals')
-            db.execute('INSERT INTO goals VALUES (?, ?, ?, ?, 0)', (NATIVE, 'goal-1', 'fixture', status))
+            db.execute('CREATE TABLE IF NOT EXISTS goals (session_id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, '
+                       'revision TEXT NOT NULL, objective TEXT NOT NULL, status TEXT NOT NULL, '
+                       'percent_complete INTEGER NOT NULL)')
+            db.execute('INSERT OR REPLACE INTO goals VALUES (?, ?, ?, ?, ?, 0)',
+                       (NATIVE, 'goal-1', '1', 'fixture', status))
 
     def squad_state(self):
         return json.loads(self.squad_state_path().read_text())
@@ -292,14 +294,15 @@ class RecoveryBackendTests(RecoveryFixture):
         self.assertEqual(executor.continuation_mode(self.cfg), 'turn')
         self.set_goal('blocked')
         self.assertEqual(executor.continuation_mode(self.cfg), 'goal')
-        for status in ('paused', 'unknown-future-status'):
+        for status in ('paused', 'unknown-future-status', 'completed'):
             with self.subTest(status=status):
                 self.set_goal(status)
                 with self.assertRaisesRegex(executor.NotAdmitted, 'goal is'):
                     executor.recover(self.event, self.cfg)
                 self.assertIsNone(child.poll())
                 self.assertEqual(self.calls(), [])
-        self.set_goal('completed')
+        # The native finished-goal status is `complete`.
+        self.set_goal('complete')
         evidence = executor.recover(self.event, self.cfg)
         self.assertIn('unsupported', evidence['stopped'])
         self.assertIsNone(child.poll())
