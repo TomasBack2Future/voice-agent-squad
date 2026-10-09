@@ -66,21 +66,23 @@ def _session_log(config):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+#: The native goals.db status of a finished goal (Muse 1.4.4).
+FINISHED_GOAL = 'complete'
+
+
 def goal_status(config):
-    """Durable goal status of the native: its live goal's status, `completed`
-    when only finished goals remain, or None when it never had a goal."""
+    """Durable status of the native's goal, or None when it has none.
+
+    The native schema keys goals.db by session_id, so a session has at most
+    one goal row.
+    """
     path = _session_directory(config) / 'goals.db'
     if not path.exists():
         return None
     with sqlite3.connect('file:%s?mode=ro' % path, uri=True) as db:
-        rows = [row[0] for row in db.execute('SELECT status FROM goals WHERE session_id=?',
-                                             (config['native_session_id'],))]
-    live = [status for status in rows if status not in ('completed', 'cleared')]
-    if len(live) > 1:
-        raise NotAdmitted('native has more than one live goal')
-    if live:
-        return live[0]
-    return 'completed' if rows else None
+        row = db.execute('SELECT status FROM goals WHERE session_id=?',
+                         (config['native_session_id'],)).fetchone()
+    return row[0] if row else None
 
 
 def _last_run_terminal(records):
@@ -263,15 +265,15 @@ def continuation_mode(config):
 
     active or no goal -> one turn/start (no goal is created or touched);
     blocked by the failure -> goal/resume; user-paused or unknown -> stop;
-    completed -> stop as a recorded unsupported gap.
+    complete -> stop as a recorded unsupported gap.
     """
     status = goal_status(config)
     if status in (None, 'active'):
         return 'turn'
     if status == 'blocked':
         return 'goal'
-    if status == 'completed':
-        raise Unsupported('unsupported: the native goal is completed')
+    if status == FINISHED_GOAL:
+        raise Unsupported('unsupported: the native goal is complete')
     raise NotAdmitted('goal is %s; it is never resumed by recovery' % status)
 
 
