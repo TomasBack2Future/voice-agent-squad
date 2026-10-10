@@ -54,6 +54,7 @@ type AttemptReceipt struct {
 	LaunchStage            string                   `json:"launch_stage,omitempty"`
 	SamplingFailureStage   string                   `json:"sampling_failure_stage,omitempty"`
 	SamplingCompleted      bool                     `json:"sampling_completed"`
+	JoinReason             string                   `json:"join_reason,omitempty"`
 	WrapperPID             int                      `json:"wrapper_pid,omitempty"`
 	ReviewerPID            int                      `json:"reviewer_pid,omitempty"`
 	CostKnown              bool                     `json:"cost_known"`
@@ -94,6 +95,7 @@ type Admission struct {
 	completionCustody         *CompletionCustody
 	completionGuard           func(context.Context, CompletionCustody) error
 	completionWrapperVerifier func(string) error
+	joinReason                string
 }
 
 // OpenAdmission never opens or migrates the Squad work ledger. All invocations

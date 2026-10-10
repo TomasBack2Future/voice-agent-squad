@@ -478,3 +478,50 @@ func TestBackendSelectionIsExplicitAndKeepsGrokCheckSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileReasonFlagIsReconcileOnlyAndBounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.json")
+	if err := os.WriteFile(path, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"--from", "0123456789abcdef", "--config", path, "--repo", "owner/repo", "--pr", "9", "--mode", "shadow", "--reason", "superseded-input"}
+	c, err := parseConfig(append([]string{"reconcile"}, base...), io.Discard)
+	if err != nil || c.joinReason != "superseded-input" {
+		t.Fatal("reconcile --reason rejected", err)
+	}
+	for _, op := range []string{"recover", "readmit", "complete"} {
+		if _, err = parseConfig(append([]string{op}, base...), io.Discard); err == nil {
+			t.Fatal("--reason accepted outside reconcile", op)
+		}
+	}
+	if _, err = parseConfig(base, io.Discard); err == nil {
+		t.Fatal("--reason accepted on ordinary review")
+	}
+}
+
+func TestReconcileCLILeavesStatusSamplingWhileWrapperIsLive(t *testing.T) {
+	for _, mode := range []string{"shadow", "required"} {
+		t.Run(mode, func(t *testing.T) {
+			dir, statusDir := t.TempDir(), t.TempDir()
+			cfg := filepath.Join(t.TempDir(), "review.json")
+			if err := os.WriteFile(cfg, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/key"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			settings := grokreview.ReviewSettings{Mode: mode, Model: "grok-4.6", Effort: grokreview.DefaultReasoningEffort, TimeoutMS: (20 * time.Minute).Milliseconds(), MaxGitHubOutput: 8 << 20, MaxReviewerOutput: 1 << 20, AppID: 1, InstallationID: 2}
+			a, err := grokreview.OpenAdmission(dir, settings, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = a.Close() }()
+			bundle, _ := json.Marshal(grokreview.FrozenReviewBundle{SchemaVersion: grokreview.FrozenReviewSchemaVersion, Repository: "owner/repo", PullRequest: 9, BaseRef: "main", BaseSHA: "base", HeadSHA: "head", Diff: "+x"})
+			if err = a.Start(context.Background(), bundle); err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			args := []string{"reconcile", "--from", a.AttemptID(), "--reason", "superseded-input", "--config", cfg, "--repo", "owner/repo", "--pr", "9", "--mode", mode, "--admission-dir", dir, "--status-dir", statusDir}
+			if code := run(context.Background(), args, &stdout, &stderr); code == 0 {
+				t.Fatalf("live wrapper reconciled: %s", stdout.String())
+			}
+		})
+	}
+}

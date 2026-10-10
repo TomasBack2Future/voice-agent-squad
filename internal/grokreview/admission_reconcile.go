@@ -108,6 +108,7 @@ func (a *Admission) Reconcile(ctx context.Context, id, repository string, pr int
 					r.Verdict = VerdictError
 					r.FailureStage = "sampling"
 					r.FailureKind = CLIFailureCanceled
+					r.JoinReason = a.joinReason
 				}
 				r.CompletedAt = time.Now().Unix()
 			}
@@ -1360,4 +1361,66 @@ func parseOriginalWrapperReport(raw []byte, r AttemptReceipt) (FindingsResult, C
 
 func completionSnapshotMatches(current PullRequestSnapshot, frozen FrozenReviewBundle) bool {
 	return current.Repository == frozen.Repository && current.Number == frozen.PullRequest && current.BaseRef == frozen.BaseRef && current.BaseSHA == frozen.BaseSHA && current.HeadSHA == frozen.HeadSHA && current.Title == frozen.Title && current.Description == frozen.Description && current.Diff == frozen.Diff
+}
+
+// JoinReasonSupersededInput records that the reviewed input changed after
+// admission, so the unjoined attempt was abandoned without a verdict.
+const JoinReasonSupersededInput = "superseded-input"
+
+// SetJoinReason selects the audited reason stored on an interruption join. It
+// is ignored when the attempt already has a terminal receipt.
+func (a *Admission) SetJoinReason(reason string) error {
+	if reason != "" && reason != JoinReasonSupersededInput {
+		return fmt.Errorf("unsupported join reason %q", reason)
+	}
+	a.joinReason = reason
+	return nil
+}
+
+// TerminalizeStatus closes the bound local status file of an attempt that
+// Reconcile joined without a verdict, so monitors stop seeing it as sampling.
+// It rewrites only a non-terminal file whose attempt, repository, PR, tuple and
+// mode match the joined receipt; a missing file is not an error.
+func (a *Admission) TerminalizeStatus(ctx context.Context, statusDir, id string) (bool, error) {
+	r, err := a.load(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if !r.Joined || r.Verdict != VerdictError || r.FailureKind != CLIFailureCanceled {
+		return false, nil
+	}
+	path := filepath.Join(statusDir, reviewStatusFilename(r.Identity.Repository, r.Identity.PR, r.Identity.HeadSHA, r.ID))
+	if info, err := os.Lstat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	} else if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+		return false, fmt.Errorf("review status file must be a private regular file")
+	}
+	var status ReviewStatus
+	if _, err = readBoundedJSON(path, &status); err != nil {
+		return false, err
+	}
+	if status.SchemaVersion != ReviewStatusSchemaVersion || status.Attempt != r.ID || status.Repository != r.Identity.Repository || status.PullRequest != r.Identity.PR || status.BaseRef != r.Identity.BaseRef || status.BaseSHA != r.Identity.BaseSHA || status.HeadSHA != r.Identity.HeadSHA || status.Mode != r.Settings.Mode {
+		return false, fmt.Errorf("review status does not match joined custody")
+	}
+	if status.CompletedAt != 0 || terminalReviewState(status.State) {
+		return false, nil
+	}
+	now := time.Now()
+	status.State = ReviewStateError
+	status.Verdict = VerdictError
+	status.FailureStage = "sampling"
+	status.FailureKind = CLIFailureCanceled
+	status.UpdatedAt = now.Unix()
+	status.CompletedAt = r.CompletedAt
+	if status.CompletedAt <= 0 {
+		status.CompletedAt = now.Unix()
+	}
+	status.Summary = "Review attempt was joined without a verdict after its processes exited."
+	if r.JoinReason != "" {
+		status.Summary = "Review attempt was joined without a verdict (" + r.JoinReason + ")."
+	}
+	return true, writeStatusAtomically(path, status)
 }
