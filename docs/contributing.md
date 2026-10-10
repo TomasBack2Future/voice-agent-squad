@@ -26,8 +26,10 @@ CGO_ENABLED=0 go build ./...
 golangci-lint run
 ```
 
-[CI and distribution](environments-and-ci.md) lists the exact workflow triggers,
-platform matrix and release checks. A feature branch without a PR may not run
+Run focused tests for the touched packages before pushing; CI re-runs the full
+`-race` suite in parallel shards. [CI and distribution](environments-and-ci.md)
+lists the validation tiers, path selection, the `ci / gate` required check and
+release checks. A feature branch without a PR may not run
 hosted CI; report local and hosted evidence separately.
 
 ## Documentation ownership
