@@ -40,6 +40,7 @@ type config struct {
 	completionCustodyPath  string
 	completionEvidencePath string
 	recoveryFrom           string
+	joinReason             string
 	admissionDir           string
 	repository             string
 	pullRequest            int
@@ -222,6 +223,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			}
 			return github.FindAttemptPublication(ctx, token, configuration.appID, r)
 		})
+		if err := admission.SetJoinReason(configuration.joinReason); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
 		id := configuration.recoveryFrom
 		if filepath.IsAbs(id) {
 			if err := admission.ImportLegacy(id); err != nil {
@@ -234,7 +239,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintln(stderr, err)
 			return 1
 		}
-		return encodeJSON(stdout, stderr, map[string]any{"attempt": id, "joined": true, "sampled": false, "published": false, "recovery_slot": "unchanged"})
+		terminalized, err := admission.TerminalizeStatus(ctx, configuration.statusDir, id)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return encodeJSON(stdout, stderr, map[string]any{"attempt": id, "joined": true, "sampled": false, "published": false, "recovery_slot": "unchanged", "status_terminalized": terminalized})
 	}
 	dependencies, err := prepareRuntime(ctx, configuration)
 	if err != nil {
@@ -500,6 +510,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.SetOutput(output)
 	flags.StringVar(&configuration.humanGrantPath, "human-grant", "", "absolute attributable human ONE-use restart scope receipt")
 	flags.StringVar(&configuration.recoveryFrom, "from", "", "joined timeout attempt ID or absolute legacy custody receipt")
+	flags.StringVar(&configuration.joinReason, "reason", "", "reconcile only: audited reason for joining an abandoned attempt (superseded-input)")
 	flags.StringVar(&configuration.admissionDir, "admission-dir", "", "canonical reviewer admission directory (shared by all invocations)")
 	flags.StringVar(&configuration.provider, "provider", "github", "review input: github or local-git (no publication)")
 	flags.StringVar(&configuration.cloneLayout, "clone-layout", "plain", "HTTPS clone path layout: plain or bitbucket-server")
@@ -667,6 +678,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if configuration.reconcile && (configuration.recoveryFrom == "" || configuration.provider != "github") {
 		return config{}, fmt.Errorf("reconcile requires --from and GitHub provider; original mode must be preserved")
+	}
+	if configuration.joinReason != "" && !configuration.reconcile {
+		return config{}, fmt.Errorf("--reason requires reconcile")
 	}
 	if !configuration.recovery && !configuration.reconcile && !configuration.completion && configuration.recoveryFrom != "" {
 		return config{}, fmt.Errorf("--from requires recover")

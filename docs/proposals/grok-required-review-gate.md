@@ -351,6 +351,19 @@ terminal journaling, it joins an interrupted/error attempt without inventing a
 verdict, publication, cost or usage. Exact input history and one-use recovery slots
 stay consumed. A corrected different head may then enter normal admission.
 
+`recover` and `reconcile` are different operations. `recover` resamples after a
+joined sampling timeout that has a failed published Check. `reconcile` is the
+only join for an attempt whose wrapper was terminated or whose input was
+superseded and that has no verdict or Check, in shadow and required mode alike;
+it never samples. Pass `--reason superseded-input` to store that audited reason
+in the receipt (the only accepted value; it is valid only with `reconcile`). After
+a successful join, a local status file bound to the same attempt, repository, PR,
+tuple and mode that is still `sampling` is rewritten as terminal `error` /
+`canceled`; a missing, already terminal or mismatched file is never rewritten
+and a mismatch fails the command. The output reports `status_terminalized`. A
+wrapper killed after `launching` but before its reviewer PID was recorded stays
+blocked as described below.
+
 No lease timeout or force-clear proves child join. Missing historical process
 provenance requires the existing qualified original native/process join receipt;
 `reconcile --from ABSOLUTE_LEGACY_RECEIPT` verifies it through the same original
