@@ -28,7 +28,7 @@ golangci-lint run
 
 Run focused tests for the touched packages before pushing; CI re-runs the full
 `-race` suite in parallel shards. [CI and distribution](environments-and-ci.md)
-lists the validation tiers, path selection, the `ci / gate` required check and
+lists the validation tiers, path selection, the `gate` required check and
 release checks. A feature branch without a PR may not run
 hosted CI; report local and hosted evidence separately.
 

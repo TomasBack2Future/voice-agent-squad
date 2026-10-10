@@ -1,0 +1,19 @@
+{
+  "name": "main requires the CI gate",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["refs/heads/main"], "exclude": [] }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [
+          { "context": "gate", "integration_id": 15368 }
+        ]
+      }
+    }
+  ]
+}

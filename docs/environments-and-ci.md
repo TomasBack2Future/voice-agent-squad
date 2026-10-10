@@ -37,14 +37,46 @@ packages are included automatically). `ci_tool.py inventory` fails when a Go
 test directory, Python test or Node test is not mapped to a job, or when any
 test would run in zero or two shards.
 
-### Required check
+### Required check and hosting prerequisite
 
-`ci / gate` is the one stable required check. It runs even when other jobs
-fail, requires every job the scope selected to succeed, and permits `skipped`
-only for jobs the scope did not select. A selected job that was skipped,
-cancelled or failed fails the gate. Repository protection that requires this
-check is a hosting setting owned by the repository owner; this repository does
-not apply it.
+`gate` (the job name, reported by GitHub Actions, integration id 15368) is the
+one stable required check; the required-status-check context is exactly `gate`.
+It runs even when other jobs fail, requires every job the scope selected to
+succeed, and permits `skipped` only for jobs the scope did not select. A selected
+job that was skipped, cancelled or failed fails the gate.
+
+**It is not enforced today.** `main` has no branch protection and no rulesets,
+so nothing requires `gate` before merge. Enforcing it is a hosting setting owned
+by the repository owner. [The ruleset draft](ci-main-ruleset-draft.json) is
+prepared for that owner to apply through the repository settings or the rulesets
+API; this repository's automation never applies it, never bypasses `gate`, and
+does not treat repository-admin access as authorization to change protection.
+
+### Lint tool pin
+
+`lint` installs the release pinned in `scripts/ci/golangci-lint.pin` (version
+and SHA-256), caches it, and runs `golangci-lint config verify` followed by
+`golangci-lint run`. `config verify` downloads a JSON schema from
+`golangci-lint.run`; only a schema-load failure with a network-class cause, and
+a transient download error (timeout, connection reset, HTTP 5xx), are retried,
+at most three attempts. An exhausted budget, a checksum mismatch, an invalid
+configuration and any unrecognised failure fail immediately. To upgrade, change
+the version and its SHA-256 from the release's `checksums.txt` together.
+
+### Remote receiver and updater regressions
+
+The `remote` job runs the real remote CLI/MCP acceptance and the updater
+permission and rollback tests (`deploy/`). It is selected by any Go change,
+`deploy/`, `scripts/test_remote_service.py` and every unknown path; fixtures and
+a workflow contract test keep path scoping from skipping it.
+
+### Measurement limits
+
+The first speed samples (three full-scope runs and two probe runs) are not
+sufficient p50/p90 evidence. When every check runs, sharding raises total runner
+minutes (28–29 versus about 19.7 per run before); the saving is wall time and the
+work avoided on small changes, not cost. No monetary saving is claimed for
+standard public-repository compute.
 
 ### Concurrency
 

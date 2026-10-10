@@ -152,6 +152,32 @@ class RepositoryHygieneTest(unittest.TestCase):
         self.assertLessEqual({"__pycache__/", "*.pyc"}, lines)
 
 
+class RemoteAndUpdaterCoverageTest(unittest.TestCase):
+    def test_every_input_of_remote_and_updater_tests_selects_remote(self):
+        for path in ("deploy/update.py", "deploy/test_update.py", "deploy/squad-service.service",
+                     "scripts/test_remote_service.py", "cmd/squad/service.go", "internal/remote/remote.go",
+                     "internal/remote/remote_test.go", "go.mod"):
+            self.assertTrue(ci_tool.classify([path])["remote"], path)
+
+    def test_unrelated_documentation_and_skill_changes_skip_remote(self):
+        self.assertFalse(ci_tool.classify(["docs/README.md"])["remote"])
+        self.assertFalse(ci_tool.classify(["workspace/agent-loop/README.md"])["remote"])
+
+    def test_selected_remote_job_that_is_skipped_fails_the_gate(self):
+        flags = {f: "true" if f == "remote" else "false" for f in ci_tool.FLAGS}
+        needs = {"scope": {"result": "success"}}
+        for job, flag in ci_tool.JOB_FLAGS.items():
+            needs[job] = {"result": "success" if flags[flag] == "true" else "skipped"}
+        needs["remote"] = {"result": "skipped"}
+        self.assertTrue(ci_tool.gate_errors(flags, needs))
+
+    def test_remote_job_runs_receiver_acceptance_and_updater_tests(self):
+        with open(WORKFLOW, encoding="utf-8") as fh:
+            job = fh.read().split("\n  remote:\n", 1)[1].split("\n  # ", 1)[0]
+        self.assertIn("python3 scripts/test_remote_service.py", job)
+        self.assertIn("python3 -m unittest discover -s deploy", job)
+
+
 class WorkflowContractTest(unittest.TestCase):
     def setUp(self):
         with open(WORKFLOW, encoding="utf-8") as fh:
@@ -171,6 +197,24 @@ class WorkflowContractTest(unittest.TestCase):
 
     def test_cancellation_is_limited_to_pull_requests(self):
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", self.text)
+
+    def test_lint_uses_the_pinned_verified_install_and_bounded_verify(self):
+        lint = self.text.split("\n  lint:\n", 1)[1].split("\n  # ", 1)[0]
+        self.assertNotIn("golangci-lint-action", self.text)
+        self.assertIn("scripts/ci/golangci.py install", lint)
+        self.assertIn("scripts/ci/golangci.py verify", lint)
+        self.assertIn("hashFiles('scripts/ci/golangci-lint.pin')", lint)
+        self.assertLess(lint.index("golangci.py verify"), lint.index("golangci-lint run"))
+
+    def test_required_check_context_and_ruleset_draft(self):
+        import json
+        path = os.path.join(ci_tool.ROOT, "docs", "ci-main-ruleset-draft.json")
+        with open(path, encoding="utf-8") as fh:
+            draft = json.load(fh)
+        checks = draft["rules"][0]["parameters"]["required_status_checks"]
+        self.assertEqual(checks, [{"context": "gate", "integration_id": 15368}])
+        self.assertEqual(draft["enforcement"], "active")
+        self.assertIn("gate:", self.text)
 
     def test_gate_runs_even_when_needs_fail(self):
         self.assertIn("if: always()", self.gate)
