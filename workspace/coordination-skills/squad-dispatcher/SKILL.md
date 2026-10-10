@@ -435,3 +435,5 @@ Review readiness is a phase signal independent of merge release. Preserve
 source/test/review progress during merge holds, and track readiness-to-start
 delay through the rolling planner. Resolve costly cross-repository contract
 questions during design admission; do not postpone them until final code review.
+
+<!-- ci scope measurement, not for merge -->
