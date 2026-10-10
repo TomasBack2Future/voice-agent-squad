@@ -37,6 +37,7 @@ SERVER_PKG = "./internal/server"
 
 # Non-Go test suites and the scope flag that runs them.
 PY_SUITES = {
+    "scripts/ci": "scope",
     "workspace/agent-loop/tests": "pyloop",
     "scripts/squad-observer": "observer",
     "deploy": "remote",
