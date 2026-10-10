@@ -68,9 +68,15 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
-      - uses: golangci/golangci-lint-action@v7
+      # Pinned release, SHA-256 verified, cached. Only identified transient
+      # network failures are retried (bounded); everything else fails at once.
+      - uses: actions/cache@v4
         with:
-          version: v2.11.4
+          path: ${{ runner.temp }}/golangci-lint
+          key: golangci-lint-${{ hashFiles('scripts/ci/golangci-lint.pin') }}
+      - run: python3 -B scripts/ci/golangci.py install --dest "$RUNNER_TEMP/golangci-lint"
+      - run: python3 -B scripts/ci/golangci.py verify
+      - run: golangci-lint run
 
   # Full -race coverage of every package and test, split across parallel
   # runners. `ci_tool.py inventory` proves each test runs in exactly one shard.

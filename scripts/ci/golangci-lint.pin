@@ -1,0 +1,4 @@
+# Pinned golangci-lint release used by CI (linux/amd64). Upgrade the version and
+# its SHA-256 from the release's checksums.txt together; CI fails on a mismatch.
+version=2.11.4
+sha256_linux_amd64=200c5b7503f67b59a6743ccf32133026c174e272b930ee79aa2aa6f37aca7ef1
