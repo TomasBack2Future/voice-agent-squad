@@ -5,62 +5,63 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run every check regardless of changed paths
+        type: boolean
+        default: true
+
+# Only superseded pull-request runs are cancelled, and only for the same PR.
+# main pushes and manual runs get a unique group so they are never cancelled.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CGO_ENABLED: "0"
 
 jobs:
-  test:
-    # Refs #74: ubuntu-only; cross-build still covers darwin targets,
-    # and no step in this job is macOS-specific (macOS billed x10).
+  # Selects checks from the changed paths. Pull requests are scoped; main
+  # pushes and manual runs always select everything. Unknown paths broaden.
+  scope:
     runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.scope.outputs.go }}
+      pyloop: ${{ steps.scope.outputs.pyloop }}
+      observer: ${{ steps.scope.outputs.observer }}
+      node: ${{ steps.scope.outputs.node }}
+      remote: ${{ steps.scope.outputs.remote }}
+      doc: ${{ steps.scope.outputs.doc }}
+      cross: ${{ steps.scope.outputs.cross }}
+      smoke: ${{ steps.scope.outputs.smoke }}
+      mode: ${{ steps.scope.outputs.mode }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: install pinned workflow evidence parser
-        run: python3 -m pip install -r workspace/agent-loop/workflow-requirements.txt
-      - name: test optional session entrypoint without model calls
-        run: python3 -m unittest discover -s workspace/agent-loop/tests -v
-      - name: test read-only observer with isolated SQLite fixtures
-        run: python3 -m unittest discover -s scripts/squad-observer -v
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: test coordination skill guards
-        run: node --test workspace/coordination-skills/studio-issue-worker/scripts/*.test.mjs
-      - run: go vet ./...
-      - run: go test -race ./...
-        env:
-          CGO_ENABLED: "1"
-      - run: go build ./...
-      - name: real remote CLI and MCP acceptance
-        run: |
-          go build -o /tmp/squad-remote-acceptance ./cmd/squad
-          python3 scripts/test_remote_service.py /tmp/squad-remote-acceptance
-          python3 -m unittest discover -s deploy -v
+          fetch-depth: 2
+      - name: test scope, shard and gate logic
+        run: python3 -B -m unittest discover -s scripts/ci -v
+      - id: scope
+        run: python3 -B scripts/ci/ci_tool.py scope
 
-  cross-build:
+  static:
+    needs: scope
+    if: needs.scope.outputs.go == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - { os: linux,  arch: amd64 }
-          - { os: linux,  arch: arm64 }
-          - { os: darwin, arch: amd64 }
-          - { os: darwin, arch: arm64 }
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
-      - run: GOOS=${{ matrix.target.os }} GOARCH=${{ matrix.target.arch }} go build ./...
+      - name: verify every test is mapped to a job and a race shard
+        run: python3 -B scripts/ci/ci_tool.py inventory
+      - run: go vet ./...
+      - run: go build ./...
 
   lint:
+    needs: scope
+    if: needs.scope.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -71,7 +72,118 @@ jobs:
         with:
           version: v2.11.4
 
+  # Full -race coverage of every package and test, split across parallel
+  # runners. `ci_tool.py inventory` proves each test runs in exactly one shard.
+  race:
+    needs: scope
+    if: needs.scope.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [cli-1, cli-2, server, rest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+      - run: python3 -B scripts/ci/ci_tool.py race ${{ matrix.shard }}
+
+  # Go tests read README/AGENTS/CLAUDE, docs and .squad specs. Documentation
+  # changes without Go changes run those contract tests only.
+  doc-contracts:
+    needs: scope
+    if: needs.scope.outputs.doc == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+      - run: >-
+          go test -count=1
+          ./internal/scaffold ./internal/specs
+          -run 'TestMaintainedDocumentationLinks|TestReviewReferenceDoesNotDefineConsumerRoles|TestCommittedAgentsMdIsStableRepositoryGuide|TestParse_AllProjectSpecsParseCleanly|TestWalk_FindsAllSpecs'
+      - run: go test -count=1 ./cmd/squad -run 'TestReadme_QuickStartIsMCPFirst'
+
+  pyloop:
+    needs: scope
+    if: needs.scope.outputs.pyloop == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: install pinned workflow evidence parser
+        run: python3 -m pip install -r workspace/agent-loop/workflow-requirements.txt
+      - name: test optional session entrypoint without model calls
+        run: python3 -m unittest discover -s workspace/agent-loop/tests -v
+
+  observer:
+    needs: scope
+    if: needs.scope.outputs.observer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: test read-only observer with isolated SQLite fixtures
+        run: python3 -m unittest discover -s scripts/squad-observer -v
+
+  node:
+    needs: scope
+    if: needs.scope.outputs.node == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: test coordination skill guards
+        run: node --test workspace/coordination-skills/studio-issue-worker/scripts/*.test.mjs
+
+  remote:
+    needs: scope
+    if: needs.scope.outputs.remote == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: real remote CLI and MCP acceptance
+        run: |
+          go build -o /tmp/squad-remote-acceptance ./cmd/squad
+          python3 scripts/test_remote_service.py /tmp/squad-remote-acceptance
+          python3 -m unittest discover -s deploy -v
+
+  # All supported GoReleaser OS/architecture targets, one runner and one
+  # toolchain setup. Cross-compilation is not native runtime coverage.
+  cross-build:
+    needs: scope
+    if: needs.scope.outputs.cross == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+      - name: build every supported target
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            echo "== ${target}"
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./...
+          done
+
   release-smoke:
+    needs: scope
+    if: needs.scope.outputs.smoke == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -96,3 +208,17 @@ jobs:
             echo "FAIL: version $out does not match X.Y.Z-snapshot pattern" >&2
             exit 1
           fi
+
+  # The single stable required check. Selected jobs must succeed; only jobs
+  # the scope did not select may be skipped, so a skip never passes silently.
+  gate:
+    needs: [scope, static, lint, race, doc-contracts, pyloop, observer, node, remote, cross-build, release-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: verify selected jobs succeeded
+        env:
+          SCOPE_JSON: ${{ toJSON(needs.scope.outputs) }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 -B scripts/ci/ci_tool.py gate
