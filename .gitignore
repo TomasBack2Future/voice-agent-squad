@@ -26,3 +26,7 @@ docs/plans/
 .squad/backups/
 .squad/worktrees/
 .claude/
+
+# Python bytecode (never tracked; CI and tests run with -B)
+__pycache__/
+*.pyc

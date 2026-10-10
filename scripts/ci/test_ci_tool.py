@@ -1,8 +1,12 @@
 import os
 import re
+import subprocess
+import sys
 import unittest
 
-import ci_tool
+sys.dont_write_bytecode = True
+
+import ci_tool  # noqa: E402
 
 WORKFLOW = os.path.join(ci_tool.ROOT, ".github", "workflows", "ci.yml")
 ALL_BUT_DOC = sorted(f for f in ci_tool.FLAGS if f != "doc")
@@ -133,6 +137,19 @@ class InventoryTest(unittest.TestCase):
 
     def test_test_directory_without_package_fails(self):
         self.assertTrue(ci_tool.inventory_errors({"internal/ghost"}, ["github.com/zsiec/squad/internal/a"], [], []))
+
+
+class RepositoryHygieneTest(unittest.TestCase):
+    def test_no_python_bytecode_is_tracked(self):
+        tracked = subprocess.run(["git", "ls-files"], cwd=ci_tool.ROOT, check=True,
+                                 capture_output=True, text=True).stdout.splitlines()
+        bytecode = [f for f in tracked if re.search(r"(^|/)__pycache__/|\.py[co]$", f)]
+        self.assertEqual(bytecode, [])
+
+    def test_gitignore_excludes_python_bytecode(self):
+        with open(os.path.join(ci_tool.ROOT, ".gitignore"), encoding="utf-8") as fh:
+            lines = {l.strip() for l in fh}
+        self.assertLessEqual({"__pycache__/", "*.pyc"}, lines)
 
 
 class WorkflowContractTest(unittest.TestCase):
