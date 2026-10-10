@@ -223,3 +223,5 @@ sw_vers 2>/dev/null || lsb_release -a 2>/dev/null    # OS info
 ```
 
 File at https://github.com/zsiec/squad/issues with the output. Include the exact command that failed and the full output.
+
+<!-- ci scope measurement, not for merge -->
