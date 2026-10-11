@@ -106,6 +106,37 @@ func legacyWorkerStopCommands() []*cobra.Command {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"state": "eligible", "native_session": workerNative})
 	}}
 	check.Flags().StringVar(&workerNative, "native-session", "", "actual Worker native")
+	var hookNative, hookConfig string
+	hook := &cobra.Command{Use: "worker-native-hook-check", Short: "Kernel-qualified synchronous hook eligibility and execution observation; no receipt imports", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if os.Getenv("SQUAD_NATIVE_SESSION_ID") != hookNative {
+			return errors.New("exact original hook native runtime required")
+		}
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		if err := dispatch.New(bc.db, bc.repoID, nil).CheckWorkerNativeHook(cmd.Context(), bc.agentID, hookNative, hookConfig); err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"state": "eligible", "native_session": hookNative})
+	}}
+	hook.Flags().StringVar(&hookNative, "native-session", "", "actual original hook native")
+	hook.Flags().StringVar(&hookConfig, "hook-config", "", "actual selected native hook configuration")
+	_ = hook.MarkFlagRequired("native-session")
+	_ = hook.MarkFlagRequired("hook-config")
+	hookGet := &cobra.Command{Use: "worker-native-hook-get NATIVE", Short: "Read actual kernel-observed native hook identity for controller admission", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		observation, err := dispatch.New(bc.db, bc.repoID, nil).WorkerNativeHookObservation(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(observation)
+	}}
 	var workspace string
 	source := &cobra.Command{Use: "worker-stop-source-check STOP_ID", Short: "Check the actual retained legacy worktree snapshot before replacement startup", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		bc, err := bootClaimContext(cmd.Context())
@@ -121,5 +152,5 @@ func legacyWorkerStopCommands() []*cobra.Command {
 	}}
 	source.Flags().StringVar(&workspace, "workspace", "", "exact retained source root")
 	_ = source.MarkFlagRequired("workspace")
-	return []*cobra.Command{prepare, get, observe, check, source}
+	return []*cobra.Command{prepare, get, observe, check, hook, hookGet, source}
 }

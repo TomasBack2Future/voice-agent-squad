@@ -25,3 +25,7 @@ func legacyProcessArguments(pid int) ([]string, error) {
 	}
 	return args, nil
 }
+
+func legacyProcessExecutable(pid int) (string, error) {
+	return os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+}

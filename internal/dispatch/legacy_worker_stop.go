@@ -14,10 +14,21 @@ import (
 	"github.com/zsiec/squad/internal/store"
 )
 
+const workerHandoffConsentLimit = 16384
+
+func legacyConsentBody(digest, id, workspace string, inventory []LegacyExternalOperation) ([]byte, error) {
+	body, err := json.Marshal(map[string]any{"schema_version": "squad.worker-handoff-consent.v1", "request_sha256": digest, "legacy_stop_id": id, "workspace_sha256": workspace, "inventory": inventory})
+	if err != nil || len(body) > workerHandoffConsentLimit {
+		return nil, errors.New("legacy consent exceeds the handoff read bound; reduce inventory before fencing")
+	}
+	return body, nil
+}
+
 type LegacyProcess struct {
 	PID        int    `json:"pid"`
 	Start      string `json:"start"`
 	Executable string `json:"executable"`
+	SHA256     string `json:"sha256"`
 }
 
 type LegacyExternalOperation struct {
@@ -38,15 +49,16 @@ type LegacyStopInput struct {
 }
 
 type LegacyStopReceipt struct {
-	ID                string          `json:"id"`
-	State             string          `json:"state"`
-	Input             LegacyStopInput `json:"input"`
-	Processes         []LegacyProcess `json:"processes"`
-	WorkspaceSHA256   string          `json:"workspace_sha256"`
-	ConsentOutcomeID  int64           `json:"consent_outcome_id"`
-	PreparedAt        int64           `json:"prepared_at"`
-	ObservedAt        int64           `json:"observed_at,omitempty"`
-	ObservationSHA256 string          `json:"observation_sha256,omitempty"`
+	ID                string                `json:"id"`
+	State             string                `json:"state"`
+	Input             LegacyStopInput       `json:"input"`
+	Processes         []LegacyProcess       `json:"processes"`
+	WorkspaceSHA256   string                `json:"workspace_sha256"`
+	ConsentOutcomeID  int64                 `json:"consent_outcome_id"`
+	PreparedAt        int64                 `json:"prepared_at"`
+	ObservedAt        int64                 `json:"observed_at,omitempty"`
+	ObservationSHA256 string                `json:"observation_sha256,omitempty"`
+	NativeAdmission   LegacyNativeAdmission `json:"native_admission"`
 }
 
 func validLegacyHash(v string) bool {
@@ -135,6 +147,20 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 			return out, errors.New("exact legacy stop identities required")
 		}
 	}
+	inputRaw, err := json.Marshal(input)
+	if err != nil || len(inputRaw) > 65536 {
+		return out, errors.New("legacy preparation exceeds the 64KiB input bound")
+	}
+	digest, err := WorkerHandoffDigest(q)
+	if err != nil {
+		return out, err
+	}
+	// Reject before any host/external checks or permanent native fence. The real
+	// workspace hash has this exact length, so successful preparation can always
+	// supply a consent within the downstream handoff's bound.
+	if _, err := legacyConsentBody(digest, q.LegacyStopID, strings.Repeat("0", 64), input.Inventory); err != nil {
+		return out, err
+	}
 	var assignment struct {
 		Schema         string `json:"schema_version"`
 		AssignmentID   string `json:"assignment_id"`
@@ -212,14 +238,24 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 	if err = verifyLegacyExternal(ctx, input.Inventory, q.Claim.Actor, q.Expected.WorkerThreadID); err != nil {
 		return out, err
 	}
-	digest, err := WorkerHandoffDigest(q)
+	body, err := legacyConsentBody(digest, q.LegacyStopID, workspace, input.Inventory)
 	if err != nil {
 		return out, err
 	}
 	processesRaw, _ := json.Marshal(processes)
+	admission, err := s.legacyNativeAdmission(ctx, q, digest, processes)
+	if err != nil {
+		return out, err
+	}
+	if admission.Lease.PID != input.LeasePID {
+		return out, errors.New("original supervisor differs from controller admission")
+	}
 	err = store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
 		out = LegacyStopReceipt{}
 		if err := s.legacyCustody(ctx, tx, q); err != nil {
+			return err
+		}
+		if err := s.checkLegacyNativeHook(ctx, tx, q, admission); err != nil {
 			return err
 		}
 		var pending int
@@ -244,7 +280,6 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		body, _ := json.Marshal(map[string]any{"schema_version": "squad.worker-handoff-consent.v1", "request_sha256": digest, "legacy_stop_id": q.LegacyStopID, "workspace_sha256": workspace, "inventory": input.Inventory})
 		m, err := tx.ExecContext(ctx, `INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?,'worker-stop-preparation',?,'[]','high')`, s.repoID, now, actor, q.Expected.CanonicalItemID, string(body))
 		if err != nil {
 			return err
@@ -253,8 +288,11 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 		if err != nil {
 			return err
 		}
-		out = LegacyStopReceipt{ID: q.LegacyStopID, State: "prepared", Input: input, Processes: processes, WorkspaceSHA256: workspace, ConsentOutcomeID: consent, PreparedAt: now}
+		out = LegacyStopReceipt{ID: q.LegacyStopID, State: "prepared", Input: input, Processes: processes, WorkspaceSHA256: workspace, ConsentOutcomeID: consent, PreparedAt: now, NativeAdmission: admission}
 		raw, _ := json.Marshal(out)
+		if len(raw) > 131072 {
+			return errors.New("legacy preparation exceeds the downstream receipt bound")
+		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO legacy_worker_stops(repo_id,id,request_sha256,preparation,processes,state) VALUES(?,?,?,?,?,'prepared')`, s.repoID, out.ID, digest, string(raw), string(processesRaw)); err != nil {
 			return err
 		}
@@ -262,6 +300,26 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 		return err
 	})
 	return out, err
+}
+
+func validateLegacyStopAdmission(stop LegacyStopReceipt) error {
+	digest, err := WorkerHandoffDigest(stop.Input.Handoff)
+	a := stop.NativeAdmission
+	if err != nil || a.Schema != "squad.legacy-worker-native-admission.v1" || a.RequestSHA256 != digest || a.AuthoritySHA256 != stop.Input.Handoff.HumanAuthoritySHA256 || a.Lease.PID != stop.Input.LeasePID || a.Client.PID == a.Lease.PID {
+		return errors.New("legacy preparation lacks qualified original-native admission; old PID-only receipts cannot transfer")
+	}
+	for _, identity := range []LegacyProcess{a.Client, a.Lease} {
+		found := false
+		for _, process := range stop.Processes {
+			if process == identity && process.PID > 1 && process.Start != "" && filepath.IsAbs(process.Executable) && validLegacyHash(process.SHA256) {
+				found = true
+			}
+		}
+		if !found {
+			return errors.New("legacy preparation omitted the actual original native or supervisor")
+		}
+	}
+	return nil
 }
 
 func (s *Store) legacyReleasedCustody(ctx context.Context, tx *sql.Tx, q WorkerHandoffRequest) error {
@@ -289,6 +347,9 @@ func (s *Store) LegacyWorkerStopReceipt(ctx context.Context, id string) (LegacyS
 	if err := s.db.QueryRowContext(ctx, `SELECT preparation,state,observation_sha256,processes FROM legacy_worker_stops WHERE repo_id=? AND id=?`, s.repoID, id).Scan(&raw, &state, &hash, &processes); err != nil {
 		return out, err
 	}
+	if len(raw) > 262144 {
+		return out, errors.New("bounded legacy preparation receipt required")
+	}
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return out, err
 	}
@@ -308,6 +369,9 @@ func (s *Store) CheckLegacyWorkerSource(ctx context.Context, id, workspace strin
 	}
 	if (stop.State != "observed" && stop.State != "transferred") || stop.Input.Workspace != workspace {
 		return "", errors.New("exact observed legacy source custody required")
+	}
+	if err := validateLegacyStopAdmission(stop); err != nil {
+		return "", err
 	}
 	probe := s.legacyWorkspaceProbe
 	if probe == nil {
@@ -333,11 +397,19 @@ func (s *Store) ObserveLegacyWorkerStop(ctx context.Context, actor string, contr
 	if actor != q.Controller.Actor || controller != q.Controller || out.State == "transferred" || q.LegacyExpiresAt <= s.now().Unix() {
 		return out, errors.New("current controller and unexpired legacy custody required")
 	}
+	if err := validateLegacyStopAdmission(out); err != nil {
+		return out, err
+	}
 	for _, p := range out.Processes {
-		if p.Start == "" || p.Executable == "" {
+		if p.Start == "" || p.Executable == "" || !validLegacyHash(p.SHA256) {
 			return out, errors.New("native process provenance unavailable")
 		}
 		if err = absentWorkerProcess(p.PID); err != nil {
+			return out, err
+		}
+	}
+	if s.legacyOwnerProbe == nil {
+		if err := rejectLiveLegacyNative(ctx, q.Expected.WorkerThreadID); err != nil {
 			return out, err
 		}
 	}
@@ -393,6 +465,9 @@ func (s *Store) validateLegacyHandoff(ctx context.Context, tx *sql.Tx, q WorkerH
 	if json.Unmarshal([]byte(raw), &out) != nil || state != "observed" || hash != q.LegacyStopSHA256 || request != digest || out.ConsentOutcomeID != q.ConsentOutcomeID || out.ObservedAt < out.PreparedAt || out.Input.Handoff.Expected != q.Expected || q.LegacyExpiresAt <= s.now().Unix() {
 		return out, errors.New("legacy stop hash, native custody, consent or expiration changed")
 	}
+	if err := validateLegacyStopAdmission(out); err != nil {
+		return out, err
+	}
 	recorded, _ := json.Marshal(out.Processes)
 	var fences int
 	if string(recorded) != processes {
@@ -403,6 +478,11 @@ func (s *Store) validateLegacyHandoff(ctx context.Context, tx *sql.Tx, q WorkerH
 	}
 	for _, process := range out.Processes {
 		if err := absentWorkerProcess(process.PID); err != nil {
+			return out, err
+		}
+	}
+	if s.legacyOwnerProbe == nil {
+		if err := rejectLiveLegacyNative(ctx, q.Expected.WorkerThreadID); err != nil {
 			return out, err
 		}
 	}

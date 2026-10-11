@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -28,6 +29,57 @@ func legacyPS(ctx context.Context, pid int, field string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+func legacyProcessIdentity(ctx context.Context, pid int) (LegacyProcess, error) {
+	var identity LegacyProcess
+	image, err := legacyProcessExecutable(pid)
+	if err != nil || !filepath.IsAbs(image) {
+		return identity, errors.New("actual kernel executable path unavailable")
+	}
+	image, err = filepath.EvalSymlinks(image)
+	if err != nil {
+		return identity, err
+	}
+	file, err := os.Open(image)
+	if err != nil {
+		return identity, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 512<<20 {
+		return identity, errors.New("actual kernel executable exceeds its bound")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, io.LimitReader(file, (512<<20)+1)); err != nil {
+		return identity, err
+	}
+	start, err := legacyPS(ctx, pid, "lstart")
+	if err != nil {
+		return identity, err
+	}
+	return LegacyProcess{PID: pid, Start: start, Executable: image, SHA256: fmt.Sprintf("%x", hash.Sum(nil))}, nil
+}
+
+func legacyClaudeNative(pid int, native string) bool {
+	args, err := legacyProcessArguments(pid)
+	image, imageErr := legacyProcessExecutable(pid)
+	if err != nil || imageErr != nil || len(args) == 0 {
+		return false
+	}
+	argvImage, _ := filepath.EvalSymlinks(args[0])
+	if filepath.Base(args[0]) != "claude" && argvImage != image {
+		return false
+	}
+	for i := 1; i+1 < len(args); i++ {
+		if args[i] == "--" {
+			break
+		}
+		if args[i] == "--session-id" || args[i] == "--resume" {
+			return args[i+1] == native
+		}
+	}
+	return false
+}
+
 func observeLegacyOwner(ctx context.Context, native string, leasePID int) ([]LegacyProcess, error) {
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -43,37 +95,19 @@ func observeLegacyOwner(ctx context.Context, native string, leasePID int) ([]Leg
 		if err != nil {
 			return nil, err
 		}
-		fields, err := legacyProcessArguments(pid)
-		if err != nil {
-			return nil, err
-		}
-		executable, identityErr := legacyPS(bounded, pid, "comm")
-		if identityErr != nil {
-			return nil, identityErr
-		}
-		if len(fields) > 0 && filepath.Base(fields[0]) == "claude" && filepath.Base(executable) == "claude" {
-			for i := 1; i+1 < len(fields); i++ {
-				if fields[i] == "--" {
-					break
-				}
-				if fields[i] == "--session-id" || fields[i] == "--resume" {
-					if fields[i+1] == native {
-						client = pid
-					}
-					break
-				}
-			}
-			if client != 0 {
-				if leasePID < 2 || leasePID != parentPID {
-					return nil, errors.New("exact original native parent/renewal supervisor required")
-				}
-				break
-			}
+		if legacyClaudeNative(pid, native) {
+			// Keep walking: a nested fake-named client cannot hide the original
+			// ancestor. The controller also binds this exact kernel image/start.
+			client = pid
 		}
 		pid = parentPID
 	}
 	if client == 0 {
 		return nil, errors.New("qualified original Claude native Bash ancestor unavailable; App/terminal receipt import is unsupported")
+	}
+	parent, err := legacyPS(bounded, client, "ppid")
+	if err != nil || parent != strconv.Itoa(leasePID) || client != os.Getppid() {
+		return nil, errors.New("direct original native exec producer and exact parent/renewal supervisor required")
 	}
 	// Parent IDs carry no prompts or credentials. Read argv only for the narrow
 	// client/descendant qualification, and persist selected process metadata.
@@ -107,11 +141,7 @@ func observeLegacyOwner(ctx context.Context, native string, leasePID int) ([]Leg
 	}
 	var out []LegacyProcess
 	for pid := range owned {
-		start, err := legacyPS(bounded, pid, "lstart")
-		if err != nil {
-			return nil, err
-		}
-		executable, err := legacyPS(bounded, pid, "comm")
+		identity, err := legacyProcessIdentity(bounded, pid)
 		if err != nil {
 			return nil, err
 		}
@@ -130,10 +160,28 @@ func observeLegacyOwner(ctx context.Context, native string, leasePID int) ([]Leg
 				return nil, errors.New("another original native child/tool is still running; join it before stop preparation")
 			}
 		}
-		out = append(out, LegacyProcess{PID: pid, Start: start, Executable: executable})
+		out = append(out, identity)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
 	return out, nil
+}
+
+func rejectLiveLegacyNative(ctx context.Context, native string) error {
+	raw, err := exec.CommandContext(ctx, "/bin/ps", "-axo", "pid=,uid=").Output()
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != strconv.Itoa(os.Getuid()) {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err == nil && legacyClaudeNative(pid, native) {
+			return errors.New("a current original-native host process remains; saved PID disappearance is insufficient")
+		}
+	}
+	return nil
 }
 
 func legacyWorkspaceDigest(ctx context.Context, workspace string) (string, error) {

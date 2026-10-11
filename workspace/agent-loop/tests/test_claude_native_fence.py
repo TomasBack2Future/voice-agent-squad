@@ -20,9 +20,9 @@ class NativeFenceTests(unittest.TestCase):
     def test_native_readback_and_sanitized_identity(self):
         result = subprocess.CompletedProcess([], 0, json.dumps({'state': 'eligible', 'native_session': 'old-native'}), '')
         with patch('claude_native_fence.subprocess.run', return_value=result) as run:
-            fence.check(self.config, 'old-native')
+            fence.check(self.config, 'old-native', Path('/fixture/config.json'))
         args, kwargs = run.call_args
-        self.assertEqual(args[0][-2:], ['--native-session', 'old-native'])
+        self.assertEqual(args[0][2:], ['worker-native-hook-check', '--native-session', 'old-native', '--hook-config', '/fixture/config.json'])
         self.assertEqual(kwargs['env']['SQUAD_AGENT'], 'old-actor')
         self.assertEqual(kwargs['env']['SQUAD_NATIVE_SESSION_ID'], 'old-native')
         self.assertEqual(kwargs['env']['PYTHONDONTWRITEBYTECODE'], '1')
@@ -34,7 +34,7 @@ class NativeFenceTests(unittest.TestCase):
             with self.subTest(native=native, status=status), patch('claude_native_fence.subprocess.run',
                     return_value=subprocess.CompletedProcess([], status, body, '')):
                 with self.assertRaises(ValueError):
-                    fence.check(self.config, native)
+                    fence.check(self.config, native, Path('/fixture/config.json'))
 
     def test_worker_settings_install_blocking_pre_tool_hook(self):
         with tempfile.TemporaryDirectory(prefix='guard with spaces ') as directory:

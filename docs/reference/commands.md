@@ -1105,14 +1105,17 @@ fence hook. No model request is needed for this boundary. Qualify that the actua
 native Bash path and normal exit are supported before using them with live work.
 
 ```sh
-squad dispatch worker-stop-prepare --request ORIGINAL_NATIVE_PREPARATION_JSON
+exec /absolute/reviewed/squad dispatch worker-stop-prepare --request ORIGINAL_NATIVE_PREPARATION_JSON
 squad dispatch worker-stop-get STOP_ID
 squad dispatch worker-stop-observe STOP_ID --native-session CONTROLLER_NATIVE --epoch EPOCH
 squad dispatch worker-native-check --native-session WORKER_NATIVE
+squad dispatch worker-native-hook-get WORKER_NATIVE
 squad dispatch worker-stop-source-check STOP_ID --workspace RETAINED_WORKTREE
 ```
 
-Preparation runs only within the original Claude CLI process ancestry. The
+Preparation replaces its native Bash shell with `exec`, directly below the
+outermost original Claude CLI. A continuing shell, wrapper or nested fake-named
+client cannot prepare a stop. The
 64KiB request contains `handoff`, the complete original `assignment`, absolute
 `workspace`, actual dedicated parent/renewal `lease_pid`, and explicit bounded
 external-operation `inventory`. Its handoff uses `legacy_stop_id`,
@@ -1122,12 +1125,38 @@ original envelope and source authorization must be retained exactly. Native
 identity is read from kernel argument boundaries, never reconstructed from a
 terminal display or imported process JSON. Unknown fields reject preparation.
 
+Before this boundary the current controller's effective held outcome must be a
+typed `squad.legacy-worker-native-admission.v1` object. It binds
+`request_sha256`, `human_authority_sha256`, `client`, `lease` and `hook`.
+Both process identities contain the actual `pid`, kernel `executable`, executable
+`sha256` and `start`. The controller independently qualifies the original client
+against the installed Claude artifact and its dedicated supervisor before
+selecting them; matching a process name alone is insufficient. `hook` binds the
+selected settings/config/module paths and SHA256 values, receiver module SHA256,
+and the Python executable path/SHA256. `worker-native-hook-get` reads the actual
+kernel-observed `client` and `hook`; it does not assert the client has stopped.
+The real synchronous `claude_native_fence.py` hook must execute again at the
+native tool boundary after that held outcome. Its CLI-only
+`worker-native-hook-check --native-session NATIVE --hook-config CONFIG` adapter
+accepts only the exact original native/Python hook ancestry and selected native
+settings, never a supplied hook receipt or process snapshot. Configuration must
+declare `runtime: "claude"`, `role: "worker"`, the original actor/native and
+`legacy_native_fence: true`. Changed artifacts or missing/stale execution fail
+before any permanent fence. Remaining children must be the exact selected
+receiver or the reviewed binary's bounded listener, and all must later join.
+The source worktree has no general adapter for arbitrary detached writers.
+
 Preparation atomically publishes real original-owner consent, stores the actual
 native/renewal/receiver process snapshot and source digest, and installs a
 persistent native fence. It does not stop a process. After the owner uses its
 qualified normal exit and its receiver/renewal processes join, the current
 controller observes their actual absence and rechecks retained source/external
-custody. App/terminal donors without a qualified native-stop executor are
+custody, including a fresh host scan for another process with the old native.
+Version26 rejects every future callback targeting a fenced native, including
+decision wakes; the replacement wake targets its new native. Consent must fit
+the same 16KiB bound used by final handoff, and the stored preparation must fit
+its downstream receipt bound, before a fence can commit. Oversized input leaves
+the original custody unfenced. App/terminal donors without a qualified native-stop executor are
 unsupported; process absence or arbitrary stopped JSON cannot qualify them.
 
 The controller publishes a canonical typed

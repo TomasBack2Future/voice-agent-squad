@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -346,6 +347,24 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("incomplete legacy Worker native stop/fence schema; refusing legacy bootstrap")
 		}
 		legacy = append(legacy, legacyRow{25, "worker_handoffs"})
+		var hookObjects int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='worker_native_hook_observations'`).Scan(&hookObjects); err != nil {
+			return err
+		}
+		if hookObjects != 0 {
+			var hookColumns int
+			var callbackSQL string
+			if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('worker_native_hook_observations') WHERE name IN ('repo_id','native_session','actor','observation','observed_at')`).Scan(&hookColumns); err != nil {
+				return err
+			}
+			if err := db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='trigger' AND name='legacy_worker_reject_old_callback'`).Scan(&callbackSQL); err != nil {
+				return err
+			}
+			if hookColumns != 5 || strings.Contains(callbackSQL, "decision-resolved") {
+				return fmt.Errorf("incomplete legacy native hook/fence upgrade; refusing legacy bootstrap")
+			}
+			legacy = append(legacy, legacyRow{26, "legacy_worker_fence"})
+		}
 	}
 	var receiverReadiness int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('dispatch_controller_receivers') WHERE name IN ('owner_pid','bound_at','wake_kind')`).Scan(&receiverReadiness); err != nil {

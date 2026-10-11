@@ -41,3 +41,15 @@ func legacyProcessArguments(pid int) ([]string, error) {
 	// Do not decode, return or persist the trailing environment.
 	return args, nil
 }
+
+func legacyProcessExecutable(pid int) (string, error) {
+	raw, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil || len(raw) < 5 || len(raw) > 1<<20 {
+		return "", errors.New("native kernel executable identity unavailable")
+	}
+	end := bytes.IndexByte(raw[4:], 0)
+	if end < 1 {
+		return "", errors.New("native kernel executable identity unavailable")
+	}
+	return string(raw[4 : 4+end]), nil
+}

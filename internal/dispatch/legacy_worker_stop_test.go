@@ -28,14 +28,47 @@ func legacyStopFixture(t *testing.T) (*Store, WorkerHandoffRequest, LegacyStopIn
 	if err := child.Run(); err != nil {
 		t.Fatal(err)
 	}
+	lease := exec.Command("sh", "-c", "exit 0")
+	if err := lease.Run(); err != nil {
+		t.Fatal(err)
+	}
+	clientIdentity := LegacyProcess{PID: child.Process.Pid, Start: "observed-before-exit", Executable: "/isolated/native", SHA256: strings.Repeat("c", 64)}
+	leaseIdentity := LegacyProcess{PID: lease.Process.Pid, Start: "observed-before-exit", Executable: "/isolated/supervisor", SHA256: strings.Repeat("d", 64)}
 	s.legacyOwnerProbe = func(context.Context, string, int) ([]LegacyProcess, error) {
-		return []LegacyProcess{{PID: child.Process.Pid, Start: "observed-before-exit", Executable: "isolated-observer-fixture"}}, nil
+		return []LegacyProcess{clientIdentity, leaseIdentity}, nil
 	}
 	s.legacyWorkspaceProbe = func(context.Context, string) (string, error) { return strings.Repeat("b", 64), nil }
 	workspace := t.TempDir()
 	original, _ := json.Marshal(map[string]any{"schema_version": "agent-loop.assignment.v1", "assignment_id": "isolated/assignment", "repository": "o/r", "branch": "isolated", "base_sha": strings.Repeat("a", 40), "project_profile": map[string]any{"id": "isolated", "version": 1, "path": "isolated-profile.json"}, "evidence_required": []string{"test"}, "issue": "o/r#1", "item": "T", "worktree": workspace, "reservation": map[string]any{"key": "D", "generation": 1}, "role": map[string]any{"id": "worker", "skill": "agent-loop-worker", "version": 1}, "authorization": map[string]bool{"source_mutation": true, "production": false}})
-	input := LegacyStopInput{Handoff: q, Workspace: workspace, Assignment: original, LeasePID: child.Process.Pid, Inventory: []LegacyExternalOperation{}}
+	input := LegacyStopInput{Handoff: q, Workspace: workspace, Assignment: original, LeasePID: lease.Process.Pid, Inventory: []LegacyExternalOperation{}}
+	legacyNativeAdmissionFixture(t, s, q, clientIdentity, leaseIdentity)
 	return s, q, input
+}
+
+// Explicit private state fixtures are not evidence that a real Claude hook ran.
+func legacyNativeAdmissionFixture(t *testing.T, s *Store, q WorkerHandoffRequest, client, lease LegacyProcess) {
+	t.Helper()
+	digest, err := WorkerHandoffDigest(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := LegacyHookIdentity{SettingsPath: "/isolated/settings.json", SettingsSHA256: strings.Repeat("e", 64), ConfigPath: "/isolated/config.json", ConfigSHA256: strings.Repeat("f", 64), ModulePath: "/isolated/claude_native_fence.py", ModuleSHA256: strings.Repeat("a", 64), ReceiverSHA256: strings.Repeat("a", 64), PythonExecutable: "/isolated/python", PythonSHA256: strings.Repeat("a", 64)}
+	body, _ := json.Marshal(LegacyNativeAdmission{Schema: "squad.legacy-worker-native-admission.v1", RequestSHA256: digest, AuthoritySHA256: q.HumanAuthoritySHA256, Client: client, Lease: lease, Hook: hook})
+	message, err := s.db.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?, 'native-admission',?,'[]','high')`, s.repoID, s.now().Unix(), q.Controller.Actor, q.Expected.CanonicalItemID, string(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := message.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE dispatch_decisions SET outcome_id=? WHERE repo_id=? AND reservation_key=? AND generation=? AND revision=?`, id, s.repoID, q.Expected.ItemID, q.Expected.Generation, q.DecisionRevision); err != nil {
+		t.Fatal(err)
+	}
+	observed, _ := json.Marshal(nativeHookObservation{Client: client, Hook: hook, DecisionRevision: q.DecisionRevision, DecisionOutcomeID: id, RequestSHA256: digest})
+	if _, err := s.db.Exec(`INSERT INTO worker_native_hook_observations(repo_id,native_session,actor,observation,observed_at) VALUES(?,?,?,?,?) ON CONFLICT(repo_id,native_session) DO UPDATE SET observation=excluded.observation,observed_at=excluded.observed_at`, s.repoID, q.Expected.WorkerThreadID, q.Claim.Actor, string(observed), s.now().Unix()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func legacyHandoffFixture(t *testing.T, configure ...func(*Store, *WorkerHandoffRequest, *LegacyStopInput)) (*Store, WorkerHandoffRequest) {
@@ -43,6 +76,11 @@ func legacyHandoffFixture(t *testing.T, configure ...func(*Store, *WorkerHandoff
 	s, q, input := legacyStopFixture(t)
 	for _, change := range configure {
 		change(s, &q, &input)
+		processes, err := s.legacyOwnerProbe(context.Background(), q.Expected.WorkerThreadID, input.LeasePID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacyNativeAdmissionFixture(t, s, q, processes[0], processes[1])
 	}
 	ctx := context.Background()
 	prepared, err := s.PrepareLegacyWorkerStop(ctx, q.Claim.Actor, input)
@@ -112,11 +150,154 @@ func TestLegacyNativeFenceRejectsOlderRuntimePinAndCallback(t *testing.T) {
 		`INSERT INTO execution_authorizations(repo_id,id,item_id,holder,generation,binding,state,created_at,updated_at) VALUES('repo-test','stale','T','old-worker',1,'{"native":"old-session"}','active',1,1)`,
 		`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id) VALUES('repo-test','OTHER','github:o/r#2','old-dispatcher',1,1,0,'dispatched',1,'old-session')`,
 		`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id) VALUES('repo-test','old-dispatcher','stale-callback','D',1,'old-session','T','blocked',1,1)`,
+		`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id) VALUES('repo-test','old-worker','stale-wake','D',1,'old-session','T','decision-resolved',1,1)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement); err == nil {
 			t.Fatal("older runtime bypassed the durable fence", statement)
 		}
+	}
+}
+
+func TestLegacyPreparationRejectsOversizedConsentBeforeFence(t *testing.T) {
+	s, q, input := legacyStopFixture(t)
+	// The CLI accepts this input below 64KiB, but the old consent copied the
+	// inventory into a body larger than the handoff's 16KiB read limit.
+	for i := 0; i < 32; i++ {
+		input.Inventory = append(input.Inventory, LegacyExternalOperation{Kind: "readonly-github-run", Identity: "1", Repository: "o/r", HeadSHA: strings.Repeat("a", 40), Attempt: 1, ReceiptPath: "/" + strings.Repeat("x", 512)})
+	}
+	raw, _ := json.Marshal(input)
+	if len(raw) >= 65536 {
+		t.Fatal("regression input exceeds preparation ingress bound")
+	}
+	_, err := s.PrepareLegacyWorkerStop(context.Background(), q.Claim.Actor, input)
+	if err == nil || !strings.Contains(err.Error(), "consent") {
+		t.Fatal("oversized consent must fail before host or external checks", err)
+	}
+	for _, table := range []string{"legacy_worker_stops", "worker_native_fences"} {
+		var count int
+		if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+			t.Fatal("oversized preparation partially fenced its original owner", table, count, err)
+		}
+	}
+}
+
+func TestLegacyPreparationRequiresControllerNativeAdmissionAndExecutedHook(t *testing.T) {
+	for _, missing := range []string{"controller admission", "executed hook"} {
+		t.Run(missing, func(t *testing.T) {
+			s, q, input := legacyStopFixture(t)
+			if missing == "controller admission" {
+				_, _ = s.db.Exec(`UPDATE messages SET body='{}' WHERE id=(SELECT outcome_id FROM dispatch_decisions)`)
+			} else {
+				_, _ = s.db.Exec(`DELETE FROM worker_native_hook_observations`)
+			}
+			if _, err := s.PrepareLegacyWorkerStop(context.Background(), q.Claim.Actor, input); err == nil {
+				t.Fatal("PID-only observer was admitted without " + missing)
+			}
+		})
+	}
+}
+
+func TestLegacyPreparationRejectsImpostorOrStaleHookWithoutPartialFence(t *testing.T) {
+	for _, change := range []string{"client pid", "client start", "client image", "client hash", "lease identity", "hook config", "hook module", "hook python", "hook stale", "hook revision", "hook request", "admission author"} {
+		t.Run(change, func(t *testing.T) {
+			s, q, input := legacyStopFixture(t)
+			var path, value string
+			switch change {
+			case "client pid":
+				path, value = "$.client.pid", "999999"
+			case "client start":
+				path, value = "$.client.start", "other-start"
+			case "client image":
+				path, value = "$.client.executable", "/impostor/claude"
+			case "client hash":
+				path, value = "$.client.sha256", strings.Repeat("9", 64)
+			case "lease identity":
+				path, value = "$.lease.executable", "/impostor/supervisor"
+			case "hook config":
+				path, value = "$.hook.config_sha256", strings.Repeat("9", 64)
+			case "hook module":
+				path, value = "$.hook.module_sha256", strings.Repeat("9", 64)
+			case "hook python":
+				path, value = "$.hook.python_sha256", strings.Repeat("9", 64)
+			case "hook stale":
+				_, _ = s.db.Exec(`UPDATE worker_native_hook_observations SET observed_at=?`, s.now().Unix()-1)
+			case "hook revision":
+				_, _ = s.db.Exec(`UPDATE worker_native_hook_observations SET observation=json_set(observation,'$.decision_revision',1)`)
+			case "hook request":
+				_, _ = s.db.Exec(`UPDATE worker_native_hook_observations SET observation=json_set(observation,'$.request_sha256',?)`, strings.Repeat("9", 64))
+			case "admission author":
+				_, _ = s.db.Exec(`UPDATE messages SET agent_id='impostor' WHERE kind='native-admission'`)
+			}
+			if path != "" {
+				if _, err := s.db.Exec(`UPDATE messages SET body=json_set(body,?,?) WHERE kind='native-admission'`, path, value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.PrepareLegacyWorkerStop(context.Background(), q.Claim.Actor, input); err == nil {
+				t.Fatal("unsafe native stop accepted", change)
+			}
+			for _, table := range []string{"worker_native_fences", "legacy_worker_stops"} {
+				var n int
+				if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil || n != 0 {
+					t.Fatal("partial stop", table, n, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyPreparationConcurrentReplayAndFenceFailureAreAtomic(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "identical replay", true: "late fence failure"}[fail], func(t *testing.T) {
+			s, q, input := legacyStopFixture(t)
+			if fail {
+				if _, err := s.db.Exec(`CREATE TRIGGER reject_preparation_fence BEFORE INSERT ON worker_native_fences BEGIN SELECT RAISE(ABORT,'isolated fence failure'); END`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var wg sync.WaitGroup
+			results := make(chan error, 2)
+			for range 2 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := s.PrepareLegacyWorkerStop(context.Background(), q.Claim.Actor, input)
+					results <- err
+				}()
+			}
+			wg.Wait()
+			close(results)
+			for err := range results {
+				if (err != nil) != fail {
+					t.Fatal(err)
+				}
+			}
+			want := 1
+			if fail {
+				want = 0
+			}
+			for _, query := range []string{`SELECT count(*) FROM legacy_worker_stops`, `SELECT count(*) FROM worker_native_fences`, `SELECT count(*) FROM messages WHERE kind='worker-stop-preparation'`} {
+				var n int
+				if err := s.db.QueryRow(query).Scan(&n); err != nil || n != want {
+					t.Fatal("partial or duplicate preparation", n, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyHandoffRejectsPreUpgradePIDOnlyStop(t *testing.T) {
+	s, q := legacyHandoffFixture(t)
+	if _, err := s.db.Exec(`UPDATE legacy_worker_stops SET preparation=json_remove(preparation,'$.native_admission')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WorkerHandoff(context.Background(), q.Controller.Actor, q); err == nil {
+		t.Fatal("pre-upgrade PID-only stop transferred")
+	}
+	r, err := s.Get(context.Background(), q.Expected.ItemID)
+	if err != nil || r.Generation != 1 {
+		t.Fatal("partial upgrade transfer", r, err)
 	}
 }
 

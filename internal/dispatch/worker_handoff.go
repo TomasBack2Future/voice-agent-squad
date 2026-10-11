@@ -234,7 +234,7 @@ func (s *Store) WorkerHandoff(ctx context.Context, actor string, q WorkerHandoff
 			Schema string `json:"schema_version"`
 			Hash   string `json:"request_sha256"`
 		}
-		if len(body) > 16384 || json.Unmarshal([]byte(body), &consent) != nil || consent.Schema != "squad.worker-handoff-consent.v1" || consent.Hash != consentHash {
+		if len(body) > workerHandoffConsentLimit || json.Unmarshal([]byte(body), &consent) != nil || consent.Schema != "squad.worker-handoff-consent.v1" || consent.Hash != consentHash {
 			return errors.New("original owner did not authorize this exact Worker handoff")
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM agents WHERE repo_id=? AND id=?`, s.repoID, q.NewActor).Scan(&count); err != nil || count != 1 {

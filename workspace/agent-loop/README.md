@@ -991,9 +991,42 @@ snapshot; pin and legacy fields cannot be mixed. Original preparation, normal
 exit/receiver/renewal join, controller observation and typed supervisory
 attestation precede handoff. A metadata-only native allocation is not a model
 launch. Existing clients must adopt and qualify the blocking native fence hook
-before live preparation; new Claude source Workers install it synchronously.
+before live preparation; new Claude source Workers install it synchronously with
+the exact `runtime: "claude"` receiver configuration. The current controller's
+typed held admission binds the genuine original kernel client/supervisor and
+selected hook artifact hashes; the hook must actually execute after that
+admission. The original Bash preparation uses `exec` directly under the native,
+with no continuing shell or other unqualified child writer. Version26 is an
+additive upgrade from25; it blocks every stale native wake as well as callbacks.
+Consent and preparation bounds are checked before a permanent fence commits.
 Unsupported App/terminal stop adapters and ENV/Deployer execution remain
 separate capability gates. Source tests do not establish live adoption.
+
+For an existing Claude native, hook adoption is a separate post-install phase
+owned by its current Dispatcher. At the original session's safe boundary, verify
+its exact process/start, dedicated supervisor, selected `--settings` file,
+assignment and current held decision. Preserve existing hooks and add the reviewed
+synchronous fence with its installed module and that original Worker's config;
+record their exact hashes. Do not launch another native or request a model turn.
+Claude's [hook reference](https://code.claude.com/docs/en/hooks#disable-or-remove-hooks)
+documents automatic settings watching, and its
+[`/hooks` menu](https://code.claude.com/docs/en/hooks#the-hooks-menu) provides a
+read-only view of the selected command and settings origin. Read back that view
+in the same native; an edited file alone does not prove adoption.
+
+Then use the original native's supported local Bash boundary for one harmless
+read-only command. It must actually execute the selected synchronous hook and
+produce `worker-native-hook-get` evidence for that same original client/start,
+artifact hashes and adopted decision. After the exact typed stop admission is
+adopted, the native preparation's own hook must record its new revision/outcome
+and whole-request digest before the `exec` producer can fence it. A local Bash
+mode that bypasses hooks, a retained intermediary shell, an unqualified
+supervisor or missing settings readback is an unsupported adoption state.
+Do not run the hook manually with manufactured event input, reinterpret a fresh
+fixture as the old native, or stop the old writer to discover whether it worked.
+Retain its custody and report that precise phase-specific capability gap. This
+qualification follows reviewed installation; it is not an installation gate or
+permission to use an alternative model request.
 
 State retains the original writer intent, binding, tool journal, native items,
 delivery command journal, report and join receipt. A lost startup/result or
