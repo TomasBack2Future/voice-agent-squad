@@ -6,6 +6,7 @@ processes. It neither reads the live Squad ledger nor invokes models in
 `contract` mode. Go and Python 3 are required.
 
 ```sh
+python3 -m pip install -r workspace/agent-loop/workflow-requirements.txt
 PYTHONDONTWRITEBYTECODE=1 python3 workspace/agent-loop/recovery_smoke.py contract \
   --output /tmp/squad-recovery-smoke.json
 ```
@@ -20,7 +21,7 @@ It is test evidence, **not an execution admission or ownership receipt**.
 
 | Coverage | Actual assertion |
 | --- | --- |
-| All nine directed Claude/Codex/Muse controller identity combinations, including same-client resume | Real portable identity adapter, Squad CLI and SQLite; controller handoff retains the legacy Worker, claim, pause and uncommitted fixture; replay is idempotent; retired controller cannot rebind |
+| All nine directed Claude/Codex/Muse controller identity combinations, including same-client controller replacement | Real portable identity adapter, Squad CLI and SQLite; controller handoff retains the legacy Worker, claim, pause and uncommitted fixture; replay is idempotent; retired controller cannot rebind |
 | Post-transfer event handling and progress | Pending result reaches the new controller; polling does not mean handled; explicit delivery and handling persist; next decision reaches the original Worker; a new phase publishes once |
 | Dispatcher, Worker, Deployer, Reviewer, Investigator role boundary | Worker envelope accepts Worker and rejects the other four roles; deployment is never relabeled as source work |
 | Interrupted tools, stale ownership, lost response and result replay | Existing owned-writer/stdio, receiver, result-publication and readiness regressions |

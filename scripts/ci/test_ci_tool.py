@@ -126,6 +126,8 @@ class RecoverySmokeCoverageTest(unittest.TestCase):
             job = fh.read().split("\n  recovery-smoke:\n", 1)[1].split("\n  # ", 1)[0]
         self.assertIn("recovery_smoke.py contract --output recovery-smoke.json", job)
         self.assertIn("if-no-files-found: error", job)
+        self.assertLess(job.index("pip install -r workspace/agent-loop/workflow-requirements.txt"),
+                        job.index("recovery_smoke.py contract"))
         self.assertNotIn("continue-on-error", job)
 
 

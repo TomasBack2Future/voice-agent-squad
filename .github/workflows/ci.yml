@@ -233,6 +233,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: install pinned workflow evidence parser
+        run: python3 -m pip install -r workspace/agent-loop/workflow-requirements.txt
       - run: python3 workspace/agent-loop/recovery_smoke.py contract --output recovery-smoke.json
       - uses: actions/upload-artifact@v4
         if: always()
