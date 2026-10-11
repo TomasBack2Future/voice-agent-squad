@@ -970,9 +970,28 @@ supervisor records one durable outcome and publishes `handoff-complete` or
 request key; same-execution retries deduplicate, while a resumed execution can
 publish its distinct result. A hold still permits a truthful blocked report and
 rejects completion. It does not release the primary
-claim, close the Issue or start another controller. After a completed native turn
-and queued decisions drain, the bounded invocation exits; later continuation
-uses `--resume` on this same assignment. It is not a permanently idle TUI daemon.
+claim, close the Issue or start another controller. The default `live-view` exits
+after a completed turn and queued decisions drain; later continuation uses
+`--resume` on this same assignment. Select `ui_mode: interactive` for persistent
+owned editable terminal input over the mediated host. Completion leaves input
+visible and accepts another turn on the same native. A durable task `report`
+joins and publishes that execution first, preserving its report and outcome
+evidence. The input frontend retains the same native lock while the old host is
+joined; the next human submission or durable decision resumes that native after
+fresh custody checks and full canonical startup loading. Its idle decision
+listener is frontend-owned transport, not a source writer. Enter during a running turn
+keeps the human draft local. Escape suspends write admission and interrupts;
+failure/interruption leaves visible input after verified owned cleanup. `/resume`
+reconnects the same native after the old writer joins; `/exit` joins the host,
+receiver, bridge and owned containers, retaining the primary claim. HOLD refuses
+new source turns and leaves input visible. Refused HOLD submissions are restored
+as editable local drafts; Ctrl-R swaps a second retained draft. Heartbeat failure
+while waiting leaves blocked input rather than closing the UI. Tools enforce current
+claim, decision and controller fencing. Interactive mode requires a terminal
+and never substitutes passive logs or an unmediated TUI. `sessionInUse` is
+nonretryable: preserve the lease and reconcile the original host's verified join
+before explicit same-native resume. No model retry timer or competing writer
+is started.
 
 After a qualified `dispatch worker-handoff`, a fresh Muse native can preserve
 the original dirty source worktree without using `--resume`. Supply the optional

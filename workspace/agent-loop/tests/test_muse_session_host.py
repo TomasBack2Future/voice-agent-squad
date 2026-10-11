@@ -108,5 +108,10 @@ class MuseHostTests(unittest.TestCase):
     def test_uuid7(self):
         import uuid
         self.assertEqual(uuid.UUID(host.uuid7()).version,7)
+    def test_session_in_use_is_precise_nonretryable_reconciliation(self):
+        error=host.RpcError('session/resume',{'code':-32021})
+        self.assertEqual(error.code,-32021)
+        self.assertIn('nonretryable',str(error))
+        self.assertIn('join the actual original host',str(error))
 
 if __name__=='__main__': unittest.main()

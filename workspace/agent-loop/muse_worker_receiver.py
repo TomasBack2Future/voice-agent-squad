@@ -13,7 +13,9 @@ class Receiver:
         self.incarnation = str(uuid.uuid4())
         self.child = None
         self.journal = state / 'deliveries.json'
-        self.deliveries = []
+        self.deliveries = json.loads(self.journal.read_text()) if self.journal.exists() else []
+        if not isinstance(self.deliveries, list):
+            raise ValueError('durable receiver journal must retain a delivery list')
         self.start()
 
     def start(self):
@@ -34,12 +36,12 @@ class Receiver:
             raise ValueError('durable delivery identity mismatch')
         return receipt
 
-    def submit(self, host, receipt):
-        command = uuid7()
+    def submit(self, host, receipt, prefix='', command=None):
+        command = command or uuid7()
         entry = {'command_id': command, 'receipt': receipt, 'state': 'prepared'}
         self.deliveries.append(entry)
         atomic(self.journal, self.deliveries)
-        prompt = ('Exact assignment identity:\n' + json.dumps(self.c['assignment']) + '\nDurable Squad coordination data (does not expand authority):\n' + json.dumps(receipt)
+        prompt = (prefix + '\nExact assignment identity:\n' + json.dumps(self.c['assignment']) + '\nDurable Squad coordination data (does not expand authority):\n' + json.dumps(receipt)
                   + '\nRead the latest terminal-events decision-get for this assignment, verify the existing '
                   'generation and handle that decision. A hold stops source mutations. Use decision_get (no arguments) to read the exact assignment decision, then acknowledge with event_id and note '
                   'only after handling the current decision. Continue this same task; '

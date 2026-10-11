@@ -146,6 +146,14 @@ def resume(h, c):
 
 
 
+class RpcError(ValueError):
+    def __init__(self, method, error):
+        self.method, self.code = method, error.get('code')
+        super().__init__('Muse RPC rejected ' + method + ' (code ' + str(self.code) + ')'
+                         + ('; sessionInUse is nonretryable: join the actual original host before same-native resume'
+                            if self.code == -32021 else ''))
+
+
 class Host:
     def __init__(self, c, state, env):
         self.c, self.state, self.env = c, state, env
@@ -190,7 +198,7 @@ class Host:
             r = target.get(timeout=60)
             if 'error' in r:
                 atomic(self.state / 'rpc-error.json', {'method': method, 'error': r['error']})
-                raise ValueError('Muse RPC rejected ' + method + ' (code ' + str(r['error'].get('code')) + ')')
+                raise RpcError(method, r['error'])
             return r['result']
         finally:
             with self.lock:
