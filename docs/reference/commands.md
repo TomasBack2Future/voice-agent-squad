@@ -1202,6 +1202,15 @@ intact. Use the returned `recovery.handoff` for the final request, adding its
 actual consent/observation and a fresh final attestation for the recovered
 request hash and deadline. No original consent is rewritten or manufactured.
 
+The retained source digest binds HEAD, branch, origin, staged index object IDs,
+modes and conflict stages, plus tracked and untracked regular-file bytes and
+permission modes. Git metadata output is bounded to 16MiB per command and file
+contents to 256MiB in total. These checks use read-only index listing rather than
+`git status`, so repository clean filters are not invoked. Inherited `GIT_*`
+overrides and system/global configuration are excluded, fsmonitor and hooks are
+disabled, and optional Git locking is disabled. Symlink and submodule custody
+still require separate qualification.
+
 Recovery never deletes the fence or revives the old native. Live processes,
 source drift, changed claim ownership/generation, missing fences, stale CAS and
 expired/overlong authority remain blocked for precise reconciliation. An outage

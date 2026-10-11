@@ -199,9 +199,36 @@ func legacyWorkspaceDigest(ctx context.Context, workspace string) (string, error
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	git := func(args ...string) ([]byte, error) {
+		args = append([]string{"--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)
 		cmd := exec.CommandContext(bounded, "git", args...)
 		cmd.Dir = workspace
-		return cmd.Output()
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "GIT_") {
+				cmd.Env = append(cmd.Env, entry)
+			}
+		}
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+		output, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		const outputLimit = 16 << 20
+		raw, err := io.ReadAll(io.LimitReader(output, outputLimit+1))
+		if err != nil || len(raw) > outputLimit {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.New("legacy Git snapshot metadata exceeds 16MiB bound")
+		}
+		if err := cmd.Wait(); err != nil {
+			return nil, err
+		}
+		return raw, nil
 	}
 	root, err := git("rev-parse", "--show-toplevel")
 	if err != nil {
@@ -216,7 +243,7 @@ func legacyWorkspaceDigest(ctx context.Context, workspace string) (string, error
 		return "", errors.New("exact retained worktree root required")
 	}
 	hash := sha256.New()
-	for _, args := range [][]string{{"rev-parse", "HEAD"}, {"branch", "--show-current"}, {"remote", "get-url", "origin"}, {"status", "--porcelain=v1", "-z"}} {
+	for _, args := range [][]string{{"rev-parse", "HEAD"}, {"branch", "--show-current"}, {"remote", "get-url", "origin"}, {"ls-files", "--stage", "-z"}} {
 		value, err := git(args...)
 		if err != nil {
 			return "", err
@@ -253,6 +280,7 @@ func legacyWorkspaceDigest(ctx context.Context, workspace string) (string, error
 		if !info.Mode().IsRegular() {
 			return "", errors.New("legacy snapshot requires regular source files; qualify symlink/submodule custody separately")
 		}
+		fmt.Fprintf(hash, "%03o\x00", info.Mode().Perm())
 		total += info.Size()
 		if total > 256<<20 {
 			return "", errors.New("legacy source snapshot exceeds 256MiB bound")
