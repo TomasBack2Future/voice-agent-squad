@@ -251,7 +251,9 @@ func legacyWorkspaceDigest(ctx context.Context, workspace string) (string, error
 		hash.Write(value)
 		hash.Write([]byte{0})
 	}
-	files, err := git("ls-files", "-cz", "--others", "--exclude-standard")
+	// Cached paths include tracked files missing from the worktree; the loop
+	// below hashes their deletion marker alongside tracked and untracked bytes.
+	files, err := git("ls-files", "--cached", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return "", err
 	}

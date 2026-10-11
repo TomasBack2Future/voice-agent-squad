@@ -1204,7 +1204,13 @@ request hash and deadline. No original consent is rewritten or manufactured.
 
 The retained source digest binds HEAD, branch, origin, staged index object IDs,
 modes and conflict stages, plus tracked and untracked regular-file bytes and
-permission modes. Git metadata output is bounded to 16MiB per command and file
+permission modes. The staged index listing binds staged content even when dirty
+worktree bytes are identical. A separate NUL-delimited
+`git ls-files --cached --others --exclude-standard -z` listing includes tracked
+paths and non-ignored untracked paths; tracked paths missing from the worktree
+contribute an explicit deletion marker. Ignored untracked files are outside this
+source digest and require separate custody when relevant to a handoff.
+Git metadata output is bounded to 16MiB per command and file
 contents to 256MiB in total. These checks use read-only index listing rather than
 `git status`, so repository clean filters are not invoked. Inherited `GIT_*`
 overrides and system/global configuration are excluded, fsmonitor and hooks are

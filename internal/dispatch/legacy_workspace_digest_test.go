@@ -161,3 +161,18 @@ func TestLegacyWorkspaceDigestRetainsExecutableMode(t *testing.T) {
 		t.Fatal("worktree executable mode drift escaped source custody")
 	}
 }
+
+func TestLegacyWorkspaceDigestRetainsTrackedDeletion(t *testing.T) {
+	workspace, _ := legacyGitFixture(t)
+	before := legacyDigestFixture(t, workspace)
+	if err := os.Remove(filepath.Join(workspace, "file.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if before == legacyDigestFixture(t, workspace) {
+		t.Fatal("tracked worktree deletion escaped source custody")
+	}
+	legacyWriteFixture(t, workspace, "file.txt", "aaa\n", 0600)
+	if before != legacyDigestFixture(t, workspace) {
+		t.Fatal("restoring the tracked worktree did not restore its custody digest")
+	}
+}
