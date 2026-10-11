@@ -283,8 +283,8 @@ func TestMigrate_BootstrapsLegacyDBWithoutIntakeColumns(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 24 {
-		t.Fatalf("want version 24 after bootstrap; got %d", maxV)
+	if maxV != 25 {
+		t.Fatalf("want version 25 after bootstrap; got %d", maxV)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestMigrate_BootstrapPreservesWorktreeAndSeedsAllVersions(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM migration_versions`).Scan(&rows); err != nil {
 		t.Fatalf("count migration_versions: %v", err)
 	}
-	if rows != 24 {
-		t.Errorf("migration_versions row count = %d, want 24 (bootstrap missed markers)", rows)
+	if rows != 25 {
+		t.Errorf("migration_versions row count = %d, want 25 (bootstrap missed markers)", rows)
 	}
 }
 
@@ -633,8 +633,8 @@ func TestMigrate_IntakeInterviewIdempotent_From008(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 24 {
-		t.Fatalf("want max version 24 after 008→024 upgrade; got %d", maxV)
+	if maxV != 25 {
+		t.Fatalf("want max version 25 after 008→025 upgrade; got %d", maxV)
 	}
 }
 
@@ -707,5 +707,52 @@ func TestMigrate_ControllerHandoffBootstrapRejectsMissingFence(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("partial bootstrap stamped %d versions", n)
+	}
+}
+
+func TestMigrate_WorkerHandoffPreservesVersion24Custody(t *testing.T) {
+	db := openEmptyDBNoMigrate(t)
+	entries, err := fs.ReadDir(defaultMigrationsFS, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.Name() < "025_" {
+			prior["migrations/"+entry.Name()] = readMigration(t, entry.Name())
+		}
+	}
+	ctx := context.Background()
+	if err := Migrate(ctx, db, prior); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,state,generation,worktree) VALUES('repo','T','old',1,2,'held',7,'/fixture/retained');
+INSERT INTO dispatch_controller_bindings VALUES('repo','controller','controller-native',2);
+INSERT INTO execution_authorizations(repo_id,id,item_id,holder,generation,binding,state,created_at,updated_at) VALUES('repo','pin','T','old',7,'{}','active',1,2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db, defaultMigrationsFS); err != nil {
+		t.Fatal(err)
+	}
+	// An older reader can still open the additive schema without dropping it.
+	if err := Migrate(ctx, db, prior); err != nil {
+		t.Fatal(err)
+	}
+	var actor, worktree, pinState, native string
+	var generation, epoch, version int
+	if err := db.QueryRow(`SELECT agent_id,generation,worktree FROM claims WHERE repo_id='repo' AND item_id='T'`).Scan(&actor, &generation, &worktree); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT state FROM execution_authorizations WHERE id='pin'`).Scan(&pinState); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT native_session,epoch FROM dispatch_controller_bindings`).Scan(&native, &epoch); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "old" || generation != 7 || worktree != "/fixture/retained" || pinState != "active" || native != "controller-native" || epoch != 2 || version != 25 {
+		t.Fatalf("upgrade or prior-reader changed custody: %s %d %s %s %s %d %d", actor, generation, worktree, pinState, native, epoch, version)
 	}
 }

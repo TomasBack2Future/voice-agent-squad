@@ -23,6 +23,7 @@ from worker_preflight import check_profile, check_worktree, git, repository_name
 from muse_worker_receiver import Receiver
 from muse_worker_container import Runtime
 from muse_worker_view import LiveView
+from muse_worker_handoff import check_handoff
 
 FINGERPRINT = native.FINGERPRINT
 
@@ -83,6 +84,20 @@ def submit_outcome(c, env, pin, kind, body_file, decision_revision=None, request
     return submitted
 
 
+def publish_report(c, env, pin, state):
+    """Publish a joined execution's report with a retry-stable execution key."""
+    report = json.loads((state / 'report.json').read_text())
+    kind = 'handoff-complete' if report['status'] == 'completed' else 'blocked'
+    decision = read_decision(c, env, pin)
+    # Atomic submit distinguishes a new completion under hold from an identical
+    # committed replay after the controller advances to a new held phase.
+    body_file = state / 'outcome-body.txt'
+    body_file.write_text(report.get('summary', '') or report['status'])
+    return submit_outcome(c, env, pin, kind, body_file,
+                          decision_revision=decision['revision'] if decision else None,
+                          request_key='report-' + pin['id'])
+
+
 def resolve_effort(c):
     if 'reasoning_effort' in c:
         effort, source = c['reasoning_effort'], 'launch-config'
@@ -140,12 +155,16 @@ def check_launch(assignment, config_path, resume=False):
     if Path(c['workspace']).resolve() != Path(assignment['worktree']).resolve():
         raise ValidationError('Muse workspace differs from assignment')
     check_profile(assignment)
-    if resume:
+    if resume or c.get('handoff'):
+        if c.get('handoff'):
+            if resume:
+                raise ValidationError('fresh source handoff and same-native resume are separate operations')
+            check_handoff(assignment, c)
         work = Path(c['workspace']).resolve()
         if (Path(git(work, 'rev-parse', '--show-toplevel')).resolve() != work
                 or git(work, 'branch', '--show-current') != assignment['branch']
                 or repository_name(git(work, 'remote', 'get-url', 'origin'), assignment.get('repository_host', 'github.com'), assignment.get('clone_layout', 'plain')) != assignment['repository']):
-            raise ValidationError('resumed worktree identity changed')
+            raise ValidationError('retained worktree identity changed')
         git(work, 'merge-base', '--is-ancestor', assignment['base_sha'], 'HEAD')
     else:
         check_worktree(assignment)
@@ -220,7 +239,10 @@ def record_context_read(c, state, message, loaded):
     except (KeyError, ValueError):
         return
     startup = json.loads((state / 'startup.json').read_text())
-    for key in ('role', 'profile'):
+    required = ('role', 'profile', 'lifecycle')
+    if any(key not in startup for key in required):
+        return
+    for key in required:
         expected = startup[key]
         output = item.get('visibleOutput', '')
         if path == Path(expected['path']).resolve() and output.startswith('Read text file `'):
@@ -234,7 +256,7 @@ def record_context_read(c, state, message, loaded):
             if (hashlib.sha256(source).hexdigest() == expected['sha256']
                     and lines == source.decode().splitlines() and numbers == list(range(1,len(lines)+1))):
                 loaded[key] = {'path': str(path), 'sha256': expected['sha256'], 'native_item': item['itemId']}
-    if len(loaded) == 2:
+    if set(loaded) == set(required):
         native.atomic(state / 'startup-loaded.json', {'native': c['native_session_id'], 'loaded': loaded})
 
 
@@ -305,9 +327,10 @@ def run(assignment_path, config_path, resume=False):
                       'reasoning_effort_source': c['reasoning_effort_source'], 'progress_view': c.get('progress_view', 'live'),
                       'role': {'path': str(ROOT / 'roles/worker/SKILL.md'), 'sha256': hashlib.sha256((ROOT / 'roles/worker/SKILL.md').read_bytes()).hexdigest()},
                       'profile': {'path': str(profile_path.resolve()), 'sha256': hashlib.sha256(profile_path.read_bytes()).hexdigest()},
+                      'lifecycle': {'path': str(ROOT / 'lifecycle-continuity.md'), 'sha256': hashlib.sha256((ROOT / 'lifecycle-continuity.md').read_bytes()).hexdigest()},
                       'assignment_sha256': hashlib.sha256(Path(assignment_path).read_bytes()).hexdigest()})
         receiver = Receiver(c, state)
-        prompt = 'Exact assignment envelope (scope and identity):\n' + json.dumps(assignment) + '\n' + ('First read the Worker role skill at ' + str(ROOT / 'roles/worker/SKILL.md') + ' and the assigned project profile at ' + str(profile_path.resolve()) + '. Record their verified identities in your startup evidence.\n') + Path(c['prompt_file']).read_text() + '\nUse squad_worker run_command/write_file for mutations. For coordination use decision_get({}), claim_read({}), mailbox({}), acknowledge({event_id,note}) and post_message({kind,text}); do not guess Squad CLI arguments. Native shell/write are disabled; approvals remain YOLO. Do not detach processes or spawn subagents. Call squad_worker report with actual completion or blocker evidence, then reply; the supervisor retains task custody until tools are joined. Do not release the primary claim or mark it done inside this run.'
+        prompt = 'Exact assignment envelope (scope and identity):\n' + json.dumps(assignment) + '\n' + ('First read the entire Worker role skill at ' + str(ROOT / 'roles/worker/SKILL.md') + ', assigned project profile at ' + str(profile_path.resolve()) + ', and lifecycle contract at ' + str(ROOT / 'lifecycle-continuity.md') + '. Record their verified identities in your startup evidence. All three exact native reads are required before source mutations.\n') + Path(c['prompt_file']).read_text() + '\nUse squad_worker run_command/write_file for mutations. For coordination use decision_get({}), claim_read({}), mailbox({}), acknowledge({event_id,note}) and post_message({kind,text}); do not guess Squad CLI arguments. Native shell/write are disabled; approvals remain YOLO. Do not detach processes or spawn subagents. Call squad_worker report with actual completion or blocker evidence, then reply; the supervisor retains task custody until tools are joined. Do not release the primary claim or mark it done inside this run.'
         command = native.uuid7()
         native.atomic(state / 'initial-turn.json', {'command_id': command, 'native': c['native_session_id'],
                       'reasoning_effort': c['reasoning_effort'], 'state': 'prepared'})
@@ -398,20 +421,7 @@ def run(assignment_path, config_path, resume=False):
             if pinned and joined and cleanup_error is None:
                 report_path = state / 'report.json'
                 if terminal == 'completed' and report_path.exists():
-                    report = json.loads(report_path.read_text())
-                    kind = 'handoff-complete' if report['status'] == 'completed' else 'blocked'
-                    decision = read_decision(c, env, pin)
-                    if decision is not None and decision.get('action') != 'proceed':
-                        raise ValidationError('assignment is on hold; resolve the hold before submitting completion')
-                    # Atomic outcome submission: one call stores the canonical
-                    # message and the durable event, returning both IDs. No
-                    # manual message-ID extraction, so a cross-repo mixup
-                    # cannot strand completion. The observed revision passes
-                    # through unchanged; a changed one surfaces as stale.
-                    body_file = state / 'outcome-body.txt'
-                    body_file.write_text(report.get('summary', '') or report.get('status', ''))
-                    submitted = submit_outcome(c, env, pin, kind, body_file,
-                                               decision_revision=decision['revision'] if decision else None)
+                    submitted = publish_report(c, env, pin, state)
                     native.atomic(state / 'outcome.json', submitted)
                 coordination(c, 'close', str(state / 'join.json'))
                 for op in operations:

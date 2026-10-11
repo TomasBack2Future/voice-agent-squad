@@ -958,7 +958,7 @@ epoch. The ledger rejects competing native admission and custody changes while
 that pin is active. Expiry, failed renewal and closed admission retain the pin;
 they never release task custody. A hold blocks source mutations while allowing
 assignment decision reads and handled acknowledgements. Mutation admission also requires observed successful native reads of the
-canonical Worker skill and selected profile at startup; retain its actual reads
+canonical Worker skill, selected profile and lifecycle contract at startup; retain its actual reads
 and reported identities in startup evidence.
 
 The session-owned receiver requests deferred delivery, submits a durable wake
@@ -966,10 +966,34 @@ to the original native session, and records transport acceptance separately from
 handling. Only the model's typed `decision_get` and `acknowledge` tools handle and confirm a decision. The
 `report` tool records actual results; after native/MCP/container joins the
 supervisor records one durable outcome and publishes `handoff-complete` or
-`blocked` with the current decision revision. It does not release the primary
+`blocked` with the current decision revision. Each execution has a stable report
+request key; same-execution retries deduplicate, while a resumed execution can
+publish its distinct result. A hold still permits a truthful blocked report and
+rejects completion. It does not release the primary
 claim, close the Issue or start another controller. After a completed native turn
 and queued decisions drain, the bounded invocation exits; later continuation
 uses `--resume` on this same assignment. It is not a permanently idle TUI daemon.
+
+After a qualified `dispatch worker-handoff`, a fresh Muse native can preserve
+the original dirty source worktree without using `--resume`. Supply the optional
+`handoff` object with the immutable `request_id`, the original joined writer
+record's absolute `prior_writer` path, and its `prior_writer_sha256`. Freeze that
+private record before further original-native runs; preserve all later joins too.
+The launcher reads the actual handoff receipt, verifies the joined original
+execution, exact assignment/profile/authorization and both generations, and then
+rechecks the current binding, claim and controller. Changed scope or custody,
+unjoined writers and missing receipts fail closed. It starts the new native with
+the transferred hold intact; only the controller's separate decision can release
+source writes. The separate legacy configuration is
+`handoff: {"request_id": "...", "legacy_stop_id": "..."}`. It requires the
+actual transferred original-native stop receipt and unchanged retained source
+snapshot; pin and legacy fields cannot be mixed. Original preparation, normal
+exit/receiver/renewal join, controller observation and typed supervisory
+attestation precede handoff. A metadata-only native allocation is not a model
+launch. Existing clients must adopt and qualify the blocking native fence hook
+before live preparation; new Claude source Workers install it synchronously.
+Unsupported App/terminal stop adapters and ENV/Deployer execution remain
+separate capability gates. Source tests do not establish live adoption.
 
 State retains the original writer intent, binding, tool journal, native items,
 delivery command journal, report and join receipt. A lost startup/result or

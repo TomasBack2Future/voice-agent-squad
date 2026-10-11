@@ -25,6 +25,21 @@
     "claim_generation"
   ],
   "properties": {
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id"],
+      "oneOf": [
+        {"required": ["prior_writer", "prior_writer_sha256"], "not": {"required": ["legacy_stop_id"]}},
+        {"required": ["legacy_stop_id"], "not": {"anyOf": [{"required": ["prior_writer"]}, {"required": ["prior_writer_sha256"]}]}}
+      ],
+      "properties": {
+        "request_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"},
+        "prior_writer": {"type": "string", "pattern": "^/"},
+        "prior_writer_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "legacy_stop_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"}
+      }
+    },
     "schema_version": {
       "const": "agent-loop.muse-launch.v1"
     },

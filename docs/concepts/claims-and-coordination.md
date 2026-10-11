@@ -198,8 +198,43 @@ controller binding or retirement record. It must not bypass the current
 controller actor/native/epoch or move one reservation out of a bound cohort.
 Use the existing complete-inventory controller handoff for Dispatcher custody;
 that operation deliberately preserves Worker claims and sessions. A new native
-Worker replacement under that protocol still needs its own qualified execution
-fence and supported transition. Do not use a legacy takeover as a fallback.
+Worker replacement under that protocol uses the separate supervised source
+handoff below when its prerequisites are qualified. Do not use a legacy
+takeover as a fallback.
+
+### Controller-bound source Worker handoff
+
+`dispatch worker-handoff` preserves the existing controller and transfers one
+ordinary source claim plus its reservation to a fresh registered Worker. The
+original owner must authorize the exact request digest in a canonical message.
+The original native and tools must already be joined through a reconciled source
+execution pin. A quota error, process absence alone, or an operator assertion
+cannot replace that pin. Legacy CLI clients instead require original-native
+stop preparation, actual host join observation, persistent native fence and
+current-controller supervisory attestation under exact human authority. No pin
+is fabricated. App clients without a qualified native-stop executor remain
+unsupported. Protected ENV, other retained claims, active pins, ambiguous custody,
+unhandled original events and changed ownership fences reject the transition.
+
+The transaction preserves the effective hold, increments claim and reservation
+generations, records an immutable receipt and publishes a real replacement
+decision event. It never grants `proceed` or invents business completion.
+Heartbeat renewal does not change ownership; changed actor, claim generation or
+claim acquisition time does. Terminal continuation retains the original canonical assignment; changing
+to a different continuation item is unsupported. The explicit legacy terminal
+route verifies same-item original release history before creating a new claim. Dispatcher custody remains unchanged.
+
+Handle all original-generation results before handoff. The replacement reads
+and handles the transferred hold through its actual native receiver; the current
+controller separately releases eligible work using the existing decision CAS.
+The fresh Muse source launcher can adopt a dirty retained worktree only with the
+immutable handoff receipt and a hash-bound original joined writer record. It
+compares the entire original assignment and authorization, preserving repository,
+branch, base ancestry, profile and worktree. The legacy variant verifies the
+immutable stopped-custody receipt and actual retained source snapshot instead
+of a pin-backed writer record. An explicitly retained terminal ordinary phase
+can reacquire its claim at a new generation only with exact original release
+history. Same-native resume remains separate.
 
 `dispatch takeover --request handoff.json` is an operator recovery operation,
 not ordinary scheduling. The JSON supplies `reservation`, `expected_dispatcher`,
