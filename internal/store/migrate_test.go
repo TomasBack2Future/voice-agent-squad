@@ -283,8 +283,8 @@ func TestMigrate_BootstrapsLegacyDBWithoutIntakeColumns(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 24 {
-		t.Fatalf("want version 24 after bootstrap; got %d", maxV)
+	if maxV != 26 {
+		t.Fatalf("want version 26 after bootstrap; got %d", maxV)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestMigrate_BootstrapPreservesWorktreeAndSeedsAllVersions(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM migration_versions`).Scan(&rows); err != nil {
 		t.Fatalf("count migration_versions: %v", err)
 	}
-	if rows != 24 {
-		t.Errorf("migration_versions row count = %d, want 24 (bootstrap missed markers)", rows)
+	if rows != 26 {
+		t.Errorf("migration_versions row count = %d, want 26 (bootstrap missed markers)", rows)
 	}
 }
 
@@ -633,8 +633,8 @@ func TestMigrate_IntakeInterviewIdempotent_From008(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 24 {
-		t.Fatalf("want max version 24 after 008→024 upgrade; got %d", maxV)
+	if maxV != 26 {
+		t.Fatalf("want max version 26 after 008→026 upgrade; got %d", maxV)
 	}
 }
 
@@ -707,5 +707,113 @@ func TestMigrate_ControllerHandoffBootstrapRejectsMissingFence(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("partial bootstrap stamped %d versions", n)
+	}
+}
+
+func TestMigrate_WorkerHandoffPreservesVersion24Custody(t *testing.T) {
+	db := openEmptyDBNoMigrate(t)
+	entries, err := fs.ReadDir(defaultMigrationsFS, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.Name() < "025_" {
+			prior["migrations/"+entry.Name()] = readMigration(t, entry.Name())
+		}
+	}
+	ctx := context.Background()
+	if err := Migrate(ctx, db, prior); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,state,generation,worktree) VALUES('repo','T','old',1,2,'held',7,'/fixture/retained');
+INSERT INTO dispatch_controller_bindings VALUES('repo','controller','controller-native',2);
+INSERT INTO execution_authorizations(repo_id,id,item_id,holder,generation,binding,state,created_at,updated_at) VALUES('repo','pin','T','old',7,'{}','active',1,2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db, defaultMigrationsFS); err != nil {
+		t.Fatal(err)
+	}
+	// An older reader can still open the additive schema without dropping it.
+	if err := Migrate(ctx, db, prior); err != nil {
+		t.Fatal(err)
+	}
+	var actor, worktree, pinState, native string
+	var generation, epoch, version int
+	if err := db.QueryRow(`SELECT agent_id,generation,worktree FROM claims WHERE repo_id='repo' AND item_id='T'`).Scan(&actor, &generation, &worktree); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT state FROM execution_authorizations WHERE id='pin'`).Scan(&pinState); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT native_session,epoch FROM dispatch_controller_bindings`).Scan(&native, &epoch); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "old" || generation != 7 || worktree != "/fixture/retained" || pinState != "active" || native != "controller-native" || epoch != 2 || version != 26 {
+		t.Fatalf("upgrade or prior-reader changed custody: %s %d %s %s %s %d %d", actor, generation, worktree, pinState, native, epoch, version)
+	}
+}
+
+func TestMigrate_LegacyFenceUpgradeFrom25PreservesCustodyAndRejectsAllOldWakes(t *testing.T) {
+	db := openEmptyDBNoMigrate(t)
+	entries, err := fs.ReadDir(defaultMigrationsFS, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := fstest.MapFS{}
+	for _, entry := range entries {
+		if entry.Name() < "026_" {
+			prior["migrations/"+entry.Name()] = readMigration(t, entry.Name())
+		}
+	}
+	ctx := context.Background()
+	if err := Migrate(ctx, db, prior); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,state,generation,worktree) VALUES('repo','T','old',1,2,'held',7,'/fixture/retained');
+INSERT INTO dispatch_controller_bindings VALUES('repo','controller','controller-native',2);
+INSERT INTO legacy_worker_stops(repo_id,id,request_sha256,preparation,processes,state) VALUES('repo','old-stop','retained','retained-preparation','[]','prepared');
+INSERT INTO worker_native_fences VALUES('repo','old-native','old','D',7,'old-stop');`); err != nil {
+		t.Fatal(err)
+	}
+	insert := `INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id) VALUES('repo','old',?,'D',7,?,'T',?,1,1)`
+	// The real version25 definition admits this old-native wake. The upgrade
+	// fixes existing databases, preserving prior rows and custody exactly.
+	if _, err := db.Exec(insert, "before-upgrade", "old-native", "decision-resolved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db, defaultMigrationsFS); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db, prior); err != nil {
+		t.Fatal("old reader cannot remove upgrade", err)
+	}
+	for _, kind := range []string{"decision-resolved", "blocked", "issue-closed"} {
+		if _, err := db.Exec(insert, "after-"+kind, "old-native", kind); err == nil {
+			t.Fatal("old callback escaped upgraded fence", kind)
+		}
+	}
+	if _, err := db.Exec(insert, "replacement-wake", "new-native", "decision-resolved"); err != nil {
+		t.Fatal("replacement wake denied", err)
+	}
+	var actor, worktree, preparation string
+	var generation int
+	if err := db.QueryRow(`SELECT agent_id,generation,worktree FROM claims WHERE repo_id='repo' AND item_id='T'`).Scan(&actor, &generation, &worktree); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT preparation FROM legacy_worker_stops WHERE id='old-stop'`).Scan(&preparation); err != nil {
+		t.Fatal(err)
+	}
+	if actor != "old" || generation != 7 || worktree != "/fixture/retained" || preparation != "retained-preparation" {
+		t.Fatal("upgrade changed existing custody or stop history")
+	}
+	if _, err := db.Exec(`DROP TABLE migration_versions`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, db, defaultMigrationsFS); err != nil {
+		t.Fatal("upgraded bootstrap", err)
 	}
 }

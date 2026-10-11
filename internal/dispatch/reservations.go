@@ -41,9 +41,11 @@ type Reservation struct {
 }
 
 type Store struct {
-	db     *sql.DB
-	repoID string
-	now    func() time.Time
+	db                   *sql.DB
+	repoID               string
+	now                  func() time.Time
+	legacyOwnerProbe     func(context.Context, string, int) ([]LegacyProcess, error)
+	legacyWorkspaceProbe func(context.Context, string) (string, error)
 }
 
 func New(db *sql.DB, repoID string, now func() time.Time) *Store {

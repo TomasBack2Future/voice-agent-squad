@@ -73,11 +73,11 @@ class SubmitOutcomeDecisionTests(unittest.TestCase):
         with dbapi.connect(self.root / 'home/global.db') as db:
             return db.execute("SELECT max(id) FROM messages WHERE agent_id=? AND thread=?", (agent, thread)).fetchone()[0]
 
-    def adopt(self, action):
+    def adopt(self, action, expected_revision=0):
         self.squad('dispatcher', 'milestone', '--to', 'BUG-001', 'Dispatcher ' + action + '; bounded fixture only.')
         outcome = self.latest_message('dispatcher', 'BUG-001')
         argv = ['dispatcher', 'terminal-events', 'decision-set', '--reservation', 'D-1', '--generation', '1',
-               '--worker-session', 'worker-native', '--expected-revision', '0', '--outcome', str(outcome),
+               '--worker-session', 'worker-native', '--expected-revision', str(expected_revision), '--outcome', str(outcome),
                '--action', action]
         if action == 'hold':
             argv += ['--condition', 'fixture hold; bounded test only']
@@ -134,6 +134,67 @@ class SubmitOutcomeDecisionTests(unittest.TestCase):
         with self.assertRaises(ValidationError) as ctx:
             launcher.submit_outcome(self.c, env, self.pin, 'decision-request', body_changed, request_key='phase-a')
         self.assertIn('payload-conflict', str(ctx.exception))
+
+    def test_resumed_reports_have_distinct_stable_execution_keys(self):
+        self.adopt('proceed')
+        def publish(execution, summary):
+            state = self.root / execution
+            state.mkdir(exist_ok=True)
+            (state / 'report.json').write_text(json.dumps({'status': 'completed', 'summary': summary}))
+            return launcher.publish_report(self.c, self.launcher_env(), dict(self.pin, id=execution), state)
+        first = publish('muse-first', 'new Worker verified source')
+        self.assertEqual(publish('muse-first', 'new Worker verified source'), first)
+        second = publish('muse-resumed', 'same native verified preserved source')
+        self.assertNotEqual(second['event_id'], first['event_id'])
+        with self.assertRaisesRegex(ValidationError, 'payload-conflict'):
+            publish('muse-first', 'changed first result')
+
+    def test_blocked_report_publishes_under_hold_without_releasing_it(self):
+        decision = self.adopt('hold')
+        state = self.root / 'held-execution'
+        state.mkdir()
+        report = state / 'report.json'
+        report.write_text(json.dumps({'status': 'blocked', 'summary': 'owned tools stopped and joined'}))
+        result = launcher.publish_report(self.c, self.launcher_env(), dict(self.pin, id='muse-held'), state)
+        self.assertTrue(result['event_id'])
+        current = launcher.read_decision(self.c, self.launcher_env(), self.pin)
+        self.assertEqual(current, decision)
+        report.write_text(json.dumps({'status': 'completed', 'summary': 'must reject completion'}))
+        with self.assertRaisesRegex(ValidationError, 'hold'):
+            launcher.publish_report(self.c, self.launcher_env(), dict(self.pin, id='muse-held-new'), state)
+
+    def test_report_replays_after_publisher_crashes_after_commit(self):
+        import sqlite3
+        proceed = self.adopt('proceed')
+        state = self.root / 'crashed-execution'
+        state.mkdir()
+        (state / 'report.json').write_text(json.dumps({'status': 'completed', 'summary': 'joined source verification'}))
+        request = self.root / 'crashed-request.json'
+        request.write_text(json.dumps({'config': self.c, 'pin': dict(self.pin, id='muse-crashed'), 'state': str(state)}))
+        # The real child commits the outcome, then exits before its caller gets
+        # a receipt. Recovery must use retained execution identity, not rerun
+        # the source task or create another business completion.
+        code = ('import json,os,sys; from pathlib import Path; '
+                'sys.path.insert(0,sys.argv[1]); import muse_worker_launcher as launcher; '
+                'from muse_worker_tools import child_environment; '
+                'q=json.loads(Path(sys.argv[2]).read_text()); '
+                'launcher.publish_report(q["config"],child_environment(dict(q["config"],native_session_id="worker-native")),q["pin"],Path(q["state"])); '
+                'os._exit(73)')
+        crashed = subprocess.run([sys.executable, '-c', code, str(ROOT), str(request)],
+                                 cwd=self.root, env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(crashed.returncode, 73, crashed.stderr)
+        self.assertFalse((state / 'outcome.json').exists())
+        with sqlite3.connect(self.root / 'home/global.db') as db:
+            committed = db.execute("SELECT outcome_id,event_id FROM terminal_event_receipts WHERE kind='handoff-complete'").fetchall()
+        self.assertEqual(len(committed), 1)
+        # A controller may hold the next phase after the irreversible commit.
+        # Identical publication replay must still return its original receipt.
+        self.adopt('hold', expected_revision=proceed['revision'])
+        replay = launcher.publish_report(self.c, self.launcher_env(), dict(self.pin, id='muse-crashed'), state)
+        self.assertEqual((replay['message_id'], replay['event_id']), committed[0])
+        with sqlite3.connect(self.root / 'home/global.db') as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM terminal_event_receipts WHERE kind='handoff-complete'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM messages WHERE agent_id='worker' AND body='joined source verification'").fetchone()[0], 1)
 
 
 if __name__ == '__main__':

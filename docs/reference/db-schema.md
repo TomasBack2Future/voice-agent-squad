@@ -286,6 +286,26 @@ continue to count original process results.
 
 ## Execution admission (migration 019)
 
+`worker_handoffs` (migration 025) stores one immutable exact-input hash and JSON
+receipt per repository/request ID for supervised source Worker custody transfer.
+It adds no lease bypass or ENV recovery route and does not rewrite old events.
+`legacy_worker_stops` retains original-native preparation/process provenance,
+request digest and observed/transferred state. `worker_native_fences` permanently
+binds the old native to its actor/reservation/generation and stop record. Native
+pin/reopen/rebind and stale callback triggers enforce this fence for older
+clients as well as the new synchronous pre-tool hook. These additive tables
+carry no fabricated source execution pins.
+
+Migration026 upgrades the already-applied025 callback trigger to reject all old
+native events, including `decision-resolved`, while leaving replacement natives
+eligible. `worker_native_hook_observations` retains the most recent actually
+executed synchronous hook's kernel client identity and selected artifact hashes,
+original actor/native and observation time. Only the native host adapter records
+it; a controller admission or existing config file is not execution readiness.
+Preparation matches it with the current controller's exact held admission before
+committing a fence. Old PID-only stop receipts remain stored but cannot qualify a
+new handoff. Upgrades and bootstrap preserve claims and existing stop history.
+
 `execution_authorizations` records immutable binding JSON plus state
 (`authorized`, `active`, `reconciled`, `revoked`), holder/generation, GitHub
 run/attempt, latest step and terminal reconciliation evidence. A unique active

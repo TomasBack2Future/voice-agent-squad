@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/zsiec/squad/internal/dispatch"
 	"github.com/zsiec/squad/internal/identity"
@@ -11,6 +12,40 @@ import (
 )
 
 func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
+	srv.Register(mcp.Tool{Name: "squad_dispatch_worker_handoff_get", Description: "Read an immutable supervised Worker custody transition receipt.", InputSchema: json.RawMessage(`{"type":"object","required":["request_id"],"properties":{"request_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args map[string]string
+		if err := json.Unmarshal(raw, &args); err != nil || len(args) != 1 || args["request_id"] == "" {
+			return nil, fmt.Errorf("one exact Worker handoff request identity required")
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		return dispatch.New(db, repoID, nil).WorkerHandoffReceipt(ctx, args["request_id"])
+	}})
+	srv.Register(mcp.Tool{Name: "squad_dispatch_worker_handoff", Description: "Current-controller supervised source Worker transfer. Requires original-owner exact consent, reconciled pin and joined native; preserves hold, rejects ENV and pending events.", InputSchema: json.RawMessage(`{"type":"object","required":["request"],"properties":{"request":{"type":"object"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var outer map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &outer); err != nil {
+			return nil, err
+		}
+		if len(outer) != 1 || outer["request"] == nil {
+			return nil, fmt.Errorf("one Worker handoff request required")
+		}
+		q, err := decodeWorkerHandoff(outer["request"])
+		if err != nil {
+			return nil, err
+		}
+		if err = workerHandoffNative(q); err != nil {
+			return nil, err
+		}
+		if err = requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := identity.AgentID()
+		if err != nil {
+			return nil, err
+		}
+		return dispatch.New(db, repoID, nil).WorkerHandoff(ctx, actor, q)
+	}})
 	srv.Register(mcp.Tool{Name: "squad_dispatch_controller_bind", Description: "Owner-initiated legacy native binding; does not migrate a client or change permissions.", InputSchema: json.RawMessage(`{"type":"object","required":["native_session","expected_epoch"],"properties":{"native_session":{"type":"string"},"expected_epoch":{"type":"integer","const":0}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
 			Native string `json:"native_session"`

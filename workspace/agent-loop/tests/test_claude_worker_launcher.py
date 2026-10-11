@@ -18,6 +18,17 @@ class LauncherTests(unittest.TestCase):
     setUp = fixtures.WorkerPreflightTests.setUp
     git = fixtures.WorkerPreflightTests.git
 
+    def test_receiver_config_declares_exact_native_hook_runtime(self):
+        self.prepare()
+        config = dict(self.config, event_executable='/isolated/squad')
+        args = launcher.receiver_arguments(config, self.config_path)
+        settings_path = Path(args[1])
+        receiver_config = json.loads(settings_path.with_name('config.json').read_text())
+        self.assertEqual(receiver_config['runtime'], 'claude')
+        self.assertEqual(receiver_config['role'], 'worker')
+        self.assertTrue(receiver_config['legacy_native_fence'])
+        self.assertEqual(receiver_config['native_session_id'], self.session)
+
     def prepare(self, mode='native', behavior='ok'):
         self.assignment['authorization']['staging'] = False
         self.assignment['authorization']['production'] = False
