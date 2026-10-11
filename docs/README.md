@@ -9,6 +9,7 @@
   local distribution rather than application deployment.
 - [Read-only observer](reference/read-only-observer.md): optional stdio MCP
   snapshots, incremental messages and bounded local execution receipts.
+- [Recovery smoke](recovery-smoke.md): isolated recovery matrix, CI gate and explicit native qualification gaps.
 - [Workspace templates](../workspace/README.md): optional outer workspace routing.
 
 The tutorials below document optional product adoption, not requirements for

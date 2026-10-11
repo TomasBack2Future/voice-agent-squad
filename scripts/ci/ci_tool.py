@@ -14,7 +14,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-FLAGS = ("go", "pyloop", "observer", "node", "remote", "doc", "cross", "smoke")
+FLAGS = ("go", "pyloop", "observer", "node", "remote", "doc", "cross", "smoke", "recovery")
 
 # job id in ci.yml -> scope flag that selects it. The gate requires every
 # selected job to succeed and every unselected job to be skipped.
@@ -29,6 +29,7 @@ JOB_FLAGS = {
     "doc-contracts": "doc",
     "cross-build": "cross",
     "release-smoke": "smoke",
+    "recovery-smoke": "recovery",
 }
 
 RACE_SHARDS = ("cli-1", "cli-2", "server", "rest")
@@ -66,13 +67,13 @@ def classify(paths, full=False):
         elif path == ".goreleaser.yaml":
             flags["cross"] = flags["smoke"] = True
         elif path.endswith(".go") or path.split("/")[0] in ("internal", "cmd", "plugin", "reviewer", "templates"):
-            flags["go"] = flags["remote"] = True
+            flags["go"] = flags["remote"] = flags["recovery"] = True
             if path.endswith(".go") and not path.endswith("_test.go"):
                 flags["cross"] = True
             if path == "cmd/squad/main.go":
                 flags["smoke"] = True
         elif path.startswith("workspace/"):
-            flags["pyloop"] = flags["node"] = flags["doc"] = True
+            flags["pyloop"] = flags["node"] = flags["doc"] = flags["recovery"] = True
         elif path.startswith("scripts/squad-observer/"):
             flags["observer"] = True
         elif path == "scripts/test_remote_service.py" or path.startswith("deploy/"):

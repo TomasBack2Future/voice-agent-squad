@@ -102,3 +102,12 @@ Record installed-version checks, build/CI results and release receipts in their
 respective operational artifacts. Do not maintain a latest CI run or installed
 version snapshot in these docs. Never install or restart a tool merely to
 refresh a documentation page.
+
+## Recovery regression gate
+
+The `recovery-smoke` job is separate from release packaging. It runs the
+[recovery contract matrix](recovery-smoke.md) on isolated CLI/SQLite fixtures,
+fails on empty or skipped required suites, and uploads its JSON report. Runtime,
+workspace and Go/store changes select it; main and manual full runs include it.
+A green contract run does not qualify native clients or all roles. Native
+qualification is explicit and reports missing runtime/role coverage as blocked.

@@ -35,6 +35,7 @@ jobs:
       doc: ${{ steps.scope.outputs.doc }}
       cross: ${{ steps.scope.outputs.cross }}
       smoke: ${{ steps.scope.outputs.smoke }}
+      recovery: ${{ steps.scope.outputs.recovery }}
       mode: ${{ steps.scope.outputs.mode }}
     steps:
       - uses: actions/checkout@v6
@@ -215,10 +216,35 @@ jobs:
             exit 1
           fi
 
+  # Recovery semantics are separate from binary packaging and optional native
+  # tests. This lane uses isolated CLI/SQLite fixtures; no model credentials.
+  recovery-smoke:
+    needs: scope
+    if: needs.scope.outputs.recovery == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python3 workspace/agent-loop/recovery_smoke.py contract --output recovery-smoke.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovery-smoke
+          path: recovery-smoke.json
+          if-no-files-found: error
+
   # The single stable required check. Selected jobs must succeed; only jobs
   # the scope did not select may be skipped, so a skip never passes silently.
   gate:
-    needs: [scope, static, lint, race, doc-contracts, pyloop, observer, node, remote, cross-build, release-smoke]
+    needs: [scope, static, lint, race, doc-contracts, pyloop, observer, node, remote, cross-build, release-smoke, recovery-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
