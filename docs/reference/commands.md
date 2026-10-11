@@ -1142,7 +1142,9 @@ accepts only the exact original native/Python hook ancestry and selected native
 settings, never a supplied hook receipt or process snapshot. Configuration must
 declare `runtime: "claude"`, `role: "worker"`, the original actor/native and
 `legacy_native_fence: true`. Changed artifacts or missing/stale execution fail
-before any permanent fence. Remaining children must be the exact selected
+before any permanent fence. The host snapshot omits only its own already-joined
+process-listing helper; every other captured child remains subject to the guards.
+Remaining children must be the exact selected
 receiver or the reviewed binary's bounded listener, and all must later join.
 The source worktree has no general adapter for arbitrary detached writers.
 

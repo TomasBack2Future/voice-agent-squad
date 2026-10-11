@@ -80,6 +80,28 @@ func legacyClaudeNative(pid int, native string) bool {
 	return false
 }
 
+func legacyProcessParents(ctx context.Context) (map[int]int, error) {
+	command := exec.CommandContext(ctx, "/bin/ps", "-axo", "pid=,ppid=")
+	raw, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	parents := map[int]int{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 {
+			pid, e := strconv.Atoi(f[0])
+			ppid, e2 := strconv.Atoi(f[1])
+			// Output has joined this exact owned observer. Keep every other
+			// descendant so disappearing or unqualified tools still fail closed.
+			if e == nil && e2 == nil && pid != command.Process.Pid {
+				parents[pid] = ppid
+			}
+		}
+	}
+	return parents, nil
+}
+
 func observeLegacyOwner(ctx context.Context, native string, leasePID int) ([]LegacyProcess, error) {
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -111,20 +133,9 @@ func observeLegacyOwner(ctx context.Context, native string, leasePID int) ([]Leg
 	}
 	// Parent IDs carry no prompts or credentials. Read argv only for the narrow
 	// client/descendant qualification, and persist selected process metadata.
-	raw, err := exec.CommandContext(bounded, "/bin/ps", "-axo", "pid=,ppid=").Output()
+	parents, err := legacyProcessParents(bounded)
 	if err != nil {
 		return nil, err
-	}
-	parents := map[int]int{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		f := strings.Fields(line)
-		if len(f) == 2 {
-			pid, e := strconv.Atoi(f[0])
-			ppid, e2 := strconv.Atoi(f[1])
-			if e == nil && e2 == nil {
-				parents[pid] = ppid
-			}
-		}
 	}
 	owned := map[int]bool{client: true, leasePID: true}
 	for changed := true; changed; {
