@@ -42,6 +42,7 @@ type WorkerHandoffRequest struct {
 	HumanAuthoritySHA256 string            `json:"human_authority_sha256,omitempty"`
 	LegacyExpiresAt      int64             `json:"legacy_expires_at,omitempty"`
 	LegacyAttestationID  int64             `json:"legacy_attestation_id,omitempty"`
+	LegacyRecoveryID     string            `json:"legacy_recovery_id,omitempty"`
 	RetainedPhase        string            `json:"retained_phase,omitempty"`
 }
 
@@ -128,7 +129,7 @@ func (s *Store) WorkerHandoff(ctx context.Context, actor string, q WorkerHandoff
 			return out, errors.New("exact Worker handoff identities required")
 		}
 	}
-	if q.LegacyStopID == "" && (q.LegacyStopSHA256 != "" || q.HumanAuthoritySHA256 != "" || q.LegacyExpiresAt != 0 || q.LegacyAttestationID != 0 || q.RetainedPhase != "") {
+	if q.LegacyStopID == "" && (q.LegacyStopSHA256 != "" || q.HumanAuthoritySHA256 != "" || q.LegacyExpiresAt != 0 || q.LegacyAttestationID != 0 || q.LegacyRecoveryID != "" || q.RetainedPhase != "") {
 		return out, errors.New("source pin and legacy stopped-custody modes are separate")
 	}
 	if q.LegacyStopID != "" && (q.ExecutionID != "" || !validLegacyHash(q.LegacyStopSHA256) || !validLegacyHash(q.HumanAuthoritySHA256) || q.LegacyAttestationID < 1) {
@@ -147,6 +148,7 @@ func (s *Store) WorkerHandoff(ctx context.Context, actor string, q WorkerHandoff
 	}
 	err = store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
 		out = WorkerHandoffReceipt{}
+		originalConsentHash := consentHash
 		var priorHash, priorReceipt string
 		err := tx.QueryRowContext(ctx, `SELECT request_sha256,receipt FROM worker_handoffs WHERE repo_id=? AND request_id=?`, s.repoID, q.RequestID).Scan(&priorHash, &priorReceipt)
 		if err == nil {
@@ -205,6 +207,12 @@ func (s *Store) WorkerHandoff(ctx context.Context, actor string, q WorkerHandoff
 				return err
 			}
 			legacyStop = &stopped
+			if q.LegacyRecoveryID != "" {
+				originalConsentHash, err = WorkerHandoffDigest(stopped.Input.Handoff)
+				if err != nil {
+					return err
+				}
+			}
 		} else {
 			var executionRaw, reconciliation, executionState string
 			if err = tx.QueryRowContext(ctx, `SELECT binding,state,reconciliation FROM execution_authorizations WHERE repo_id=? AND id=? AND holder=?`, s.repoID, q.ExecutionID, claim.Actor).Scan(&executionRaw, &executionState, &reconciliation); err != nil {
@@ -234,7 +242,7 @@ func (s *Store) WorkerHandoff(ctx context.Context, actor string, q WorkerHandoff
 			Schema string `json:"schema_version"`
 			Hash   string `json:"request_sha256"`
 		}
-		if len(body) > workerHandoffConsentLimit || json.Unmarshal([]byte(body), &consent) != nil || consent.Schema != "squad.worker-handoff-consent.v1" || consent.Hash != consentHash {
+		if len(body) > workerHandoffConsentLimit || json.Unmarshal([]byte(body), &consent) != nil || consent.Schema != "squad.worker-handoff-consent.v1" || consent.Hash != originalConsentHash {
 			return errors.New("original owner did not authorize this exact Worker handoff")
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM agents WHERE repo_id=? AND id=?`, s.repoID, q.NewActor).Scan(&count); err != nil || count != 1 {

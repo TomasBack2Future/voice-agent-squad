@@ -95,3 +95,16 @@ class LegacyHandoffStartupTests(HandoffStartupTests):
         self.receipt['execution_id'] = 'manufactured-pin'
         with self.assertRaisesRegex(ValueError, 'stopped-custody'):
             self.check()
+
+    def test_recovered_controller_binding_uses_actual_retained_assignment(self):
+        self.stop['input']['handoff']['controller']['epoch'] = 1
+        self.stop['recovery'] = dict(schema_version='squad.legacy-worker-stop-recovery.v1',
+                                     id='recovery', request_sha256='d' * 64, outcome_id=10,
+                                     handoff=dict(controller=dict(actor='controller', native_session='controller-native', epoch=2),
+                                                  expected=self.receipt['previous'], claim=dict(actor='old', generation=1)))
+        self.assertEqual(self.check(), self.receipt)
+
+    def test_recovery_without_canonical_authority_cannot_adopt(self):
+        self.stop['recovery'] = dict(handoff=self.stop['input']['handoff'], outcome_id=0)
+        with self.assertRaisesRegex(ValueError, 'canonical controller authority'):
+            self.check()

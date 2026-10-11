@@ -305,6 +305,13 @@ it; a controller admission or existing config file is not execution readiness.
 Preparation matches it with the current controller's exact held admission before
 committing a fence. Old PID-only stop receipts remain stored but cannot qualify a
 new handoff. Upgrades and bootstrap preserve claims and existing stop history.
+The stop record also retains controller-selected canonical review receipt
+identities. The initial preparation deadline gates fence commitment; delayed
+completion keeps that immutable history. `worker-stop-recover` CAS stores the
+latest qualified recovery beside the original preparation and appends a
+canonical `worker-stop-recovery` controller message for each operation. It
+renews bounded authority and benign binding/decision drift without changing
+source/claim identity or deleting/expiring the permanent native fence.
 
 `execution_authorizations` records immutable binding JSON plus state
 (`authorized`, `active`, `reconciled`, `revoked`), holder/generation, GitHub

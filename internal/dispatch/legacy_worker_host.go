@@ -260,18 +260,32 @@ func legacyWorkspaceDigest(ctx context.Context, workspace string) (string, error
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
-func verifyLegacyExternal(ctx context.Context, inventory []LegacyExternalOperation, actor, native string) error {
+func verifyLegacyExternal(ctx context.Context, inventory []LegacyExternalOperation, actor, native string, admission LegacyNativeAdmission) error {
 	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
 	defer cancel()
+	selected := make(map[string]LegacyManagedReviewIdentity)
+	for _, review := range admission.ManagedReviews {
+		if review.ID == "" || !filepath.IsAbs(review.DatabasePath) || !validLegacyHash(review.ReceiptSHA256) {
+			return errors.New("controller-selected canonical review receipt required")
+		}
+		if _, duplicate := selected[review.ID]; duplicate {
+			return errors.New("duplicate controller-selected review identity")
+		}
+		selected[review.ID] = review
+	}
+	seen := make(map[string]bool)
 	for _, operation := range inventory {
 		if operation.Identity == "" {
 			return errors.New("exact external-operation identity required")
 		}
 		switch operation.Kind {
 		case "managed-grok-review":
-			if !filepath.IsAbs(operation.ReceiptPath) {
-				return errors.New("private managed review admission database required")
+			review, ok := selected[operation.Identity]
+			resolved, err := filepath.EvalSymlinks(operation.ReceiptPath)
+			if !ok || seen[operation.Identity] || operation.ReceiptPath != review.DatabasePath || err != nil || resolved != review.DatabasePath {
+				return errors.New("external review must use the controller-selected canonical database and exact receipt")
 			}
+			seen[operation.Identity] = true
 			info, err := os.Lstat(operation.ReceiptPath)
 			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 				return errors.New("managed review admission provenance unavailable")
@@ -285,6 +299,9 @@ func verifyLegacyExternal(ctx context.Context, inventory []LegacyExternalOperati
 			db.Close()
 			if err != nil {
 				return errors.New("original managed review attempt unavailable")
+			}
+			if legacyBytesHash([]byte(raw)) != review.ReceiptSHA256 {
+				return errors.New("canonical managed review receipt changed after controller admission")
 			}
 			var receipt grokreview.AttemptReceipt
 			if len(raw) > 65536 || json.Unmarshal([]byte(raw), &receipt) != nil || receipt.ID != operation.Identity || receipt.OwnerActor != actor || receipt.OwnerNative != native || !receipt.Joined || receipt.CompletedAt < 1 || receipt.WrapperPID < 1 || receipt.ReviewerPID < 1 || receipt.Identity.Repository != operation.Repository || receipt.Identity.HeadSHA != operation.HeadSHA {
@@ -321,6 +338,9 @@ func verifyLegacyExternal(ctx context.Context, inventory []LegacyExternalOperati
 		default:
 			return errors.New("external mutation or executor remains unqualified: " + operation.Kind)
 		}
+	}
+	if len(seen) != len(selected) {
+		return errors.New("original inventory omitted a controller-selected external review")
 	}
 	return nil
 }

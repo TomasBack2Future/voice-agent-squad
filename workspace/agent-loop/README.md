@@ -999,6 +999,18 @@ admission. The original Bash preparation uses `exec` directly under the native,
 with no continuing shell or other unqualified child writer. Version26 is an
 additive upgrade from25; it blocks every stale native wake as well as callbacks.
 Consent and preparation bounds are checked before a permanent fence commits.
+Managed review custody additionally requires the controller's independently
+selected canonical admission database and exact joined-record hash; a private
+Worker-created SQLite file does not qualify. Initial stop authority is checked
+at fence commitment. Qualify `dispatch worker-stop-recover` before live stop
+admission. Its current-controller CAS renews bounded authority and reconciles
+benign binding/held-decision drift on the same stop after actual host/source/
+external re-observation. Original stop intent, consent, claim identity, source,
+replacement and fence remain intact; canonical controller audits retain recovery
+history. The final request and startup use the actual `recovery.handoff` while
+assignment authorization stays in the original preparation. The old native
+stays fenced throughout; changed claim ownership, live writers or source drift
+still require reconciliation before a replacement can start.
 Unsupported App/terminal stop adapters and ENV/Deployer execution remain
 separate capability gates. Source tests do not establish live adoption.
 

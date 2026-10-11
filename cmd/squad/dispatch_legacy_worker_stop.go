@@ -27,6 +27,22 @@ func decodeLegacyStopInput(raw []byte) (dispatch.LegacyStopInput, error) {
 	return input, nil
 }
 
+func decodeLegacyRecoveryInput(raw []byte) (dispatch.LegacyStopRecoveryInput, error) {
+	var input dispatch.LegacyStopRecoveryInput
+	if len(raw) > 16384 {
+		return input, errors.New("legacy recovery exceeds its 16KiB request bound")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return input, err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return input, errors.New("one exact current-controller recovery required")
+	}
+	return input, nil
+}
+
 func legacyWorkerStopCommands() []*cobra.Command {
 	var path string
 	prepare := &cobra.Command{Use: "worker-stop-prepare", Short: "Original-native bounded stop preparation and persistent fence; does not stop a process", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -152,5 +168,36 @@ func legacyWorkerStopCommands() []*cobra.Command {
 	}}
 	source.Flags().StringVar(&workspace, "workspace", "", "exact retained source root")
 	_ = source.MarkFlagRequired("workspace")
-	return []*cobra.Command{prepare, get, observe, check, hook, hookGet, source}
+	var recoveryPath string
+	recoverStop := &cobra.Command{Use: "worker-stop-recover", Short: "Current-controller CAS recovery of retained fenced custody; no native or source revival", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		file, err := os.Open(recoveryPath)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		raw, err := io.ReadAll(io.LimitReader(file, 16385))
+		if err != nil || len(raw) > 16384 {
+			return errors.New("legacy recovery exceeds its 16KiB request bound")
+		}
+		input, err := decodeLegacyRecoveryInput(raw)
+		if err != nil {
+			return err
+		}
+		if os.Getenv("SQUAD_NATIVE_SESSION_ID") != input.Handoff.Controller.Native {
+			return errors.New("one exact current native controller recovery required")
+		}
+		bc, err := bootClaimContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		receipt, err := dispatch.New(bc.db, bc.repoID, nil).RecoverLegacyWorkerStop(cmd.Context(), bc.agentID, input)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(receipt)
+	}}
+	recoverStop.Flags().StringVar(&recoveryPath, "request", "", "bounded current-controller recovery CAS request; no stop or PID imports")
+	_ = recoverStop.MarkFlagRequired("request")
+	return []*cobra.Command{prepare, get, observe, check, hook, hookGet, source, recoverStop}
 }

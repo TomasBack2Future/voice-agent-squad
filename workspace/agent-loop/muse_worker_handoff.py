@@ -75,6 +75,18 @@ def check_legacy_handoff(assignment, c, receipt):
         raise ValidationError('legacy handoff lacks its actual native/host stopped-custody receipt')
     original = stop['input']['assignment']
     prior = stop['input']['handoff']
+    recovery = stop.get('recovery')
+    if recovery is not None:
+        if (not isinstance(recovery, dict)
+                or recovery.get('schema_version') != 'squad.legacy-worker-stop-recovery.v1'
+                or not recovery.get('id') or not recovery.get('request_sha256')
+                or not isinstance(recovery.get('outcome_id'), int) or recovery['outcome_id'] < 1
+                or not isinstance(recovery.get('handoff'), dict)):
+            raise ValidationError('legacy recovery lacks its canonical controller authority')
+        # The actual immutable handoff receipt is read from Squad, whose CAS
+        # verified original consent/scope and re-observed stopped custody.
+        # Assignment authorization remains in the original preparation below.
+        prior = recovery['handoff']
     current = receipt['reservation']
     controller = {'actor': c['dispatcher_agent_id'], 'native_session': c['controller_native'], 'epoch': c['controller_epoch']}
     if (prior['controller'] != controller or prior['expected'] != receipt['previous']

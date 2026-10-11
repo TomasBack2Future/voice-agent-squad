@@ -59,6 +59,7 @@ type LegacyStopReceipt struct {
 	ObservedAt        int64                 `json:"observed_at,omitempty"`
 	ObservationSHA256 string                `json:"observation_sha256,omitempty"`
 	NativeAdmission   LegacyNativeAdmission `json:"native_admission"`
+	Recovery          *LegacyStopRecovery   `json:"recovery,omitempty"`
 }
 
 func validLegacyHash(v string) bool {
@@ -136,7 +137,7 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 	defer cancel()
 	q := input.Handoff
 	now := s.now().Unix()
-	if actor != q.Claim.Actor || !controllerToken.MatchString(q.LegacyStopID) || q.ExecutionID != "" || !validLegacyHash(q.HumanAuthoritySHA256) || q.LegacyExpiresAt <= now || q.LegacyExpiresAt > now+86400 || q.LegacyStopSHA256 != "" || q.LegacyAttestationID != 0 || q.ConsentOutcomeID != 0 || !filepath.IsAbs(input.Workspace) || len(input.Assignment) == 0 || len(input.Assignment) > 32768 || input.Inventory == nil || len(input.Inventory) > 32 {
+	if actor != q.Claim.Actor || !controllerToken.MatchString(q.LegacyStopID) || q.ExecutionID != "" || !validLegacyHash(q.HumanAuthoritySHA256) || q.LegacyExpiresAt <= now || q.LegacyExpiresAt > now+86400 || q.LegacyStopSHA256 != "" || q.LegacyAttestationID != 0 || q.LegacyRecoveryID != "" || q.ConsentOutcomeID != 0 || !filepath.IsAbs(input.Workspace) || len(input.Assignment) == 0 || len(input.Assignment) > 32768 || input.Inventory == nil || len(input.Inventory) > 32 {
 		return out, errors.New("bounded native-owner legacy preparation and human authority required")
 	}
 	if !controllerToken.MatchString(q.RequestID) || q.Controller.Epoch < 1 || q.Expected.RepoID != s.repoID || q.Expected.ReservedBy != q.Controller.Actor || q.Expected.Generation < 1 || q.Claim.Generation < 1 || q.DecisionRevision < 1 || q.NewActor == actor || q.NewActor == q.Controller.Actor || q.NewNative == q.Expected.WorkerThreadID || q.NewNative == q.Controller.Native || strings.TrimSpace(q.CustodyEvidence) == "" || len(q.CustodyEvidence) > 8192 {
@@ -235,9 +236,6 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 	if err != nil {
 		return out, err
 	}
-	if err = verifyLegacyExternal(ctx, input.Inventory, q.Claim.Actor, q.Expected.WorkerThreadID); err != nil {
-		return out, err
-	}
 	body, err := legacyConsentBody(digest, q.LegacyStopID, workspace, input.Inventory)
 	if err != nil {
 		return out, err
@@ -250,8 +248,14 @@ func (s *Store) PrepareLegacyWorkerStop(ctx context.Context, actor string, input
 	if admission.Lease.PID != input.LeasePID {
 		return out, errors.New("original supervisor differs from controller admission")
 	}
+	if err = verifyLegacyExternal(ctx, input.Inventory, q.Claim.Actor, q.Expected.WorkerThreadID, admission); err != nil {
+		return out, err
+	}
 	err = store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
 		out = LegacyStopReceipt{}
+		if q.LegacyExpiresAt <= s.now().Unix() {
+			return errors.New("initial native stop authority expired before fence commitment")
+		}
 		if err := s.legacyCustody(ctx, tx, q); err != nil {
 			return err
 		}
@@ -394,8 +398,11 @@ func (s *Store) ObserveLegacyWorkerStop(ctx context.Context, actor string, contr
 		return out, err
 	}
 	q := out.Input.Handoff
+	if out.Recovery != nil {
+		q = out.Recovery.Handoff
+	}
 	if actor != q.Controller.Actor || controller != q.Controller || out.State == "transferred" || q.LegacyExpiresAt <= s.now().Unix() {
-		return out, errors.New("current controller and unexpired legacy custody required")
+		return out, errors.New("current controller and unexpired legacy custody required; renew retained custody through worker-stop-recover")
 	}
 	if err := validateLegacyStopAdmission(out); err != nil {
 		return out, err
@@ -421,7 +428,7 @@ func (s *Store) ObserveLegacyWorkerStop(ctx context.Context, actor string, contr
 	if err != nil || workspace != out.WorkspaceSHA256 {
 		return out, errors.New("legacy retained worktree changed after preparation")
 	}
-	if err = verifyLegacyExternal(ctx, out.Input.Inventory, q.Claim.Actor, q.Expected.WorkerThreadID); err != nil {
+	if err = verifyLegacyExternal(ctx, out.Input.Inventory, q.Claim.Actor, q.Expected.WorkerThreadID, out.NativeAdmission); err != nil {
 		return out, err
 	}
 	if out.State == "observed" {
@@ -462,8 +469,15 @@ func (s *Store) validateLegacyHandoff(ctx context.Context, tx *sql.Tx, q WorkerH
 	if err := tx.QueryRowContext(ctx, `SELECT preparation,state,observation_sha256,request_sha256,processes FROM legacy_worker_stops WHERE repo_id=? AND id=?`, s.repoID, q.LegacyStopID).Scan(&raw, &state, &hash, &request, &processes); err != nil {
 		return out, errors.New("trusted native/host stop observation unavailable; no receipt import")
 	}
-	if json.Unmarshal([]byte(raw), &out) != nil || state != "observed" || hash != q.LegacyStopSHA256 || request != digest || out.ConsentOutcomeID != q.ConsentOutcomeID || out.ObservedAt < out.PreparedAt || out.Input.Handoff.Expected != q.Expected || q.LegacyExpiresAt <= s.now().Unix() {
-		return out, errors.New("legacy stop hash, native custody, consent or expiration changed")
+	if json.Unmarshal([]byte(raw), &out) != nil || state != "observed" || hash != q.LegacyStopSHA256 || out.ConsentOutcomeID != q.ConsentOutcomeID || out.ObservedAt < out.PreparedAt || q.LegacyExpiresAt <= s.now().Unix() {
+		return out, errors.New("legacy stop hash, native custody or consent changed")
+	}
+	if q.LegacyRecoveryID == "" {
+		if request != digest || out.Input.Handoff.Expected != q.Expected || out.Recovery != nil {
+			return out, errors.New("legacy immutable request changed; exact controller recovery required")
+		}
+	} else if err := s.validateLegacyRecovery(ctx, tx, out, q, digest, request); err != nil {
+		return out, err
 	}
 	if err := validateLegacyStopAdmission(out); err != nil {
 		return out, err
@@ -494,7 +508,7 @@ func (s *Store) validateLegacyHandoff(ctx context.Context, tx *sql.Tx, q WorkerH
 	if err != nil || workspace != out.WorkspaceSHA256 {
 		return out, errors.New("legacy preserved source snapshot changed")
 	}
-	if err = verifyLegacyExternal(ctx, out.Input.Inventory, q.Claim.Actor, q.Expected.WorkerThreadID); err != nil {
+	if err = verifyLegacyExternal(ctx, out.Input.Inventory, q.Claim.Actor, q.Expected.WorkerThreadID, out.NativeAdmission); err != nil {
 		return out, err
 	}
 	var body string
@@ -508,7 +522,8 @@ func (s *Store) validateLegacyHandoff(ctx context.Context, tx *sql.Tx, q WorkerH
 		AuthoritySHA256 string `json:"human_authority_sha256"`
 		ExpiresAt       int64  `json:"expires_at"`
 	}
-	if len(body) > 16384 || json.Unmarshal([]byte(body), &attestation) != nil || attestation.Schema != "squad.legacy-worker-stop-attestation.v1" || attestation.RequestSHA256 != digest || attestation.StopSHA256 != hash || attestation.AuthoritySHA256 != q.HumanAuthoritySHA256 || attestation.ExpiresAt != q.LegacyExpiresAt {
+	now := s.now().Unix()
+	if len(body) > 16384 || json.Unmarshal([]byte(body), &attestation) != nil || attestation.Schema != "squad.legacy-worker-stop-attestation.v1" || attestation.RequestSHA256 != digest || attestation.StopSHA256 != hash || attestation.AuthoritySHA256 != q.HumanAuthoritySHA256 || attestation.ExpiresAt != q.LegacyExpiresAt || attestation.ExpiresAt <= now || attestation.ExpiresAt > now+86400 {
 		return out, errors.New("exact controller stopped-custody attestation and human authority required")
 	}
 	return out, nil

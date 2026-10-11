@@ -1146,6 +1146,15 @@ before any permanent fence. Remaining children must be the exact selected
 receiver or the reviewed binary's bounded listener, and all must later join.
 The source worktree has no general adapter for arbitrary detached writers.
 
+For each managed review in the inventory, that controller admission also has a
+`managed_reviews` entry containing `id`, the canonical `database_path` of the
+actual configured reviewer installation, and `receipt_sha256` of its exact
+durably joined record. The controller obtains these independently from that
+installation, not from a Worker-supplied SQLite copy. Preparation, observation
+and final handoff require that selected path and unchanged record, original
+native/revision and absent wrapper/reviewer PIDs. Duplicate or omitted selected
+reviews reject the transition.
+
 Preparation atomically publishes real original-owner consent, stores the actual
 native/renewal/receiver process snapshot and source digest, and installs a
 persistent native fence. It does not stop a process. After the owner uses its
@@ -1170,8 +1179,38 @@ new claim generation without changing historical completion or releasing holds.
 Metadata-only fresh native allocation may precede this transition; actual
 replacement launch must follow old writer fencing/join and successful handoff.
 
-The inventory can verify durably joined managed Grok attempts from their private
-admission database and exact completed GitHub run/attempt/revision identities.
+The preparation deadline is checked again before committing the irreversible
+fence. Qualify its recovery route before admitting a live stop. Following an
+outage or benign binding/held-decision drift, the responsible current controller
+uses `squad dispatch worker-stop-recover --request /absolute/recovery.json`.
+This 16KiB request contains `id`, `expected_recovery_id` (empty for the first
+recovery), `expected_observation_sha256` from the actual stop getter, `reason`,
+and the exact current `handoff`. Set its `legacy_recovery_id` to that operation
+ID and a fresh `legacy_expires_at` of at most 24 hours; consent/hash/attestation
+fields are zero until the actual result is returned.
+
+The recovery CAS re-observes host, source and controller-selected external
+custody. It can update the legitimate current controller binding, reservation
+status/times, monotonic heartbeat and exact held decision. Original assignment,
+claim owner/generation, native/processes, source snapshot, replacement identities
+and human authority remain unchanged. It stores a canonical controller audit
+and the winning recovery beside the unchanged original preparation; identical
+concurrent retry returns that winner. Failure leaves the original stop and fence
+intact. Use the returned `recovery.handoff` for the final request, adding its
+actual consent/observation and a fresh final attestation for the recovered
+request hash and deadline. No original consent is rewritten or manufactured.
+
+Recovery never deletes the fence or revives the old native. Live processes,
+source drift, changed claim ownership/generation, missing fences, stale CAS and
+expired/overlong authority remain blocked for precise reconciliation. An outage
+does not authorize discarding source changes, overriding holds or importing
+stopped-process JSON. The recovery CLI is a host supervisor boundary; it has no
+receipt-import MCP counterpart. Final CLI/MCP handoff uses the same recovered
+request and preserves its actual canonical audit in the immutable result.
+
+The inventory can verify durably joined managed Grok attempts from the
+controller-selected canonical admission database and exact completed GitHub
+run/attempt/revision identities.
 Live or unknown external mutations, ENV/Deployer custody and other retained
 claims remain blocked for their separate qualified executor. A read-only CI
 observation does not grant environment or deployment authority. Persistent

@@ -21,12 +21,21 @@ import (
 // LegacyNativeAdmission binds the current controller's original kernel identity and installed
 // hook in its held decision. The native owner cannot select a convenient child.
 type LegacyNativeAdmission struct {
-	Schema          string             `json:"schema_version"`
-	RequestSHA256   string             `json:"request_sha256"`
-	AuthoritySHA256 string             `json:"human_authority_sha256"`
-	Client          LegacyProcess      `json:"client"`
-	Lease           LegacyProcess      `json:"lease"`
-	Hook            LegacyHookIdentity `json:"hook"`
+	Schema          string                        `json:"schema_version"`
+	RequestSHA256   string                        `json:"request_sha256"`
+	AuthoritySHA256 string                        `json:"human_authority_sha256"`
+	Client          LegacyProcess                 `json:"client"`
+	Lease           LegacyProcess                 `json:"lease"`
+	Hook            LegacyHookIdentity            `json:"hook"`
+	ManagedReviews  []LegacyManagedReviewIdentity `json:"managed_reviews,omitempty"`
+}
+
+// LegacyManagedReviewIdentity is selected by the controller from the real
+// configured review installation, never from a Worker-created receipt file.
+type LegacyManagedReviewIdentity struct {
+	ID            string `json:"id"`
+	DatabasePath  string `json:"database_path"`
+	ReceiptSHA256 string `json:"receipt_sha256"`
 }
 
 type LegacyHookIdentity struct {

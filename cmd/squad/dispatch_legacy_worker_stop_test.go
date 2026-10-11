@@ -12,3 +12,11 @@ func TestLegacyStopDecoderRejectsReceiptImportsAndAmbiguousInput(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyRecoveryDecoderRejectsImportedStopAndUnknownScope(t *testing.T) {
+	for _, raw := range [][]byte{[]byte(`{"stopped":true}`), []byte(`{"processes":[]}`), []byte(`{"handoff":{"imported_authority":true}}`), []byte(`{} {}`), bytes.Repeat([]byte(" "), 16385)} {
+		if _, err := decodeLegacyRecoveryInput(raw); err == nil {
+			t.Fatal("untrusted recovery/host proof accepted")
+		}
+	}
+}
