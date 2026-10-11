@@ -25,13 +25,13 @@ class ClassifyTest(unittest.TestCase):
 
     def test_skill_only_change_skips_go(self):
         flags = ci_tool.classify(["workspace/coordination-skills/studio-issue-worker/SKILL.md"])
-        self.assertEqual(on(flags), ["doc", "node", "pyloop"])
+        self.assertEqual(on(flags), ["doc", "node", "pyloop", "recovery"])
 
     def test_go_test_only_change_skips_cross_build(self):
-        self.assertEqual(on(ci_tool.classify(["internal/claims/claim_test.go"])), ["go", "remote"])
+        self.assertEqual(on(ci_tool.classify(["internal/claims/claim_test.go"])), ["go", "recovery", "remote"])
 
     def test_go_source_selects_cross_build_but_not_smoke(self):
-        self.assertEqual(on(ci_tool.classify(["internal/store/store.go"])), ["cross", "go", "remote"])
+        self.assertEqual(on(ci_tool.classify(["internal/store/store.go"])), ["cross", "go", "recovery", "remote"])
 
     def test_sqlite_migration_asset_selects_go(self):
         self.assertTrue(ci_tool.classify(["internal/store/migrations/0042_x.sql"])["go"])
@@ -101,6 +101,34 @@ class GateTest(unittest.TestCase):
         needs = self.needs(flags)
         del needs["lint"]
         self.assertTrue(ci_tool.gate_errors(flags, needs))
+
+
+class RecoverySmokeCoverageTest(unittest.TestCase):
+    def test_runtime_and_store_changes_select_recovery(self):
+        for path in ("workspace/agent-loop/runtime_entry.py", "workspace/agent-loop/tests/test_recovery_matrix.py",
+                     "internal/dispatch/handoff.go", "internal/store/migrations/025_worker_handoffs.sql"):
+            self.assertTrue(ci_tool.classify([path])["recovery"], path)
+
+    def test_skipped_failed_or_missing_recovery_job_fails_gate(self):
+        flags = {f: "true" if f == "recovery" else "false" for f in ci_tool.FLAGS}
+        needs = {"scope": {"result": "success"}}
+        needs.update({job: {"result": "success" if flag == "recovery" else "skipped"}
+                      for job, flag in ci_tool.JOB_FLAGS.items()})
+        self.assertEqual(ci_tool.gate_errors(flags, needs), [])
+        for status in ("skipped", "failure", "cancelled"):
+            needs["recovery-smoke"] = {"result": status}
+            self.assertTrue(ci_tool.gate_errors(flags, needs))
+        del needs["recovery-smoke"]
+        self.assertTrue(ci_tool.gate_errors(flags, needs))
+
+    def test_recovery_job_runs_strict_runner_and_retains_report(self):
+        with open(WORKFLOW, encoding="utf-8") as fh:
+            job = fh.read().split("\n  recovery-smoke:\n", 1)[1].split("\n  # ", 1)[0]
+        self.assertIn("recovery_smoke.py contract --output recovery-smoke.json", job)
+        self.assertIn("if-no-files-found: error", job)
+        self.assertLess(job.index("pip install -r workspace/agent-loop/workflow-requirements.txt"),
+                        job.index("recovery_smoke.py contract"))
+        self.assertNotIn("continue-on-error", job)
 
 
 class ShardTest(unittest.TestCase):
