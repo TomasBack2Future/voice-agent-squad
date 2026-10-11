@@ -1,7 +1,9 @@
 """The acceptance runner must never turn missing coverage into qualification."""
 import io
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -72,6 +74,32 @@ class SmokeRunnerTests(unittest.TestCase):
         self.assertEqual({c['role'] for c in cells}, set(smoke.ROLES))
         self.assertTrue(all(c['status'] in ('not_run', 'unavailable') for c in cells))
         self.assertTrue(all(c['native_qualified'] is False for c in cells))
+
+    def test_native_version_probe_cannot_start_launcher_auto_update(self):
+        # The installed Muse wrapper checks updates even for --version. Model
+        # invocation need not have started for shared client files to change.
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'shared-client-update'
+            def version_probe(case):
+                subprocess.run([sys.executable, '-c',
+                    'import os,sys; from pathlib import Path; '
+                    'Path(sys.argv[1]).write_text("updated") '
+                    'if os.environ.get("MUSE_NO_AUTO_UPDATE") != "1" '
+                    'or os.environ.get("MUSE_LAUNCHER_INSTALL") == "1" else None',
+                    str(marker)], check=True)
+            fixture = type('VersionProbe', (unittest.TestCase,), {'test_version': version_probe})
+            for inherited in ({}, {'MUSE_NO_AUTO_UPDATE': '0'},
+                              {'MUSE_NO_AUTO_UPDATE': '1', 'MUSE_LAUNCHER_INSTALL': '1'}):
+                marker.unlink(missing_ok=True)
+                with self.subTest(inherited=inherited), patch.dict(os.environ, inherited, clear=True):
+                    suite = unittest.defaultTestLoader.loadTestsFromTestCase(fixture)
+                    with patch.object(unittest.TestLoader, 'loadTestsFromName', return_value=suite):
+                        results = smoke.run_suites(('native_version_fixture',))
+                    self.assertEqual(len(results), 1)
+                    self.assertEqual(results[0]['status'], 'passed')
+                    self.assertEqual(results[0]['tests_run'], 1)
+                    self.assertFalse(marker.exists(), 'native preflight modified shared installation')
+                    self.assertEqual(dict(os.environ), inherited)
 
     def test_missing_role_executor_blocks_before_test_execution(self):
         with patch.object(smoke, 'run_suites') as run:

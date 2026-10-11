@@ -61,6 +61,10 @@ def run_suites(names):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith('SQUAD_') and k not in IDENTITIES}
     env['PYTHONDONTWRITEBYTECODE'] = '1'
+    # The native wrapper may update shared binaries even on --version, before
+    # the session host applies its own child environment. Qualification must
+    # never install/update a client used by another task.
+    env.update(MUSE_NO_AUTO_UPDATE='1', MUSE_LAUNCHER_INSTALL='0')
     with patch.dict(os.environ, env, clear=True):
         for name in names:
             loader = unittest.TestLoader()
