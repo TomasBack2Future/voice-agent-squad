@@ -17,47 +17,52 @@ import muse_worker_launcher as launcher
 from muse_worker_tools import child_environment
 
 
+def native_fixture(selected):
+    # Retain proof instead of deleting a potentially unresolved native/cgroup.
+    root=Path(tempfile.mkdtemp(dir=selected['state_directory'],prefix='native-worker-qualification-'))
+    work=root/'workspace';ledger=root/'ledger';home=root/'coordination-home'
+    for p in (work,ledger,home):p.mkdir(mode=0o700)
+    def git(*args):return subprocess.check_output(['git',*args],cwd=work,text=True,stderr=subprocess.DEVNULL).strip()
+    git('init','-b','qualification');git('config','user.name','Qualification');git('config','user.email','qualification@example.invalid')
+    (work/'AGENTS.md').write_text('Isolated Muse qualification; no business or external operations.\n')
+    git('add','AGENTS.md');git('commit','-m','fixture');git('remote','add','origin','git@github.com:TomasBack2Future/voice-agent-squad.git')
+    subprocess.run(['git','init'],cwd=ledger,capture_output=True,check=True)
+    c=dict(selected,workspace=str(work),state_directory=str(root/'execution'),coordination_home=str(home),ledger_directory=str(ledger),
+           agent_id='qualification-worker',dispatcher_agent_id='qualification-controller',controller_native='qualification-controller-native',
+           controller_epoch=1,claim_generation=1,native_session_id=native.uuid7(),prompt_file=str(root/'prompt.txt'),max_seconds=360)
+    def squad(actor,*args):
+        e=child_environment(dict(c,agent_id=actor,native_session_id=c['controller_native'] if actor == c['dispatcher_agent_id'] else c['native_session_id']))
+        return subprocess.check_output([c['coordination_executable'],*args],cwd=ledger,env=e,text=True,stderr=subprocess.PIPE).strip()
+    squad(c['dispatcher_agent_id'],'init','--yes')
+    settings=ledger/'.squad/config.yaml';settings.write_text(settings.read_text().replace('default_worktree_per_claim: true','default_worktree_per_claim: false'))
+    squad(c['dispatcher_agent_id'],'register','--as',c['dispatcher_agent_id'])
+    squad(c['dispatcher_agent_id'],'dispatch','reserve','QUALIFY-MUSE','--source','github:TomasBack2Future/voice-agent-squad#1')
+    squad(c['dispatcher_agent_id'],'dispatch','controller-bind','--native-session',c['controller_native'])
+    squad(c['dispatcher_agent_id'],'new','BUG','Native Muse isolated proof','--ready')
+    squad(c['dispatcher_agent_id'],'dispatch','attach','QUALIFY-MUSE','--item','BUG-001','--generation','1')
+    # Qualification runs supervised; unattended bind is receiver-gated.
+    squad(c['dispatcher_agent_id'],'dispatch','bind','QUALIFY-MUSE','--thread-id',c['native_session_id'],'--generation','1','--supervised')
+    squad(c['agent_id'],'register','--as',c['agent_id']);squad(c['agent_id'],'claim','BUG-001','--long')
+    profile={'schema_version':'agent-loop.project-profile.v1','id':'muse-qualification','version':1,'repository':'TomasBack2Future/voice-agent-squad','context_by_phase':{},'gates':{},'resources':{},'risk_probes':[]}
+    native.atomic(root/'profile.json',profile)
+    a={'schema_version':'agent-loop.assignment.v1','assignment_id':'muse/qualification/1','issue':'TomasBack2Future/voice-agent-squad#1','item':'BUG-001',
+       'reservation':{'key':'QUALIFY-MUSE','generation':1},'repository':profile['repository'],'worktree':str(work),'branch':'qualification','base_sha':git('rev-parse','HEAD'),
+       'role':{'id':'worker','skill':'agent-loop-worker','version':1},'project_profile':{'id':profile['id'],'version':1,'path':str(root/'profile.json')},
+       'authorization':{'source_mutation':True,'pull_request':False,'merge':False,'staging':False,'production':False,'issue_close':False},'evidence_required':['test','manual']}
+    native.atomic(root/'assignment.json',a);native.atomic(root/'config.json',c)
+    squad(c['dispatcher_agent_id'],'milestone','--to','BUG-001','Qualification proceed; bounded fixture only, no external operations.')
+    with sqlite3.connect(home/'global.db') as db:
+        outcome=db.execute("SELECT max(id) FROM messages WHERE agent_id=? AND thread='BUG-001'",(c['dispatcher_agent_id'],)).fetchone()[0]
+    squad(c['dispatcher_agent_id'],'terminal-events','decision-set','--reservation','QUALIFY-MUSE','--generation','1','--worker-session',c['native_session_id'],
+          '--expected-revision','0','--outcome',str(outcome),'--action','proceed')
+    return root, work, home, c, a, squad
+
+
 @unittest.skipUnless(os.environ.get('MUSE_WORKER_QUALIFICATION'), 'explicit isolated native Worker qualification config required')
 class MuseWorkerNativeTests(unittest.TestCase):
     def test_new_resume_decision_and_terminal_report(self):
         selected=json.loads(Path(os.environ['MUSE_WORKER_QUALIFICATION']).read_text())
-        # Retain proof instead of deleting a potentially unresolved native/cgroup.
-        root=Path(tempfile.mkdtemp(dir=selected['state_directory'],prefix='native-worker-qualification-'))
-        work=root/'workspace';ledger=root/'ledger';home=root/'coordination-home'
-        for p in (work,ledger,home):p.mkdir(mode=0o700)
-        def git(*args):return subprocess.check_output(['git',*args],cwd=work,text=True,stderr=subprocess.DEVNULL).strip()
-        git('init','-b','qualification');git('config','user.name','Qualification');git('config','user.email','qualification@example.invalid')
-        (work/'AGENTS.md').write_text('Isolated Muse qualification; no business or external operations.\n')
-        git('add','AGENTS.md');git('commit','-m','fixture');git('remote','add','origin','git@github.com:TomasBack2Future/voice-agent-squad.git')
-        subprocess.run(['git','init'],cwd=ledger,capture_output=True,check=True)
-        c=dict(selected,workspace=str(work),state_directory=str(root/'execution'),coordination_home=str(home),ledger_directory=str(ledger),
-               agent_id='qualification-worker',dispatcher_agent_id='qualification-controller',controller_native='qualification-controller-native',
-               controller_epoch=1,claim_generation=1,native_session_id=native.uuid7(),prompt_file=str(root/'prompt.txt'),max_seconds=360)
-        def squad(actor,*args):
-            e=child_environment(dict(c,agent_id=actor))
-            return subprocess.check_output([c['coordination_executable'],*args],cwd=ledger,env=e,text=True,stderr=subprocess.PIPE).strip()
-        squad(c['dispatcher_agent_id'],'init','--yes')
-        settings=ledger/'.squad/config.yaml';settings.write_text(settings.read_text().replace('default_worktree_per_claim: true','default_worktree_per_claim: false'))
-        squad(c['dispatcher_agent_id'],'register','--as',c['dispatcher_agent_id'])
-        squad(c['dispatcher_agent_id'],'dispatch','reserve','QUALIFY-MUSE','--source','github:TomasBack2Future/voice-agent-squad#1')
-        squad(c['dispatcher_agent_id'],'dispatch','controller-bind','--native-session',c['controller_native'])
-        squad(c['dispatcher_agent_id'],'new','BUG','Native Muse isolated proof','--ready')
-        squad(c['dispatcher_agent_id'],'dispatch','attach','QUALIFY-MUSE','--item','BUG-001','--generation','1')
-        # Qualification runs supervised; unattended bind is receiver-gated.
-        squad(c['dispatcher_agent_id'],'dispatch','bind','QUALIFY-MUSE','--thread-id',c['native_session_id'],'--generation','1','--supervised')
-        squad(c['agent_id'],'register','--as',c['agent_id']);squad(c['agent_id'],'claim','BUG-001','--long')
-        profile={'schema_version':'agent-loop.project-profile.v1','id':'muse-qualification','version':1,'repository':'TomasBack2Future/voice-agent-squad','context_by_phase':{},'gates':{},'resources':{},'risk_probes':[]}
-        native.atomic(root/'profile.json',profile)
-        a={'schema_version':'agent-loop.assignment.v1','assignment_id':'muse/qualification/1','issue':'TomasBack2Future/voice-agent-squad#1','item':'BUG-001',
-           'reservation':{'key':'QUALIFY-MUSE','generation':1},'repository':profile['repository'],'worktree':str(work),'branch':'qualification','base_sha':git('rev-parse','HEAD'),
-           'role':{'id':'worker','skill':'agent-loop-worker','version':1},'project_profile':{'id':profile['id'],'version':1,'path':str(root/'profile.json')},
-           'authorization':{'source_mutation':True,'pull_request':False,'merge':False,'staging':False,'production':False,'issue_close':False},'evidence_required':['test','manual']}
-        native.atomic(root/'assignment.json',a);native.atomic(root/'config.json',c)
-        squad(c['dispatcher_agent_id'],'milestone','--to','BUG-001','Qualification proceed; bounded fixture only, no external operations.')
-        with sqlite3.connect(home/'global.db') as db:
-            outcome=db.execute("SELECT max(id) FROM messages WHERE agent_id=? AND thread='BUG-001'",(c['dispatcher_agent_id'],)).fetchone()[0]
-        squad(c['dispatcher_agent_id'],'terminal-events','decision-set','--reservation','QUALIFY-MUSE','--generation','1','--worker-session',c['native_session_id'],
-              '--expected-revision','0','--outcome',str(outcome),'--action','proceed')
+        root, work, home, c, a, squad = native_fixture(selected)
         Path(c['prompt_file']).write_text('Isolated qualification only. Registration, primary claim and reservation are already held. Read the canonical role/profile. '
             'Use write_file to create proof.py containing def add(a,b): return a+b. Use run_command to execute python3 -c \'from proof import add; assert add(2,3)==5; print("NATIVE_WORKER_OK")\'. '
             'Record actual results with the report tool and stop. Handle/ack any queued proceed decision upon delivery. Do not run business, review, GitHub or environment operations.')
@@ -76,7 +81,7 @@ class MuseWorkerNativeTests(unittest.TestCase):
             self.assertEqual(session['session']['modelId'],native.MODEL);self.assertEqual(session['session']['approvalMode']['mode'],'allowAll')
             self.assertIn('--disable-shell',session['server_arguments']);self.assertIn('--disable-write',session['server_arguments'])
             self.assertTrue(json.loads((state/'join.json').read_text())['joined'])
-            self.assertEqual(set(json.loads((state/'startup-loaded.json').read_text())['loaded']), {'role','profile'})
+            self.assertEqual(set(json.loads((state/'startup-loaded.json').read_text())['loaded']), {'role','profile','lifecycle'})
         previous={p.parent for p in Path(c['state_directory']).glob('*/operations.json')}
         stopped=threading.Event();hold_errors=[]
         def send_hold():

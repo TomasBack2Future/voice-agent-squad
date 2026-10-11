@@ -1065,6 +1065,176 @@ mechanism is introduced. External dependency or authentication recovery still
 needs verified evidence from its owner before the Dispatcher sets `proceed`.
 
 
+### Supervised source Worker handoff
+
+Use the current controller's actual actor/native/epoch, not the legacy takeover
+or a new controller. Register the fresh replacement actor legitimately first.
+
+```sh
+squad dispatch worker-handoff-digest --request EXACT_SOURCE_HANDOFF_JSON
+squad dispatch worker-handoff --request EXACT_SOURCE_HANDOFF_JSON
+squad dispatch worker-handoff-get REQUEST_ID
+```
+
+The bounded JSON contains `request_id`, `controller` (`actor`, `native_session`,
+`epoch`), the complete `expected` reservation snapshot, `claim` (`item`, `actor`,
+`generation`, `claimed_at`, `last_touch`), `execution_id`, `new_actor`,
+`new_native`, `decision_revision`, `consent_outcome_id` and `custody_evidence`.
+The digest command returns `squad.worker-handoff-consent.v1` JSON. The original
+owner publishes that exact JSON on the original canonical item; its real message
+ID becomes `consent_outcome_id`. The digest excludes that message ID and, in legacy mode, the later host observation
+hash and supervisory attestation message ID.
+The current controller invokes the transition after joining the original source
+execution and handling pending events. Only a handled hold is eligible.
+`SQUAD_NATIVE_SESSION_ID` must equal the request's current controller native.
+
+Same exact retries return the immutable receipt; changed replay fails. Readback
+includes previous/current reservations, original actor, claim generation and the
+reconciled original execution identity. MCP exposes
+`squad_dispatch_worker_handoff` with one `request` object and
+`squad_dispatch_worker_handoff_get` with `request_id`. Unknown fields and oversized
+requests are rejected. This source-only route excludes protected ENV; legacy
+clients use the distinct native-stop protocol below; see [custody prerequisites](../concepts/claims-and-coordination.md#controller-bound-source-worker-handoff).
+
+### Original-native legacy Worker stop and handoff
+
+A legacy source Worker has no reconciled execution pin. Never create one to
+make it eligible. Its original Claude CLI must first reach a safe Bash boundary,
+handle its pending decisions, join other tools, and adopt the blocking native
+fence hook. No model request is needed for this boundary. Qualify that the actual
+native Bash path and normal exit are supported before using them with live work.
+
+```sh
+exec /absolute/reviewed/squad dispatch worker-stop-prepare --request ORIGINAL_NATIVE_PREPARATION_JSON
+squad dispatch worker-stop-get STOP_ID
+squad dispatch worker-stop-observe STOP_ID --native-session CONTROLLER_NATIVE --epoch EPOCH
+squad dispatch worker-native-check --native-session WORKER_NATIVE
+squad dispatch worker-native-hook-get WORKER_NATIVE
+squad dispatch worker-stop-source-check STOP_ID --workspace RETAINED_WORKTREE
+```
+
+Preparation replaces its native Bash shell with `exec`, directly below the
+outermost original Claude CLI. A continuing shell, wrapper or nested fake-named
+client cannot prepare a stop. The
+64KiB request contains `handoff`, the complete original `assignment`, absolute
+`workspace`, actual dedicated parent/renewal `lease_pid`, and explicit bounded
+external-operation `inventory`. Its handoff uses `legacy_stop_id`,
+`human_authority_sha256` and an unexpired `legacy_expires_at` (at most 24 hours),
+with no `execution_id`, consent, observation hash or attestation ID yet. The
+original envelope and source authorization must be retained exactly. Native
+identity is read from kernel argument boundaries, never reconstructed from a
+terminal display or imported process JSON. Unknown fields reject preparation.
+
+Before this boundary the current controller's effective held outcome must be a
+typed `squad.legacy-worker-native-admission.v1` object. It binds
+`request_sha256`, `human_authority_sha256`, `client`, `lease` and `hook`.
+Both process identities contain the actual `pid`, kernel `executable`, executable
+`sha256` and `start`. The controller independently qualifies the original client
+against the installed Claude artifact and its dedicated supervisor before
+selecting them; matching a process name alone is insufficient. `hook` binds the
+selected settings/config/module paths and SHA256 values, receiver module SHA256,
+and the Python executable path/SHA256. `worker-native-hook-get` reads the actual
+kernel-observed `client` and `hook`; it does not assert the client has stopped.
+The real synchronous `claude_native_fence.py` hook must execute again at the
+native tool boundary after that held outcome. Its CLI-only
+`worker-native-hook-check --native-session NATIVE --hook-config CONFIG` adapter
+accepts only the exact original native/Python hook ancestry and selected native
+settings, never a supplied hook receipt or process snapshot. Configuration must
+declare `runtime: "claude"`, `role: "worker"`, the original actor/native and
+`legacy_native_fence: true`. Changed artifacts or missing/stale execution fail
+before any permanent fence. The host snapshot omits only its own already-joined
+process-listing helper; every other captured child remains subject to the guards.
+Remaining children must be the exact selected
+receiver or the reviewed binary's bounded listener, and all must later join.
+The source worktree has no general adapter for arbitrary detached writers.
+
+For each managed review in the inventory, that controller admission also has a
+`managed_reviews` entry containing `id`, the canonical `database_path` of the
+actual configured reviewer installation, and `receipt_sha256` of its exact
+durably joined record. The controller obtains these independently from that
+installation, not from a Worker-supplied SQLite copy. Preparation, observation
+and final handoff require that selected path and unchanged record, original
+native/revision and absent wrapper/reviewer PIDs. Duplicate or omitted selected
+reviews reject the transition.
+
+Preparation atomically publishes real original-owner consent, stores the actual
+native/renewal/receiver process snapshot and source digest, and installs a
+persistent native fence. It does not stop a process. After the owner uses its
+qualified normal exit and its receiver/renewal processes join, the current
+controller observes their actual absence and rechecks retained source/external
+custody, including a fresh host scan for another process with the old native.
+Version26 rejects every future callback targeting a fenced native, including
+decision wakes; the replacement wake targets its new native. Consent must fit
+the same 16KiB bound used by final handoff, and the stored preparation must fit
+its downstream receipt bound, before a fence can commit. Oversized input leaves
+the original custody unfenced. App/terminal donors without a qualified native-stop executor are
+unsupported; process absence or arbitrary stopped JSON cannot qualify them.
+
+The controller publishes a canonical typed
+`squad.legacy-worker-stop-attestation.v1` message containing `request_sha256`,
+`stop_sha256`, `human_authority_sha256` and `expires_at`. The final handoff adds
+`legacy_stop_sha256`, `legacy_attestation_id` and the genuine preparation's
+`consent_outcome_id`, then uses `worker-handoff` above. A released terminal
+ordinary claim additionally requires explicit `retained_phase` (`source`,
+`review` or `acceptance`) and matching original release history. It creates a
+new claim generation without changing historical completion or releasing holds.
+Metadata-only fresh native allocation may precede this transition; actual
+replacement launch must follow old writer fencing/join and successful handoff.
+
+The preparation deadline is checked again before committing the irreversible
+fence. Qualify its recovery route before admitting a live stop. Following an
+outage or benign binding/held-decision drift, the responsible current controller
+uses `squad dispatch worker-stop-recover --request /absolute/recovery.json`.
+This 16KiB request contains `id`, `expected_recovery_id` (empty for the first
+recovery), `expected_observation_sha256` from the actual stop getter, `reason`,
+and the exact current `handoff`. Set its `legacy_recovery_id` to that operation
+ID and a fresh `legacy_expires_at` of at most 24 hours; consent/hash/attestation
+fields are zero until the actual result is returned.
+
+The recovery CAS re-observes host, source and controller-selected external
+custody. It can update the legitimate current controller binding, reservation
+status/times, monotonic heartbeat and exact held decision. Original assignment,
+claim owner/generation, native/processes, source snapshot, replacement identities
+and human authority remain unchanged. It stores a canonical controller audit
+and the winning recovery beside the unchanged original preparation; identical
+concurrent retry returns that winner. Failure leaves the original stop and fence
+intact. Use the returned `recovery.handoff` for the final request, adding its
+actual consent/observation and a fresh final attestation for the recovered
+request hash and deadline. No original consent is rewritten or manufactured.
+
+The retained source digest binds HEAD, branch, origin, staged index object IDs,
+modes and conflict stages, plus tracked and untracked regular-file bytes and
+permission modes. The staged index listing binds staged content even when dirty
+worktree bytes are identical. A separate NUL-delimited
+`git ls-files --cached --others --exclude-standard -z` listing includes tracked
+paths and non-ignored untracked paths; tracked paths missing from the worktree
+contribute an explicit deletion marker. Ignored untracked files are outside this
+source digest and require separate custody when relevant to a handoff.
+Git metadata output is bounded to 16MiB per command and file
+contents to 256MiB in total. These checks use read-only index listing rather than
+`git status`, so repository clean filters are not invoked. Inherited `GIT_*`
+overrides and system/global configuration are excluded, fsmonitor and hooks are
+disabled, and optional Git locking is disabled. Symlink and submodule custody
+still require separate qualification.
+
+Recovery never deletes the fence or revives the old native. Live processes,
+source drift, changed claim ownership/generation, missing fences, stale CAS and
+expired/overlong authority remain blocked for precise reconciliation. An outage
+does not authorize discarding source changes, overriding holds or importing
+stopped-process JSON. The recovery CLI is a host supervisor boundary; it has no
+receipt-import MCP counterpart. Final CLI/MCP handoff uses the same recovered
+request and preserves its actual canonical audit in the immutable result.
+
+The inventory can verify durably joined managed Grok attempts from the
+controller-selected canonical admission database and exact completed GitHub
+run/attempt/revision identities.
+Live or unknown external mutations, ENV/Deployer custody and other retained
+claims remain blocked for their separate qualified executor. A read-only CI
+observation does not grant environment or deployment authority. Persistent
+native/callback guards also reject old runtime pin/rebind/callback writes.
+Preparation has no MCP import equivalent; the existing handoff MCP accepts the
+same final legacy request and returns the immutable stopped-custody receipt.
+
 ### Dispatcher controller handoff
 
 These commands change coordination custody only; they do not install, migrate a

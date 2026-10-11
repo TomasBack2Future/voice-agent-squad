@@ -18,8 +18,13 @@ def settings(config_path: Path) -> dict:
     entry = {'type': 'command', 'command': sys.executable,
              'args': [str(Path(__file__).resolve()), '--config', str(config_path.resolve())],
              'asyncRewake': True, 'timeout': 86400}
-    return {'hooks': {event: [{'hooks': [entry]}]
-                      for event in ('SessionStart', 'PostToolUse', 'Stop')}}
+    result = {'hooks': {event: [{'hooks': [entry]}]
+                       for event in ('SessionStart', 'PostToolUse', 'Stop')}}
+    if json.loads(config_path.read_text()).get('legacy_native_fence'):
+        command = shlex.join([sys.executable, str(Path(__file__).with_name('claude_native_fence.py').resolve()),
+                              '--config', str(config_path.resolve())])
+        result['hooks']['PreToolUse'] = [{'matcher': '*', 'hooks': [{'type': 'command', 'command': command, 'timeout': 15}]}]
+    return result
 
 
 @contextmanager

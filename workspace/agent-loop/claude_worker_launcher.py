@@ -206,7 +206,7 @@ def receiver_arguments(c: dict, config_path: Path) -> list[str]:
     config.write_text(json.dumps(dict(native_session_id=c['native_session_id'], agent_id=c['agent_id'],
                      role='worker', state_directory=str(state), ledger_directory=c['ledger_directory'],
                      squad_executable=c['event_executable'], incarnation=str(uuid.uuid4()),
-                     owner_pid=os.getpid()), indent=2) + '\n')
+                     owner_pid=os.getpid(), runtime='claude', legacy_native_fence=True), indent=2) + '\n')
     setting = state / 'settings.json'
     setting.write_text(json.dumps(terminal_receiver.settings(config), indent=2) + '\n')
     return ['--settings', str(setting)]

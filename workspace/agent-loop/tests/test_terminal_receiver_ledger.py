@@ -75,7 +75,14 @@ class ReceiverLedgerTests(unittest.TestCase):
     def wait_bound(self, p, incarnation):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and p.poll() is None:
-            if self.rows() == [('new-native', 2, incarnation)]: return
+            if self.rows() == [('new-native', 2, incarnation)]:
+                # Custody binds before the listener registers its native wake
+                # endpoint. Qualify the actual route before asynchronous bind.
+                env = dict(self.env, SQUAD_AGENT='new', SQUAD_SESSION_ID='claude:new-native')
+                ready = subprocess.run([str(self.binary), 'dispatch', 'receiver-preflight', '--actor', 'new'],
+                                       cwd=self.root, env=env, capture_output=True, text=True, timeout=5)
+                if ready.returncode == 0:
+                    return
             time.sleep(.05)
         self.fail('receiver failed to bind exact handed-off native/epoch: ' + str(self.rows()))
 

@@ -23,6 +23,8 @@ from worker_preflight import check_profile, check_worktree, git, repository_name
 from muse_worker_receiver import Receiver
 from muse_worker_container import Runtime
 from muse_worker_view import LiveView
+from muse_worker_handoff import check_handoff
+from muse_worker_input import TerminalInput
 
 FINGERPRINT = native.FINGERPRINT
 
@@ -83,6 +85,20 @@ def submit_outcome(c, env, pin, kind, body_file, decision_revision=None, request
     return submitted
 
 
+def publish_report(c, env, pin, state):
+    """Publish a joined execution's report with a retry-stable execution key."""
+    report = json.loads((state / 'report.json').read_text())
+    kind = 'handoff-complete' if report['status'] == 'completed' else 'blocked'
+    decision = read_decision(c, env, pin)
+    # Atomic submit distinguishes a new completion under hold from an identical
+    # committed replay after the controller advances to a new held phase.
+    body_file = state / 'outcome-body.txt'
+    body_file.write_text(report.get('summary', '') or report['status'])
+    return submit_outcome(c, env, pin, kind, body_file,
+                          decision_revision=decision['revision'] if decision else None,
+                          request_key='report-' + pin['id'])
+
+
 def resolve_effort(c):
     if 'reasoning_effort' in c:
         effort, source = c['reasoning_effort'], 'launch-config'
@@ -140,12 +156,16 @@ def check_launch(assignment, config_path, resume=False):
     if Path(c['workspace']).resolve() != Path(assignment['worktree']).resolve():
         raise ValidationError('Muse workspace differs from assignment')
     check_profile(assignment)
-    if resume:
+    if resume or c.get('handoff'):
+        if c.get('handoff'):
+            if resume:
+                raise ValidationError('fresh source handoff and same-native resume are separate operations')
+            check_handoff(assignment, c)
         work = Path(c['workspace']).resolve()
         if (Path(git(work, 'rev-parse', '--show-toplevel')).resolve() != work
                 or git(work, 'branch', '--show-current') != assignment['branch']
                 or repository_name(git(work, 'remote', 'get-url', 'origin'), assignment.get('repository_host', 'github.com'), assignment.get('clone_layout', 'plain')) != assignment['repository']):
-            raise ValidationError('resumed worktree identity changed')
+            raise ValidationError('retained worktree identity changed')
         git(work, 'merge-base', '--is-ancestor', assignment['base_sha'], 'HEAD')
     else:
         check_worktree(assignment)
@@ -220,7 +240,10 @@ def record_context_read(c, state, message, loaded):
     except (KeyError, ValueError):
         return
     startup = json.loads((state / 'startup.json').read_text())
-    for key in ('role', 'profile'):
+    required = ('role', 'profile', 'lifecycle')
+    if any(key not in startup for key in required):
+        return
+    for key in required:
         expected = startup[key]
         output = item.get('visibleOutput', '')
         if path == Path(expected['path']).resolve() and output.startswith('Read text file `'):
@@ -234,38 +257,162 @@ def record_context_read(c, state, message, loaded):
             if (hashlib.sha256(source).hexdigest() == expected['sha256']
                     and lines == source.decode().splitlines() and numbers == list(range(1,len(lines)+1))):
                 loaded[key] = {'path': str(path), 'sha256': expected['sha256'], 'native_item': item['itemId']}
-    if len(loaded) == 2:
+    if set(loaded) == set(required):
         native.atomic(state / 'startup-loaded.json', {'native': c['native_session_id'], 'loaded': loaded})
 
 
-def run(assignment_path, config_path, resume=False):
+def submit_text(h, c, command, text, pending):
+    h.rpc('turn/start', {'commandId': command, 'sessionId': c['native_session_id'],
+          'reasoningEffort': c['reasoning_effort'], 'input': [{'type': 'text', 'text': text}]})
+    # Only native acceptance consumes pending human input. Later model/tool or
+    # publication failures must not turn accepted input into an implicit replay.
+    pending['accepted'] = True
+
+
+def drive_turns(h, c, state, assignment, env, pin, receiver, view, ui=None):
+    deadline = time.monotonic() + c.get('max_seconds', 82800)
+    renewed = time.monotonic()
+    native_events = []
+    loaded = {}
+    terminal = None
+    busy = True
+    while time.monotonic() < deadline:
+        if ui:
+            action = ui.read(busy)
+            if action:
+                kind, text = action
+                if kind in ('exit', 'resume', 'interrupt'):
+                    ui.action = 'restart-wait' if kind == 'interrupt' else kind
+                    # Revoke admission BEFORE interrupting or closing the host.
+                    (state / 'closed').touch()
+                    coordination(c, 'suspend')
+                    if busy:
+                        h.rpc('turn/interrupt', {'commandId': native.uuid7(), 'sessionId': c['native_session_id']})
+                        return 'interrupted'
+                    return terminal
+                if kind == 'text' and not busy:
+                    try:
+                        decision = read_decision(c, env, pin)
+                        if decision and decision['action'] != 'proceed':
+                            ui.restore(text)
+                            ui.status('HOLD — task retained; source turns wait for the controller decision')
+                            continue
+                        if (state / 'closed').exists():
+                            ui.restore(text)
+                            ui.status('execution suspended — /resume joins and reconnects the same native')
+                            continue
+                        # A previous turn's report must never describe a new turn.
+                        (state / 'report.json').unlink(missing_ok=True)
+                        submit_text(h, c, native.uuid7(), text, {})
+                    except (OSError, ValueError, subprocess.SubprocessError, queue.Empty):
+                        ui.restore(text)
+                        raise
+                    busy = True
+                    terminal = None
+                    ui.status('running — Escape interrupts; your draft stays local')
+        if time.monotonic() - renewed >= 20:
+            heartbeat(assignment, c, env)
+            renewed = time.monotonic()
+            if not ui:
+                view.status('[Muse] running; claim renewed, execution pin retained')
+        try:
+            m = h.events.get(timeout=0.1 if ui else 1)
+        except queue.Empty:
+            if ui and not busy:
+                receipt = receiver.pending()
+                if receipt:
+                    (state / 'report.json').unlink(missing_ok=True)
+                    receiver.submit(h, receipt)
+                    busy = True
+                    terminal = None
+                    ui.status('handling current durable decision')
+            continue
+        params = m.get('params', {})
+        if m.get('method') != 'host/exited' and params.get('sessionId') != c['native_session_id']:
+            continue
+        if ui:
+            ui.erase()
+        view.observe(m)
+        if ui:
+            ui.redraw()
+        record_context_read(c, state, m, loaded)
+        with (state / 'native-events.jsonl').open('a') as journal:
+            os.chmod(journal.name, 0o600)
+            journal.write(json.dumps(m, ensure_ascii=False) + '\n')
+        native_events.append(m)
+        # Keep full evidence on disk without retaining and rewriting a day's
+        # worth of deltas in a persistent UI's memory.
+        native_events = native_events[-256:]
+        native.atomic(state / 'native-events.json', native_events)
+        if m.get('method') == 'host/exited':
+            raise ValidationError('native host exited; original custody retained')
+        if m.get('method') == 'turn/completed':
+            terminal = params.get('terminal')
+            if terminal == 'completed':
+                if ui and (state / 'report.json').exists():
+                    # A reported execution must join and publish before another
+                    # turn can replace its result. The frontend stays alive.
+                    ui.action = 'reported'
+                    return terminal
+                receipt = receiver.pending()
+                if receipt:
+                    if ui:
+                        (state / 'report.json').unlink(missing_ok=True)
+                    receiver.submit(h, receipt)
+                    terminal = None
+                    continue
+                if ui:
+                    busy = False
+                    decision = read_decision(c, env, pin)
+                    if decision and decision['action'] != 'proceed':
+                        ui.status('HOLD — visible input retained; source writes require the controller decision')
+                    elif (state / 'closed').exists():
+                        ui.status('execution suspended — /resume reconnects after verified join')
+                    else:
+                        ui.status('waiting — editable input ready; same native and mediated tools retained')
+                    continue
+            if ui:
+                ui.action = 'restart-wait'
+            break
+    if ui and terminal is None:
+        ui.action = 'restart-wait'
+    return terminal
+
+
+def run_execution(assignment_path, config_path, resume=False, ui=None, owned_lock=None, continuation=None):
     assignment = validate_file(assignment_path, ROOT / 'schemas/assignment-envelope.schema.json')
     check_launch(assignment, config_path, resume)
     c = config_file(config_path)
     state = Path(c['state_directory']) / str(uuid.uuid4())
     state.mkdir(parents=True, mode=0o700)
-    lock = (Path(c['state_directory']) / (c['native_session_id'] + '.lock')).open('a')
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    c.update(execution_mode='mediated-worker', execution_binding=str(state / 'binding.json'))
-    env = child_environment(c)
-    env['XDG_CONFIG_HOME'] = settings(c, state)
-    writer = Path(c['state_directory']) / (c['native_session_id'] + '.writer.json')
-    custody = {k: c[k] for k in ('native_session_id', 'agent_id', 'claim_generation', 'dispatcher_agent_id', 'controller_native', 'controller_epoch')}
-    if writer.exists():
-        old = json.loads(writer.read_text())
-        if old.get('state') != 'joined' or old.get('assignment') != assignment or old.get('custody') != custody:
-            raise ValidationError('original Worker writer is unjoined or assignment changed; reconcile original custody')
-    native.atomic(writer, {'state': 'intent', 'custody': custody, 'assignment': assignment, 'evidence': str(state)})
-    view = LiveView(c['native_session_id'], enabled=c.get('progress_view', 'live') == 'live')
-    view.status('[Muse] ' + ('Resuming ' if resume else 'Starting ') + c['native_session_id']
-                + ' | effort=' + c['reasoning_effort'] + ' (' + c['reasoning_effort_source'] + ')'
-                + ' | mediated source tools | evidence=' + str(state))
-    h = native.Host(c, state, env)
-    native.atomic(writer, {'state': 'running', 'custody': custody, 'assignment': assignment, 'evidence': str(state), 'pid': h.p.pid})
+    lock = owned_lock or (Path(c['state_directory']) / (c['native_session_id'] + '.lock')).open('a')
+    try:
+        if not owned_lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        c.update(execution_mode='mediated-worker', execution_binding=str(state / 'binding.json'))
+        env = child_environment(c)
+        env['XDG_CONFIG_HOME'] = settings(c, state)
+        writer = Path(c['state_directory']) / (c['native_session_id'] + '.writer.json')
+        custody = {k: c[k] for k in ('native_session_id', 'agent_id', 'claim_generation', 'dispatcher_agent_id', 'controller_native', 'controller_epoch')}
+        if writer.exists():
+            old = json.loads(writer.read_text())
+            if old.get('state') != 'joined' or old.get('assignment') != assignment or old.get('custody') != custody:
+                raise ValidationError('original Worker writer is unjoined or assignment changed; reconcile original custody')
+        native.atomic(writer, {'state': 'intent', 'custody': custody, 'assignment': assignment, 'evidence': str(state)})
+        view = LiveView(c['native_session_id'], enabled=bool(ui) or c.get('progress_view', 'live') == 'live')
+        view.status('[Muse] ' + ('Resuming ' if resume else 'Starting ') + c['native_session_id']
+                    + ' | effort=' + c['reasoning_effort'] + ' (' + c['reasoning_effort_source'] + ')'
+                    + ' | mediated source tools | evidence=' + str(state))
+        h = native.Host(c, state, env)
+    except BaseException:
+        if not owned_lock:
+            lock.close()
+        raise
     pinned = False
     receiver = None
     terminal = None
     try:
+        native.atomic(writer, {'state': 'running', 'custody': custody, 'assignment': assignment, 'evidence': str(state), 'pid': h.p.pid})
         initialize(h)
         claim = subprocess.run([c['coordination_executable'], 'claim-inspect', assignment['item']],
                                cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10, check=True)
@@ -303,53 +450,40 @@ def run(assignment_path, config_path, resume=False):
         native.atomic(state / 'startup.json', {'native': c['native_session_id'], 'actor': c['agent_id'],
                       'model': native.MODEL, 'permission_mode': 'yolo', 'reasoning_effort': c['reasoning_effort'],
                       'reasoning_effort_source': c['reasoning_effort_source'], 'progress_view': c.get('progress_view', 'live'),
+                      'ui_mode': c['ui_mode'], 'ui_mode_source': c['ui_mode_source'],
                       'role': {'path': str(ROOT / 'roles/worker/SKILL.md'), 'sha256': hashlib.sha256((ROOT / 'roles/worker/SKILL.md').read_bytes()).hexdigest()},
                       'profile': {'path': str(profile_path.resolve()), 'sha256': hashlib.sha256(profile_path.read_bytes()).hexdigest()},
+                      'lifecycle': {'path': str(ROOT / 'lifecycle-continuity.md'), 'sha256': hashlib.sha256((ROOT / 'lifecycle-continuity.md').read_bytes()).hexdigest()},
                       'assignment_sha256': hashlib.sha256(Path(assignment_path).read_bytes()).hexdigest()})
-        receiver = Receiver(c, state)
-        prompt = 'Exact assignment envelope (scope and identity):\n' + json.dumps(assignment) + '\n' + ('First read the Worker role skill at ' + str(ROOT / 'roles/worker/SKILL.md') + ' and the assigned project profile at ' + str(profile_path.resolve()) + '. Record their verified identities in your startup evidence.\n') + Path(c['prompt_file']).read_text() + '\nUse squad_worker run_command/write_file for mutations. For coordination use decision_get({}), claim_read({}), mailbox({}), acknowledge({event_id,note}) and post_message({kind,text}); do not guess Squad CLI arguments. Native shell/write are disabled; approvals remain YOLO. Do not detach processes or spawn subagents. Call squad_worker report with actual completion or blocker evidence, then reply; the supervisor retains task custody until tools are joined. Do not release the primary claim or mark it done inside this run.'
+        continuation = continuation or {}
+        receiver = continuation.get('receiver') or Receiver(c, state)
+        receiver.c = c
+        task_text = continuation.get('text')
+        if task_text is None:
+            task_text = ('Handle the current durable decision and preserve already completed work. Continue only the current authorized phase.'
+                         if continuation.get('receipt') else Path(c['prompt_file']).read_text())
+        prompt = 'Exact assignment envelope (scope and identity):\n' + json.dumps(assignment) + '\n' + ('First read the entire Worker role skill at ' + str(ROOT / 'roles/worker/SKILL.md') + ', assigned project profile at ' + str(profile_path.resolve()) + ', and lifecycle contract at ' + str(ROOT / 'lifecycle-continuity.md') + '. Record their verified identities in your startup evidence. All three exact native reads are required before source mutations.\n') + task_text + '\nUse squad_worker run_command/write_file for mutations. For coordination use decision_get({}), claim_read({}), mailbox({}), acknowledge({event_id,note}) and post_message({kind,text}); do not guess Squad CLI arguments. Native shell/write are disabled; approvals remain YOLO. Do not detach processes or spawn subagents. Call squad_worker report with actual completion or blocker evidence, then reply; the supervisor retains task custody until tools are joined. Do not release the primary claim or mark it done inside this run.'
         command = native.uuid7()
         native.atomic(state / 'initial-turn.json', {'command_id': command, 'native': c['native_session_id'],
                       'reasoning_effort': c['reasoning_effort'], 'state': 'prepared'})
-        h.rpc('turn/start', dict(commandId=command, sessionId=c['native_session_id'], reasoningEffort=c['reasoning_effort'],
-              input=[{'type': 'text', 'text': prompt}]))
+        if continuation.get('receipt'):
+            receiver.submit(h, continuation['receipt'], prefix=prompt, command=command)
+        else:
+            submit_text(h, c, command, prompt, continuation)
         native.atomic(state / 'initial-turn.json', {'command_id': command, 'native': c['native_session_id'],
                       'reasoning_effort': c['reasoning_effort'], 'state': 'accepted'})
-        deadline = time.monotonic() + c.get('max_seconds', 82800)
-        renewed = time.monotonic()
-        native_events = []
-        loaded = {}
-        while time.monotonic() < deadline:
-            if time.monotonic() - renewed >= 20:
-                heartbeat(assignment, c, env)
-                renewed = time.monotonic()
-                view.status('[Muse] running; claim renewed, execution pin retained')
-            try:
-                m = h.events.get(timeout=1)
-            except queue.Empty:
-                continue
-            params = m.get('params', {})
-            view.observe(m)
-            record_context_read(c, state, m, loaded)
-            native_events.append(m)
-            native.atomic(state / 'native-events.json', native_events)
-            if m.get('method') == 'host/exited':
-                raise ValidationError('native host exited; original custody retained')
-            if m.get('method') == 'turn/completed':
-                terminal = params.get('terminal')
-                if terminal == 'completed':
-                    receipt = receiver.pending()
-                    if receipt:
-                        receiver.submit(h, receipt)
-                        terminal = None
-                        continue
-                break
+        if ui:
+            ui.action = None
+            ui.status('running — Escape interrupts; /exit joins owned tools')
+        terminal = drive_turns(h, c, state, assignment, env, pin, receiver, view, ui)
         report_path = state / 'report.json'
-        if terminal == 'completed' and not report_path.exists():
+        if not ui and terminal == 'completed' and not report_path.exists():
             raise ValidationError('native task ended without a durable report; custody retained for same-session follow-up')
-        if terminal != 'completed':
+        if not ui and terminal != 'completed':
             raise ValidationError('Muse task did not complete within its bounded run')
-        return {'status': json.loads(report_path.read_text())['status'], 'native': c['native_session_id'], 'evidence': str(state)}
+        return {'status': json.loads(report_path.read_text())['status'] if report_path.exists() else 'retained',
+                'native': c['native_session_id'], 'evidence': str(state), 'terminal': terminal,
+                'interactive_action': ui.action if ui else None}
     finally:
         # Local closure prevents admission even if the ledger is temporarily
         # unavailable. Failure to persist suspension never skips owned cleanup.
@@ -398,20 +532,7 @@ def run(assignment_path, config_path, resume=False):
             if pinned and joined and cleanup_error is None:
                 report_path = state / 'report.json'
                 if terminal == 'completed' and report_path.exists():
-                    report = json.loads(report_path.read_text())
-                    kind = 'handoff-complete' if report['status'] == 'completed' else 'blocked'
-                    decision = read_decision(c, env, pin)
-                    if decision is not None and decision.get('action') != 'proceed':
-                        raise ValidationError('assignment is on hold; resolve the hold before submitting completion')
-                    # Atomic outcome submission: one call stores the canonical
-                    # message and the durable event, returning both IDs. No
-                    # manual message-ID extraction, so a cross-repo mixup
-                    # cannot strand completion. The observed revision passes
-                    # through unchanged; a changed one surfaces as stale.
-                    body_file = state / 'outcome-body.txt'
-                    body_file.write_text(report.get('summary', '') or report.get('status', ''))
-                    submitted = submit_outcome(c, env, pin, kind, body_file,
-                                               decision_revision=decision['revision'] if decision else None)
+                    submitted = publish_report(c, env, pin, state)
                     native.atomic(state / 'outcome.json', submitted)
                 coordination(c, 'close', str(state / 'join.json'))
                 for op in operations:
@@ -421,7 +542,116 @@ def run(assignment_path, config_path, resume=False):
                 raise ValidationError('owned tools or ledger closure unverified; closed execution pin retained for reconciliation')
             native.atomic(writer, {'state': 'joined', 'custody': custody, 'assignment': assignment, 'evidence': str(state), 'pid': h.p.pid})
         finally:
-            lock.close()
+            if not owned_lock:
+                lock.close()
+
+
+def interactive_loop(assignment_path, config_path, c, ui, lock, frontend_state, resume=False):
+    result = {'status': 'retained', 'native': c['native_session_id']}
+    continuation = None
+    idle_receiver = None
+    try:
+        while True:
+            allow_text = False
+            try:
+                result = run_execution(assignment_path, config_path, resume, ui, lock, continuation)
+                continuation = None
+                if result['interactive_action'] == 'exit':
+                    return result
+                if result['interactive_action'] == 'resume':
+                    resume = True
+                    continue
+                if result['interactive_action'] == 'reported':
+                    allow_text = True
+                    assignment = validate_file(assignment_path, ROOT / 'schemas/assignment-envelope.schema.json')
+                    pin = dict(reservation=assignment['reservation']['key'], generation=assignment['reservation']['generation'], native=c['native_session_id'])
+                    decision = read_decision(c, child_environment(c), pin)
+                    ui.status('HOLD — result published; editable draft retained, source turns wait for the controller'
+                              if decision and decision['action'] != 'proceed' else
+                              'waiting — result published after owned join; Enter continues this same native, /exit exits')
+                    idle_receiver = Receiver(dict(c, assignment=assignment), frontend_state)
+                else:
+                    ui.status('interrupted or failed — task retained; /resume reconnects after verified join, /exit exits')
+            except (OSError, ValueError, subprocess.SubprocessError, queue.Empty) as error:
+                allow_text = False
+                result = {'status': 'retained', 'native': c['native_session_id']}
+                if continuation and continuation.get('text') and not continuation.get('accepted'):
+                    ui.restore(continuation['text'])
+                continuation = None
+                ui.status('blocked — ' + diagnostic(str(error)) + '; custody retained, no automatic retry')
+            renewed = time.monotonic()
+            while True:
+                action = None
+                try:
+                    action = ui.read(False)
+                    if action and action[0] == 'exit':
+                        return result
+                    if action and action[0] == 'resume':
+                        if idle_receiver:
+                            idle_receiver.close()
+                            idle_receiver = None
+                        resume = True
+                        break
+                    if action and action[0] == 'text' and allow_text:
+                        assignment = validate_file(assignment_path, ROOT / 'schemas/assignment-envelope.schema.json')
+                        pin = dict(reservation=assignment['reservation']['key'], generation=assignment['reservation']['generation'], native=c['native_session_id'])
+                        decision = read_decision(c, child_environment(c), pin)
+                        if decision and decision['action'] != 'proceed':
+                            ui.restore(action[1])
+                            ui.status('HOLD — draft retained locally; source turns wait for the controller')
+                            continue
+                        if idle_receiver:
+                            idle_receiver.close()
+                            idle_receiver = None
+                        continuation = {'text': action[1]}
+                        resume = True
+                        break
+                    if action:
+                        if action[0] == 'text':
+                            ui.restore(action[1])
+                        ui.status('no active execution — /resume reconnects this same native; /exit exits')
+                    if idle_receiver:
+                        receipt = idle_receiver.pending()
+                        if receipt:
+                            idle_receiver.close()
+                            continuation = {'receipt': receipt, 'receiver': idle_receiver}
+                            idle_receiver = None
+                            resume = True
+                            break
+                    if time.monotonic() - renewed >= 20:
+                        assignment = validate_file(assignment_path, ROOT / 'schemas/assignment-envelope.schema.json')
+                        heartbeat(assignment, c, child_environment(c))
+                        renewed = time.monotonic()
+                except (OSError, ValueError, subprocess.SubprocessError, queue.Empty) as error:
+                    if action and action[0] == 'text':
+                        ui.restore(action[1])
+                    if idle_receiver:
+                        idle_receiver.close()
+                        idle_receiver = None
+                    allow_text = False
+                    renewed = time.monotonic()
+                    ui.status('blocked waiting — ' + diagnostic(str(error)) + '; input and custody retained, /resume rechecks ownership')
+                time.sleep(0.1)
+    finally:
+        if idle_receiver:
+            idle_receiver.close()
+
+
+def run(assignment_path, config_path, resume=False):
+    c = config_file(config_path)
+    if c['ui_mode'] != 'interactive':
+        return run_execution(assignment_path, config_path, resume)
+    root = Path(c['state_directory'])
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # The frontend retains the SAME native admission lock even while its host
+    # is joined. A bounded launcher or second UI cannot become another writer.
+    with (root / (c['native_session_id'] + '.lock')).open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with TerminalInput() as ui:
+            frontend_state = root / ('frontend-' + str(uuid.uuid4()))
+            frontend_state.mkdir(mode=0o700)
+            native.atomic(frontend_state / 'frontend.json', {'native': c['native_session_id'], 'pid': os.getpid(), 'ui_mode': 'interactive'})
+            return interactive_loop(assignment_path, config_path, c, ui, lock, frontend_state, resume)
 
 
 def main():
@@ -437,7 +667,7 @@ def main():
         else:
             result = run(args.assignment, args.config, args.resume)
         print(json.dumps(result), flush=True)
-        return 0 if result['status'] in ('ready', 'completed') else 1
+        return 0 if result['status'] in ('ready', 'completed', 'retained') else 1
     except (OSError, ValueError, subprocess.SubprocessError, queue.Empty) as error:
         print(json.dumps({'status': 'blocked', 'reason': diagnostic(str(error))}), file=sys.stderr)
         return 1

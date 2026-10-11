@@ -67,7 +67,7 @@ class Bridge:
         if not readonly and (self.closed or (self.state / 'closed').exists()):
             raise ValueError('Worker execution is closed; no new tool admitted')
         if mutation and not (self.state / 'startup-loaded.json').is_file():
-            raise ValueError('Read the exact canonical Worker role and assigned project profile before mutations; startup loading is not confirmed yet')
+            raise ValueError('Read the exact canonical Worker role, assigned project profile and lifecycle contract before mutations; startup loading is not confirmed yet')
         coordination(self.c, 'check-read' if readonly else ('check-write' if mutation else 'check'))
 
     def suspend(self):
