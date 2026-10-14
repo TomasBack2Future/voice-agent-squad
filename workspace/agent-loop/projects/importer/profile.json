@@ -13,7 +13,8 @@
     "review": [
       "the frozen Issue contract and AC-to-evidence mapping",
       "the current repository review policy",
-      ".github/workflows/ci.yml"
+      ".github/workflows/ci.yml",
+      ".github/workflows/go.yml"
     ],
     "staging": [
       "docs/environments-and-ci.md",
@@ -33,12 +34,14 @@
   },
   "gates": {
     "fast": [
-      "uv sync --frozen --extra dev",
-      "uv run ruff check .",
-      "uv run mypy src",
-      "uv run pytest -q",
+      "cd go && test -z \"$(gofmt -l .)\"",
+      "cd go && go vet ./...",
+      "cd go && go test -race ./...",
+      "cd go && go build ./...",
+      "cd go && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...",
+      "bash go/s3_regression.sh",
       "git diff --check",
-      "For packaging changes, run the Docker build and container CLI smoke from .github/workflows/ci.yml, including the affected runtime invocation."
+      "For packaging or CI changes, run the affected immutable-image CLI, isolated staging fixture, config reload and workflow contract gates from .github/workflows/go.yml; preserve actual assertions and report unavailable gates."
     ],
     "review": [
       "Start at the first complete stable diff after fast gates and self-review, independently of merge hold, full CI completion and ENV waits; record readiness and start times",
@@ -66,11 +69,12 @@
     "production_default": "forbidden unless the assignment explicitly sets production=true; customer backfills and credential changes also require explicit scope"
   },
   "risk_probes": [
-    "For runtime packaging, verify the installed console script as the runtime UID and preserve the module entrypoint and normal serve startup.",
+    "For runtime packaging, verify the Go binary as the runtime UID, CLI entrypoint and normal serve startup with immutable image provenance.",
     "For configuration reload, exercise inode-changing atomic replacement, invalid replacement retaining the last valid generation, and exclusion of secrets from readable mounts and diagnostics.",
     "For state and retries, exercise cursor-after-commit ordering, restart around side effects, deterministic recovery of uncertain Job creation/apply and one owner per SQLite state volume.",
     "For mapping, preserve final agent_memory dialogue, interruption semantics and pinned Session contracts; never replace dialogue with the Call API transcript.",
     "For preview/apply admission, prove rejected previews never apply and uncertain remote results never trigger blind resubmission.",
-    "For privacy, scan synthetic SQLite, logs, metrics and traces for Session bodies, signed URLs and secret values."
+    "For privacy, scan synthetic SQLite, logs, metrics and traces for Session bodies, signed URLs and secret values.",
+    "Maintain Go-only application source, documentation and CI. Retire legacy implementation and executable oracles instead of extending them; preserve state/schema, WAL, ordering and recovery compatibility with Go tests and immutable data fixtures. Inspect the entire workflow graph for obsolete runtime helper invocations; skipped coverage is not retirement acceptance."
   ]
 }
