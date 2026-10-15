@@ -131,8 +131,9 @@ func TestMintInstallationTokenUsesBearerWithoutCallingGitHubCLI(t *testing.T) {
 
 func TestFetchPullRequestReturnsMetadataAndDiff(t *testing.T) {
 	executor := &fakeCommandExecutor{outputs: [][]byte{
-		[]byte(`{"number":17,"title":"fix bug","body":"details","base":{"ref":"main","sha":"base123"},"head":{"sha":"head456"}}`),
+		[]byte(`{"state":"open","number":17,"title":"fix bug","body":"details","base":{"ref":"main","sha":"base123"},"head":{"sha":"head456"}}`),
 		[]byte("diff --git a/a.go b/a.go\n+fixed\n"),
+		[]byte(`{"state":"open","number":17,"title":"fix bug","body":"details","base":{"ref":"main","sha":"base123"},"head":{"sha":"head456"}}`),
 	}}
 	client := testGitHubCLI(executor)
 	snapshot, err := client.FetchPullRequest(context.Background(), "owner/repo", 17, "app-token")

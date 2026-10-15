@@ -32,6 +32,7 @@ type config struct {
 	baseSHA                string
 	descriptionFile        string
 	configPath             string
+	snapshotOnly           bool
 	doctor                 bool
 	reconcile              bool
 	recovery               bool
@@ -204,6 +205,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if configuration.snapshotOnly {
+		return runSnapshot(ctx, configuration, stdout, stderr)
 	}
 	if configuration.completion {
 		return runCompletion(ctx, configuration, stdout, stderr)
@@ -501,6 +505,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		args = args[1:]
 	} else if len(args) > 0 && args[0] == "recover" {
 		configuration.recovery = true
+		args = args[1:]
+	} else if len(args) > 0 && args[0] == "snapshot" {
+		configuration.snapshotOnly = true
 		args = args[1:]
 	} else if len(args) > 0 && args[0] == "doctor" {
 		configuration.doctor = true
@@ -840,6 +847,33 @@ func safeProcessEnvironment() map[string]string {
 
 // Reconcile only authenticates GitHub if an actual publication response was
 // lost. It never resolves/initializes Grok or loads a model runtime.
+// runSnapshot performs no model execution, admission or publication. Both the
+// freezing caller and the independent provider use the same complete reader.
+func runSnapshot(ctx context.Context, c config, stdout, stderr io.Writer) int {
+	if c.provider != "github" || c.repository == "" || c.pullRequest <= 0 || c.maxGitHubOutput > 8<<20 {
+		_, _ = fmt.Fprintln(stderr, "bounded GitHub PR snapshot required")
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(ctx, 50*time.Second)
+	defer cancel()
+	github, token, err := prepareGitHubReadback(ctx, c)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "snapshot authentication unavailable")
+		return 1
+	}
+	first, err := github.FetchPullRequest(ctx, c.repository, c.pullRequest, token)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return encodeJSON(stdout, stderr, map[string]any{
+		"protocol": "github-review-snapshot.v1", "diff_bytes": len(first.Diff),
+		"snapshot": map[string]any{"repository": first.Repository, "pull_request": first.Number,
+			"head_sha": first.HeadSHA, "base_sha": first.BaseSHA, "base_ref": first.BaseRef,
+			"title": first.Title, "body": first.Description, "diff_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(first.Diff)))},
+	})
+}
+
 func prepareGitHubReadback(ctx context.Context, c config) (*grokreview.GitHubCLI, string, error) {
 	binary, err := resolveBinary(c.githubBinary)
 	if err != nil {
