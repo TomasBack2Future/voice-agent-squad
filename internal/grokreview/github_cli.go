@@ -55,6 +55,7 @@ type GitHubCLI struct {
 	execute        commandExecutor
 	httpClient     httpDoer
 	apiBaseURL     string
+	completeDiff   func(context.Context, PullRequestSnapshot, string) ([]byte, error)
 }
 
 func NewGitHubCLI(binary string, timeout time.Duration, maxOutputBytes int) (*GitHubCLI, error) {
@@ -194,6 +195,20 @@ func (g *GitHubCLI) CheckRepositoryAccess(ctx context.Context, repository, token
 	return nil
 }
 
+type githubPullMetadata struct {
+	State  string `json:"state"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	Base   struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	} `json:"base"`
+	Head struct {
+		SHA string `json:"sha"`
+	} `json:"head"`
+}
+
 func (g *GitHubCLI) FetchPullRequest(ctx context.Context, repository string, number int, token string) (PullRequestSnapshot, error) {
 	if err := validateRepository(repository); err != nil {
 		return PullRequestSnapshot{}, err
@@ -206,27 +221,33 @@ func (g *GitHubCLI) FetchPullRequest(ctx context.Context, repository string, num
 	if err != nil {
 		return PullRequestSnapshot{}, fmt.Errorf("read pull request metadata: %w", err)
 	}
-	var response struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-		Body   string `json:"body"`
-		Base   struct {
-			Ref string `json:"ref"`
-			SHA string `json:"sha"`
-		} `json:"base"`
-		Head struct {
-			SHA string `json:"sha"`
-		} `json:"head"`
-	}
+	var response githubPullMetadata
 	if err := json.Unmarshal(metadata, &response); err != nil {
 		return PullRequestSnapshot{}, fmt.Errorf("parse pull request metadata: %w", err)
 	}
-	if response.Number != number || response.Base.Ref == "" || response.Base.SHA == "" || response.Head.SHA == "" {
+	if response.State != "open" || response.Number != number || response.Base.Ref == "" || response.Base.SHA == "" || response.Head.SHA == "" {
 		return PullRequestSnapshot{}, fmt.Errorf("pull request metadata is incomplete")
 	}
+	snapshot := PullRequestSnapshot{Repository: repository, Number: number, BaseRef: response.Base.Ref,
+		BaseSHA: response.Base.SHA, HeadSHA: response.Head.SHA, Title: response.Title, Description: response.Body}
 	diff, err := g.call(ctx, token, []string{"api", endpoint, "-H", "Accept: application/vnd.github.v3.diff"}, nil)
+	if isOversizedDiff(err) {
+		fetch := g.completeDiff
+		if fetch == nil {
+			fetch = g.exactGitDiff
+		}
+		diff, err = fetch(ctx, snapshot, token)
+	}
 	if err != nil {
 		return PullRequestSnapshot{}, fmt.Errorf("read pull request diff: %w", err)
+	}
+	if len(diff) > g.maxOutputBytes {
+		return PullRequestSnapshot{}, fmt.Errorf("complete diff exceeds review limit")
+	}
+	current, readErr := g.call(ctx, token, []string{"api", endpoint}, nil)
+	var latest githubPullMetadata
+	if readErr != nil || json.Unmarshal(current, &latest) != nil || latest != response {
+		return PullRequestSnapshot{}, fmt.Errorf("pull request changed during complete snapshot")
 	}
 	if len(bytes.TrimSpace(diff)) == 0 {
 		return PullRequestSnapshot{}, fmt.Errorf("pull request diff is empty")
@@ -369,6 +390,9 @@ func (g *GitHubCLI) runCommand(ctx context.Context, args []string, stdin []byte,
 	command.Stdout = stdout
 	command.Stderr = stderr
 	if err := command.Run(); err != nil {
+		if !stdout.overflow && oversizedDiffResponse(stdout.Bytes()) {
+			return nil, &diffTooLarge{}
+		}
 		return nil, err
 	}
 	if stdout.overflow {

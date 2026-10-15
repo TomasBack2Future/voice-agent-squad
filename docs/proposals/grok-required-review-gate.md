@@ -619,3 +619,25 @@ admission directory and consumed input history are shared across backends.
 Changing backend cannot bypass single-flight or resample an already consumed
 input. Grok-specific recover/readmit/complete/restart operations remain Grok-only.
 Failures stay failures; switching tools does not fabricate a successful verdict.
+
+## Complete GitHub snapshots
+
+`squad-grok-review snapshot --repo owner/repository --pr 123 --config /absolute/private/config.json`
+returns `github-review-snapshot.v1`, the exact PR metadata and SHA256 of the complete
+review diff. It uses the same GitHub App reader as review, without model execution,
+admission or publication. The operation has a 50-second network/process budget;
+callers must also bound invocation to cover OS-level credential-file access.
+
+Only GitHub's explicit HTTP406 `diff/too_large` response enables an isolated Git
+object-store fallback. It fetches the exact head/base, requires complete history
+and one merge-base, and emits a binary-aware full patch. Metadata is rechecked
+after acquisition. Authentication is scoped to the owned fetch process; credentials
+are not persisted in Git configuration or URLs. Hooks, external diffs and textconv
+are disabled, and cancellation terminates the owned process group. The existing
+8MiB default complete-input bound remains; no partial file patches count as a
+complete review. Authentication and unrelated API failures do not select fallback.
+
+A freezing integration must use this same snapshot entry point after qualifying
+and pinning the new executable. Preserve existing operations' executable/config
+identities until their original reconciliation is complete; source publication
+alone does not install or migrate an active review.
