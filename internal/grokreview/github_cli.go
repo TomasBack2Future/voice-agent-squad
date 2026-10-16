@@ -485,6 +485,19 @@ func truncateUTF8(value string, limit int) string {
 // VerifyRecoveryCheck inspects every current-head Check from the configured App.
 // Failure alone is insufficient: blocking is a valid verdict, error is not.
 func (g *GitHubCLI) VerifyRecoveryCheck(ctx context.Context, token string, appID int64, prior AttemptReceipt) error {
+	return g.verifyReviewCheck(ctx, token, appID, prior, false)
+}
+func (g *GitHubCLI) VerifyReconsiderCheck(ctx context.Context, token string, appID int64, prior AttemptReceipt) error {
+	publication, err := g.FindAttemptPublication(ctx, token, appID, prior)
+	if err != nil {
+		return err
+	}
+	if prior.Verdict != VerdictBlocking || publication.CheckRunID != prior.Publication.CheckRunID || publication.Conclusion != "failure" {
+		return fmt.Errorf("exact original blocking publication required")
+	}
+	return g.verifyReviewCheck(ctx, token, appID, prior, true)
+}
+func (g *GitHubCLI) verifyReviewCheck(ctx context.Context, token string, appID int64, prior AttemptReceipt, reconsider bool) error {
 	found := false
 	for page := 1; page <= 10; page++ {
 		endpoint := fmt.Sprintf("repos/%s/commits/%s/check-runs?per_page=100&page=%d", prior.Identity.Repository, prior.Identity.HeadSHA, page)
@@ -531,7 +544,11 @@ func (g *GitHubCLI) VerifyRecoveryCheck(ctx context.Context, token string, appID
 			if prior.ID == "" {
 				return fmt.Errorf("current input already has a managed review Check; reconcile its original receipt")
 			}
-			if c.HeadSHA != prior.Identity.HeadSHA || c.Status != "completed" || c.Conclusion != "failure" || c.Output.Title != "Grok review error" {
+			expectedTitle := "Grok review error"
+			if reconsider && c.ID == prior.Publication.CheckRunID {
+				expectedTitle = reviewTitle(prior.Settings.Backend) + " " + string(VerdictBlocking)
+			}
+			if c.HeadSHA != prior.Identity.HeadSHA || c.Status != "completed" || c.Conclusion != "failure" || c.Output.Title != expectedTitle {
 				return fmt.Errorf("current original-mode review Check has a verdict or unresolved invocation")
 			}
 			if c.ID == prior.Publication.CheckRunID {

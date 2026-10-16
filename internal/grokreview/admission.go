@@ -80,6 +80,8 @@ type AttemptReceipt struct {
 type RecoveryCheck func(context.Context, AttemptReceipt) error
 
 type Admission struct {
+	reconsider                *ReconsiderGrant
+	reconsiderDigest          string
 	humanRestart              *humanRestartBinding
 	db                        *sql.DB
 	dir                       string
@@ -176,6 +178,9 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 	identity, err := identityFor(bundle)
 	if err != nil {
 		return err
+	}
+	if a.reconsider != nil {
+		return a.startReconsider(ctx, bundle, identity)
 	}
 	if a.humanRestart != nil {
 		return a.startHumanRestart(ctx, bundle, identity)

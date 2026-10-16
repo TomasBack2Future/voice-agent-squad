@@ -20,8 +20,9 @@ import (
 )
 
 type config struct {
-	backend        string
-	reviewerBinary string
+	reconsiderGrantPath string
+	backend             string
+	reviewerBinary      string
 
 	humanRestart           bool
 	humanGrantPath         string
@@ -310,6 +311,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if configuration.provider == "github" {
 		settings := grokreview.ReviewSettings{Backend: configuration.backend, Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
 		check := func(checkCtx context.Context, prior grokreview.AttemptReceipt) error {
+			if configuration.reconsiderGrantPath != "" {
+				return dependencies.github.(*grokreview.GitHubCLI).VerifyReconsiderCheck(checkCtx, dependencies.installationToken, configuration.appID, prior)
+			}
 			return dependencies.github.(*grokreview.GitHubCLI).VerifyRecoveryCheck(checkCtx, dependencies.installationToken, configuration.appID, prior)
 		}
 		admission, err = grokreview.OpenAdmission(configuration.admissionDir, settings, configuration.recoveryFrom, check)
@@ -356,6 +360,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			if err := admission.ImportHumanRestart(configuration.humanGrantPath, owner); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
+		if configuration.reconsiderGrantPath != "" {
+			if err := admission.ImportReconsider(configuration.reconsiderGrantPath); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+			if err := service.BindReconsideration(admission); err != nil {
 				_, _ = fmt.Fprintln(stderr, err)
 				return 1
 			}
@@ -515,6 +529,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	flags := flag.NewFlagSet("squad-grok-review", flag.ContinueOnError)
 	flags.SetOutput(output)
+	flags.StringVar(&configuration.reconsiderGrantPath, "reconsider-grant", "", "private controller-admitted one-use reconsideration receipt")
 	flags.StringVar(&configuration.humanGrantPath, "human-grant", "", "absolute attributable human ONE-use restart scope receipt")
 	flags.StringVar(&configuration.recoveryFrom, "from", "", "joined timeout attempt ID or absolute legacy custody receipt")
 	flags.StringVar(&configuration.joinReason, "reason", "", "reconcile only: audited reason for joining an abandoned attempt (superseded-input)")
@@ -661,6 +676,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if !filepath.IsAbs(configuration.admissionDir) {
 		return config{}, fmt.Errorf("--admission-dir must be absolute")
+	}
+	if configuration.reconsiderGrantPath != "" && (!filepath.IsAbs(configuration.reconsiderGrantPath) || configuration.provider != "github" || configuration.humanRestart || configuration.recovery || configuration.reconcile || configuration.completion || configuration.snapshotOnly || configuration.doctor || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
+		return config{}, fmt.Errorf("reconsideration requires normal GitHub review and canonical admission")
 	}
 	if configuration.humanRestart && (configuration.provider != "github" || !filepath.IsAbs(configuration.humanGrantPath) || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
 		return config{}, fmt.Errorf("restart requires GitHub, absolute human grant and configured canonical store; no admission-dir override")

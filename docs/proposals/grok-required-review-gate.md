@@ -641,3 +641,18 @@ A freezing integration must use this same snapshot entry point after qualifying
 and pinning the new executable. Preserve existing operations' executable/config
 identities until their original reconciliation is complete; source publication
 alone does not install or migrate an active review.
+
+### Controller-admitted reconsideration
+
+A qualified host adapter may supply `--reconsider-grant /absolute/private.json`
+for one independent reconsideration of an original joined blocking result. This
+is a trusted local operator input (mode 0600), not an arbitrary model argument.
+The `coordinator.review-reconsider.v1` grant binds the original provider attempt,
+durable child review ID, controller authorization record and disputed evidence.
+The provider verifies identical source/settings, terminal original processes,
+original published Check and absence of any flight or existing child. It retains
+the original verdict and records a child attempt; no retry chain or budget reset
+is permitted. Supplementary evidence is explicitly included in the model input
+and bound by the grant digest, without changing the frozen source identity.
+Approval remains an independent result. Ordinary review, timeout recovery and
+human restart semantics are unchanged.
