@@ -21,6 +21,7 @@ import (
 
 type config struct {
 	reconsiderGrantPath string
+	restartGrantPath    string
 	backend             string
 	reviewerBinary      string
 
@@ -364,6 +365,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 		}
+		if configuration.restartGrantPath != "" {
+			if err := admission.ImportRestart(configuration.restartGrantPath); err != nil {
+				_, _ = fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
 		if configuration.reconsiderGrantPath != "" {
 			if err := admission.ImportReconsider(configuration.reconsiderGrantPath); err != nil {
 				_, _ = fmt.Fprintln(stderr, err)
@@ -530,6 +537,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags := flag.NewFlagSet("squad-grok-review", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.StringVar(&configuration.reconsiderGrantPath, "reconsider-grant", "", "private controller-admitted one-use reconsideration receipt")
+	flags.StringVar(&configuration.restartGrantPath, "restart-grant", "", "private controller-admitted one-use restart receipt for an unverdicted original attempt")
 	flags.StringVar(&configuration.humanGrantPath, "human-grant", "", "absolute attributable human ONE-use restart scope receipt")
 	flags.StringVar(&configuration.recoveryFrom, "from", "", "joined timeout attempt ID or absolute legacy custody receipt")
 	flags.StringVar(&configuration.joinReason, "reason", "", "reconcile only: audited reason for joining an abandoned attempt (superseded-input)")
@@ -679,6 +687,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if configuration.reconsiderGrantPath != "" && (!filepath.IsAbs(configuration.reconsiderGrantPath) || configuration.provider != "github" || configuration.humanRestart || configuration.recovery || configuration.reconcile || configuration.completion || configuration.snapshotOnly || configuration.doctor || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
 		return config{}, fmt.Errorf("reconsideration requires normal GitHub review and canonical admission")
+	}
+	if configuration.restartGrantPath != "" && (!filepath.IsAbs(configuration.restartGrantPath) || configuration.reconsiderGrantPath != "" || configuration.provider != "github" || configuration.humanRestart || configuration.recovery || configuration.reconcile || configuration.completion || configuration.snapshotOnly || configuration.doctor || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
+		return config{}, fmt.Errorf("restart grant requires normal GitHub review and canonical admission")
 	}
 	if configuration.humanRestart && (configuration.provider != "github" || !filepath.IsAbs(configuration.humanGrantPath) || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
 		return config{}, fmt.Errorf("restart requires GitHub, absolute human grant and configured canonical store; no admission-dir override")
