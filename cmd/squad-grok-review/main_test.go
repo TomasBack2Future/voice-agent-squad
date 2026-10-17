@@ -525,3 +525,30 @@ func TestReconcileCLILeavesStatusSamplingWhileWrapperIsLive(t *testing.T) {
 		})
 	}
 }
+
+func TestParseConfigFrozenSnapshotExpectation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.json")
+	if err := os.WriteFile(path, []byte(`{"app_id":1,"installation_id":2,"app_private_key":"/key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	head, base, diff := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 64)
+	frozen := []string{"--frozen-head-sha", head, "--frozen-base-sha", base, "--frozen-diff-sha256", diff}
+	parsed, err := parseConfig(append([]string{"--config", path, "--repo", "owner/repo", "--pr", "9"}, frozen...), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.frozen.HeadSHA != head || parsed.frozen.BaseSHA != base || parsed.frozen.DiffSHA256 != diff {
+		t.Fatalf("frozen = %#v", parsed.frozen)
+	}
+	if _, err := parseConfig(append([]string{"snapshot", "--config", path, "--repo", "owner/repo", "--pr", "9"}, frozen...), io.Discard); err != nil {
+		t.Fatalf("snapshot with frozen expectation rejected: %v", err)
+	}
+	for _, args := range [][]string{
+		{"--frozen-head-sha", head},
+		{"--frozen-head-sha", head, "--frozen-base-sha", base, "--frozen-diff-sha256", "short"},
+	} {
+		if _, err := parseConfig(append([]string{"--config", path, "--repo", "owner/repo", "--pr", "9"}, args...), io.Discard); err == nil {
+			t.Fatalf("partial or malformed frozen expectation accepted: %v", args)
+		}
+	}
+}

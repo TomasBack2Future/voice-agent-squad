@@ -56,6 +56,39 @@ type GitHubCLI struct {
 	httpClient     httpDoer
 	apiBaseURL     string
 	completeDiff   func(context.Context, PullRequestSnapshot, string) ([]byte, error)
+	frozen         *FrozenExpectation
+}
+
+// FrozenExpectation pins the exact snapshot an earlier admission froze. It never
+// widens what is reviewed: every read must match it exactly. It only lets a
+// merged pull request whose live head, base and complete diff are unchanged
+// remain reviewable after the merge.
+type FrozenExpectation struct {
+	HeadSHA    string
+	BaseSHA    string
+	DiffSHA256 string
+}
+
+// ExpectFrozen binds every later FetchPullRequest of this client to the frozen
+// snapshot. Without it only an open pull request is reviewable.
+func (g *GitHubCLI) ExpectFrozen(expected FrozenExpectation) error {
+	if !isLowerHex(expected.HeadSHA, 40) || !isLowerHex(expected.BaseSHA, 40) || !isLowerHex(expected.DiffSHA256, 64) {
+		return fmt.Errorf("frozen expectation requires 40-character head/base SHAs and a 64-character diff SHA-256")
+	}
+	g.frozen = &expected
+	return nil
+}
+
+func isLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func NewGitHubCLI(binary string, timeout time.Duration, maxOutputBytes int) (*GitHubCLI, error) {
@@ -197,6 +230,7 @@ func (g *GitHubCLI) CheckRepositoryAccess(ctx context.Context, repository, token
 
 type githubPullMetadata struct {
 	State  string `json:"state"`
+	Merged bool   `json:"merged"`
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	Body   string `json:"body"`
@@ -225,8 +259,21 @@ func (g *GitHubCLI) FetchPullRequest(ctx context.Context, repository string, num
 	if err := json.Unmarshal(metadata, &response); err != nil {
 		return PullRequestSnapshot{}, fmt.Errorf("parse pull request metadata: %w", err)
 	}
-	if response.State != "open" || response.Number != number || response.Base.Ref == "" || response.Base.SHA == "" || response.Head.SHA == "" {
+	if response.Number != number || response.Base.Ref == "" || response.Base.SHA == "" || response.Head.SHA == "" {
 		return PullRequestSnapshot{}, fmt.Errorf("pull request metadata is incomplete")
+	}
+	if response.State != "open" {
+		// A closed-unmerged change will never land; reviewing it would spend a
+		// sample on abandoned input, so only a merged, frozen PR qualifies.
+		if g.frozen == nil {
+			return PullRequestSnapshot{}, fmt.Errorf("pull request metadata is incomplete")
+		}
+		if response.State != "closed" || !response.Merged {
+			return PullRequestSnapshot{}, fmt.Errorf("closed pull request is reviewable only when merged and matching the frozen snapshot")
+		}
+	}
+	if g.frozen != nil && (response.Head.SHA != g.frozen.HeadSHA || response.Base.SHA != g.frozen.BaseSHA) {
+		return PullRequestSnapshot{}, fmt.Errorf("pull request differs from the frozen snapshot")
 	}
 	snapshot := PullRequestSnapshot{Repository: repository, Number: number, BaseRef: response.Base.Ref,
 		BaseSHA: response.Base.SHA, HeadSHA: response.Head.SHA, Title: response.Title, Description: response.Body}
@@ -251,6 +298,9 @@ func (g *GitHubCLI) FetchPullRequest(ctx context.Context, repository string, num
 	}
 	if len(bytes.TrimSpace(diff)) == 0 {
 		return PullRequestSnapshot{}, fmt.Errorf("pull request diff is empty")
+	}
+	if g.frozen != nil && fmt.Sprintf("%x", sha256.Sum256(diff)) != g.frozen.DiffSHA256 {
+		return PullRequestSnapshot{}, fmt.Errorf("pull request differs from the frozen snapshot")
 	}
 	return PullRequestSnapshot{
 		Repository: repository, Number: number, BaseRef: response.Base.Ref,
