@@ -22,6 +22,7 @@ import (
 type config struct {
 	reconsiderGrantPath string
 	restartGrantPath    string
+	frozen              grokreview.FrozenExpectation
 	backend             string
 	reviewerBinary      string
 
@@ -480,10 +481,11 @@ func prepareRuntime(ctx context.Context, configuration config) (runtimeDependenc
 		if err != nil {
 			return runtimeDependencies{}, err
 		}
-		github, err = grokreview.NewGitHubCLI(githubBinary, time.Minute, configuration.maxGitHubOutput)
+		client, err := frozenGitHubCLI(githubBinary, configuration)
 		if err != nil {
 			return runtimeDependencies{}, err
 		}
+		github = client
 		installationToken, err = github.(*grokreview.GitHubCLI).MintInstallationToken(ctx, appJWT, configuration.installationID)
 		if err != nil {
 			return runtimeDependencies{}, err
@@ -538,6 +540,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.SetOutput(output)
 	flags.StringVar(&configuration.reconsiderGrantPath, "reconsider-grant", "", "private controller-admitted one-use reconsideration receipt")
 	flags.StringVar(&configuration.restartGrantPath, "restart-grant", "", "private controller-admitted one-use restart receipt for an unverdicted original attempt")
+	flags.StringVar(&configuration.frozen.HeadSHA, "frozen-head-sha", "", "head SHA frozen at original admission; with base and diff, a merged PR matching it stays reviewable")
+	flags.StringVar(&configuration.frozen.BaseSHA, "frozen-base-sha", "", "base SHA frozen at original admission")
+	flags.StringVar(&configuration.frozen.DiffSHA256, "frozen-diff-sha256", "", "complete diff SHA-256 frozen at original admission")
 	flags.StringVar(&configuration.humanGrantPath, "human-grant", "", "absolute attributable human ONE-use restart scope receipt")
 	flags.StringVar(&configuration.recoveryFrom, "from", "", "joined timeout attempt ID or absolute legacy custody receipt")
 	flags.StringVar(&configuration.joinReason, "reason", "", "reconcile only: audited reason for joining an abandoned attempt (superseded-input)")
@@ -687,6 +692,14 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if configuration.reconsiderGrantPath != "" && (!filepath.IsAbs(configuration.reconsiderGrantPath) || configuration.provider != "github" || configuration.humanRestart || configuration.recovery || configuration.reconcile || configuration.completion || configuration.snapshotOnly || configuration.doctor || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
 		return config{}, fmt.Errorf("reconsideration requires normal GitHub review and canonical admission")
+	}
+	if configuration.frozen != (grokreview.FrozenExpectation{}) {
+		if configuration.provider != "github" {
+			return config{}, fmt.Errorf("frozen snapshot expectation requires a GitHub pull request")
+		}
+		if err := (&grokreview.GitHubCLI{}).ExpectFrozen(configuration.frozen); err != nil {
+			return config{}, err
+		}
 	}
 	if configuration.restartGrantPath != "" && (!filepath.IsAbs(configuration.restartGrantPath) || configuration.reconsiderGrantPath != "" || configuration.provider != "github" || configuration.humanRestart || configuration.recovery || configuration.reconcile || configuration.completion || configuration.snapshotOnly || configuration.doctor || configuration.completionCustodyPath != "" || visited["admission-dir"]) {
 		return config{}, fmt.Errorf("restart grant requires normal GitHub review and canonical admission")
@@ -916,12 +929,22 @@ func prepareGitHubReadback(ctx context.Context, c config) (*grokreview.GitHubCLI
 	if err != nil {
 		return nil, "", err
 	}
-	github, err := grokreview.NewGitHubCLI(binary, time.Minute, c.maxGitHubOutput)
+	github, err := frozenGitHubCLI(binary, c)
 	if err != nil {
 		return nil, "", err
 	}
 	token, err := github.MintInstallationToken(ctx, jwt, c.installationID)
 	return github, token, err
+}
+
+// frozenGitHubCLI binds every pull request read to the original frozen snapshot
+// when the caller supplied one; otherwise only an open pull request is read.
+func frozenGitHubCLI(binary string, c config) (*grokreview.GitHubCLI, error) {
+	github, err := grokreview.NewGitHubCLI(binary, time.Minute, c.maxGitHubOutput)
+	if err != nil || c.frozen == (grokreview.FrozenExpectation{}) {
+		return github, err
+	}
+	return github, github.ExpectFrozen(c.frozen)
 }
 
 func validCompletionAttempt(id string) bool {

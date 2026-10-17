@@ -642,6 +642,23 @@ and pinning the new executable. Preserve existing operations' executable/config
 identities until their original reconciliation is complete; source publication
 alone does not install or migrate an active review.
 
+### Frozen snapshot expectation after merge
+
+By default every pull request read (snapshot, review, post-review identity check
+and reconcile) requires an open pull request. A caller that retains the snapshot
+frozen at original admission may pass all three of `--frozen-head-sha`,
+`--frozen-base-sha` and `--frozen-diff-sha256` (lowercase 40/40/64 hex). Every
+read in that process must then equal the frozen head, base and complete-diff
+SHA-256, including for an open pull request. A merged pull request
+(`state=closed`, `merged=true`) matching all three stays reviewable, so a restart,
+reconsideration or recovery already admitted on that input is not stranded by
+the merge. Any mismatch, or a merge between the two metadata reads, is refused
+during freezing, before admission or sampling.
+
+A closed pull request that was not merged is refused even when it matches. Its
+change cannot land, so reviewing it would spend a sample without any delivery
+gate to inform. Reopen it to review it again.
+
 ### Controller-admitted reconsideration
 
 A qualified host adapter may supply `--reconsider-grant /absolute/private.json`
