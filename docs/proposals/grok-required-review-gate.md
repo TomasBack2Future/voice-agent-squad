@@ -673,3 +673,24 @@ is permitted. Supplementary evidence is explicitly included in the model input
 and bound by the grant digest, without changing the frozen source identity.
 Approval remains an independent result. Ordinary review, timeout recovery and
 human restart semantics are unchanged.
+
+Reconsideration and controller-restart admissions retain the complete frozen
+input exactly like an ordinary admission, so their single sample is sealed
+before publication. Provider 89e651c and earlier dropped it: the checkpoint
+failed with `original complete input unavailable for seal` after sampling,
+leaving a joined verdict with no seal or Check.
+
+`squad-grok-review complete-controller --from <attempt> --original-grant
+/abs/grant.json --original-output /abs/provider-result.json
+--original-output-sha256 <sha>` is the no-sampling repair for exactly that
+state (joined reconsideration, valid verdict, no seal, no publication). It
+never resolves a model, allocates an attempt or edits the receipt. It requires
+the untouched join journal, absent original processes, the grant whose digest
+the receipt recorded, the wrapper's original stdout document at the
+controller's recorded hash, field-for-field equality of attribution, terminal
+and accounting with the receipt, and the live frozen input whose bundle hash
+and grant-augmented model-input hash both reproduce the terminal record. Only
+then does it seal, re-verify the reconsidered blocking Check, publish once
+under the exact attempt identity and record the publication on the seal. A
+lost write response is joined only by exact-attempt readback; replay of a
+published seal is read-only.

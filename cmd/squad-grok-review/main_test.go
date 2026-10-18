@@ -364,6 +364,30 @@ func TestParseExplicitSameExecutionCompletion(t *testing.T) {
 	}
 }
 
+func TestParseControllerChildCompletion(t *testing.T) {
+	base := []string{"--repo", "owner/repo", "--pr", "9", "--app-id", "1", "--installation-id", "2", "--app-private-key", "/key", "--grok-bin", "/never-grok", "--gh-bin", "/never-gh"}
+	sha := strings.Repeat("a", 64)
+	evidence := []string{"--from", "0123456789abcdef", "--original-grant", "/private/grant.json", "--original-output", "/private/output.json", "--original-output-sha256", sha}
+	var out bytes.Buffer
+	c, err := parseConfig(append(append([]string{"complete-controller"}, evidence...), base...), &out)
+	if err != nil || !c.controllerCompletion || c.completion || c.reconcile || c.recovery || c.originalOutputSHA256 != sha {
+		t.Fatal("explicit controller-child completion invalid", err)
+	}
+	for _, args := range [][]string{
+		{"complete-controller", "--from", "0123456789abcdef"},
+		{"complete-controller", "--from", "0123456789abcdef", "--original-grant", "relative", "--original-output", "/o", "--original-output-sha256", sha},
+		{"complete-controller", "--from", "0123456789abcdef", "--original-grant", "/g", "--original-output", "/o", "--original-output-sha256", "short"},
+		append([]string{"complete-controller", "--reconsider-grant", "/g"}, evidence...),
+		append([]string{"complete-controller", "--admission-dir", "/other"}, evidence...),
+		append([]string{"complete", "--completion-custody", "/c"}, evidence...),
+		{"--original-output", "/o"},
+	} {
+		if _, err := parseConfig(append(args, base...), &out); err == nil {
+			t.Fatal("incomplete/ambiguous controller completion accepted", args)
+		}
+	}
+}
+
 func TestCompletionNativeAndTargetRejectBeforeAnyProvider(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)

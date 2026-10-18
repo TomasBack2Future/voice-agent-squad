@@ -41,6 +41,10 @@ type config struct {
 	recovery               bool
 	prospective            bool
 	completion             bool
+	controllerCompletion   bool
+	originalGrantPath      string
+	originalOutputPath     string
+	originalOutputSHA256   string
 	completionCustodyPath  string
 	completionEvidencePath string
 	recoveryFrom           string
@@ -114,46 +118,9 @@ type doctorOutput struct {
 	ReviewerBundle       string `json:"reviewer_bundle"`
 }
 
-type commandOutput struct {
-	Backend string `json:"backend,omitempty"`
-
-	HumanGrantID       string                              `json:"human_grant_id,omitempty"`
-	Terminal           *grokreview.TerminalDiagnostics     `json:"terminal_diagnostics,omitempty"`
-	RendererProvenance *grokreview.PatchRendererProvenance `json:"renderer_provenance,omitempty"`
-	ParentAttempt      string                              `json:"parent_attempt,omitempty"`
-	InputProvenance    string                              `json:"input_provenance,omitempty"`
-	AttemptID          string                              `json:"attempt_id,omitempty"`
-	Provider           string                              `json:"provider,omitempty"`
-	RepositoryHost     string                              `json:"repository_host,omitempty"`
-	DiffSHA256         string                              `json:"diff_sha256,omitempty"`
-	ContractSHA256     string                              `json:"contract_sha256,omitempty"`
-	Repository         string                              `json:"repository"`
-	PullRequest        int                                 `json:"pull_request"`
-	BaseSHA            string                              `json:"base_sha"`
-	HeadSHA            string                              `json:"head_sha"`
-	Verdict            grokreview.Verdict                  `json:"verdict"`
-	Summary            string                              `json:"summary"`
-	Findings           []grokreview.Finding                `json:"findings"`
-	RequestID          string                              `json:"request_id,omitempty"`
-	SessionID          string                              `json:"session_id,omitempty"`
-	RequestedModel     string                              `json:"requested_model,omitempty"`
-	ReasoningEffort    string                              `json:"reasoning_effort,omitempty"`
-	InputTokens        int64                               `json:"input_tokens,omitempty"`
-	OutputTokens       int64                               `json:"output_tokens,omitempty"`
-	ReasoningTokens    int64                               `json:"reasoning_tokens,omitempty"`
-	FailureStage       string                              `json:"failure_stage,omitempty"`
-	ResolvedModel      string                              `json:"resolved_model,omitempty"`
-	TotalTokens        int64                               `json:"total_tokens,omitempty"`
-	CostUSD            float64                             `json:"cost_usd,omitempty"`
-	DurationMillis     int64                               `json:"duration_ms,omitempty"`
-	FailureKind        grokreview.CLIFailureKind           `json:"failure_kind,omitempty"`
-	FailureRule        grokreview.EnvelopeRule             `json:"failure_rule,omitempty"`
-	CommentID          int64                               `json:"comment_id,omitempty"`
-	CommentURL         string                              `json:"comment_url,omitempty"`
-	CheckRunID         int64                               `json:"check_run_id,omitempty"`
-	CheckURL           string                              `json:"check_url,omitempty"`
-	CheckConclusion    string                              `json:"check_conclusion,omitempty"`
-}
+// commandOutput is the wrapper's stdout contract; controller-child completion
+// decodes the same type strictly.
+type commandOutput = grokreview.ReviewCommandOutput
 
 func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
@@ -214,6 +181,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if configuration.completion {
 		return runCompletion(ctx, configuration, stdout, stderr)
+	}
+	if configuration.controllerCompletion {
+		return runControllerCompletion(ctx, configuration, stdout, stderr)
 	}
 	if configuration.reconcile {
 		settings := grokreview.ReviewSettings{Backend: configuration.backend, Mode: configuration.mode, Model: configuration.model, Effort: configuration.reasoningEffort, TimeoutMS: configuration.timeout.Milliseconds(), MaxGitHubOutput: configuration.maxGitHubOutput, MaxReviewerOutput: configuration.maxReviewerOutput, AppID: configuration.appID, InstallationID: configuration.installationID}
@@ -523,6 +493,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	} else if len(args) > 0 && args[0] == "complete" {
 		configuration.completion = true
 		args = args[1:]
+	} else if len(args) > 0 && args[0] == "complete-controller" {
+		configuration.controllerCompletion = true
+		args = args[1:]
 	} else if len(args) > 0 && args[0] == "reconcile" {
 		configuration.reconcile = true
 		args = args[1:]
@@ -572,6 +545,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.IntVar(&configuration.maxGitHubOutput, "max-github-output", 8<<20, "maximum GitHub CLI response bytes")
 	flags.IntVar(&configuration.maxReviewerOutput, "max-reviewer-output", 1<<20, "maximum Grok CLI response bytes")
 	flags.StringVar(&configuration.completionCustodyPath, "completion-custody", "", "absolute original native/claim/reservation/disclosure binding")
+	flags.StringVar(&configuration.originalGrantPath, "original-grant", "", "complete-controller only: the exact private reconsideration grant the original attempt consumed")
+	flags.StringVar(&configuration.originalOutputPath, "original-output", "", "complete-controller only: the original wrapper stdout result document")
+	flags.StringVar(&configuration.originalOutputSHA256, "original-output-sha256", "", "complete-controller only: the controller's durable SHA-256 of that document")
 	flags.StringVar(&configuration.completionEvidencePath, "completion-evidence", "", "absolute authentic original envelope or wrapper-report/native proof; never reconstruct")
 	if err := flags.Parse(args); err != nil {
 		return config{}, err
@@ -621,7 +597,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 			return config{}, fmt.Errorf("use --reviewer-bin for a non-Grok backend")
 		}
 		configuration.grokBinary = configuration.backend
-		if configuration.humanRestart || configuration.recovery || configuration.prospective || configuration.completion || configuration.completionCustodyPath != "" {
+		if configuration.humanRestart || configuration.recovery || configuration.prospective || configuration.completion || configuration.controllerCompletion || configuration.completionCustodyPath != "" {
 			return config{}, fmt.Errorf("grok recovery cannot be applied to another backend; retain original attempt")
 		}
 	}
@@ -713,6 +689,13 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if configuration.completion && (configuration.provider != "github" || !validCompletionAttempt(configuration.recoveryFrom) || !filepath.IsAbs(configuration.completionCustodyPath)) {
 		return config{}, fmt.Errorf("complete requires original attempt ID, GitHub provider and absolute completion custody")
 	}
+	controllerEvidence := configuration.originalGrantPath != "" || configuration.originalOutputPath != "" || configuration.originalOutputSHA256 != ""
+	if controllerEvidence && !configuration.controllerCompletion {
+		return config{}, fmt.Errorf("original controller-child evidence requires explicit complete-controller")
+	}
+	if configuration.controllerCompletion && (configuration.provider != "github" || !validCompletionAttempt(configuration.recoveryFrom) || !filepath.IsAbs(configuration.originalGrantPath) || !filepath.IsAbs(configuration.originalOutputPath) || len(configuration.originalOutputSHA256) != 64 || configuration.completionCustodyPath != "" || configuration.reconsiderGrantPath != "" || configuration.restartGrantPath != "" || configuration.humanRestart || configuration.recovery || configuration.reconcile || configuration.completion || visited["admission-dir"]) {
+		return config{}, fmt.Errorf("complete-controller requires the original attempt ID, GitHub provider, canonical admission and absolute original grant/output with its SHA-256")
+	}
 	if configuration.completionEvidencePath != "" && (!configuration.completion || !filepath.IsAbs(configuration.completionEvidencePath)) {
 		return config{}, fmt.Errorf("original completion evidence requires explicit complete operation")
 	}
@@ -731,7 +714,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if configuration.joinReason != "" && !configuration.reconcile {
 		return config{}, fmt.Errorf("--reason requires reconcile")
 	}
-	if !configuration.recovery && !configuration.reconcile && !configuration.completion && configuration.recoveryFrom != "" {
+	if !configuration.recovery && !configuration.reconcile && !configuration.completion && !configuration.controllerCompletion && configuration.recoveryFrom != "" {
 		return config{}, fmt.Errorf("--from requires recover")
 	}
 	if configuration.timeout <= 0 || configuration.maxGitHubOutput <= 0 || configuration.maxReviewerOutput <= 0 {
@@ -845,25 +828,7 @@ func selectedBackend(backend string) string {
 }
 
 func newCommandOutput(report grokreview.ReviewReport) commandOutput {
-	return commandOutput{Backend: report.Audit.Backend,
-		Terminal:   report.Audit.Terminal,
-		Repository: report.Snapshot.Repository, PullRequest: report.Snapshot.Number,
-		BaseSHA: report.Snapshot.BaseSHA, HeadSHA: report.Snapshot.HeadSHA,
-		Verdict: report.Result.Verdict, Summary: report.Result.Summary,
-		Findings:  report.Result.Findings,
-		RequestID: report.Audit.RequestID, SessionID: report.Audit.SessionID,
-		RequestedModel: report.Audit.RequestedModel, ResolvedModel: report.Audit.ResolvedModel,
-		ReasoningEffort: report.Audit.ReasoningEffort,
-		InputTokens:     report.Audit.Usage.InputTokens, OutputTokens: report.Audit.Usage.OutputTokens,
-		ReasoningTokens: report.Audit.Usage.ReasoningTokens, FailureStage: report.FailureStage,
-		TotalTokens: report.Audit.Usage.TotalTokens, CostUSD: report.Audit.CostUSD,
-		DurationMillis: report.Audit.Duration.Milliseconds(),
-		FailureKind:    report.Audit.FailureKind,
-		FailureRule:    report.Audit.FailureRule,
-		CommentID:      report.Publication.CommentID, CommentURL: report.Publication.CommentURL,
-		CheckRunID: report.Publication.CheckRunID, CheckURL: report.Publication.CheckURL,
-		CheckConclusion: report.Publication.Conclusion,
-	}
+	return grokreview.NewReviewCommandOutput(report)
 }
 
 func resolveBinary(binary string) (string, error) {
@@ -1035,6 +1000,47 @@ func runCompletion(ctx context.Context, c config, stdout, stderr io.Writer) int 
 		return 1
 	}
 	result, err := a.Complete(ctx, c.recoveryFrom, custody, github, token, c.checkName, bundle.Core.SHA256, bundle.Policy.SHA256)
+	return writeCompletionResult(result, err, stdout, stderr)
+}
+
+// runControllerCompletion seals and publishes one joined controller
+// reconsideration that could not seal. It resolves no model and edits no receipt.
+func runControllerCompletion(ctx context.Context, c config, stdout, stderr io.Writer) int {
+	settings := grokreview.ReviewSettings{Backend: c.backend, Mode: c.mode, Model: c.model, Effort: c.reasoningEffort, TimeoutMS: c.timeout.Milliseconds(), MaxGitHubOutput: c.maxGitHubOutput, MaxReviewerOutput: c.maxReviewerOutput, AppID: c.appID, InstallationID: c.installationID}
+	a, err := grokreview.OpenAdmission(c.admissionDir, settings, "", nil)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() { _ = a.Close() }()
+	github, token, err := prepareGitHubReadback(ctx, c)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	a.SetPublicationLookup(func(ctx context.Context, r grokreview.AttemptReceipt) (grokreview.Publication, error) {
+		return github.FindAttemptPublication(ctx, token, c.appID, r)
+	})
+	a.SetCompletionCheck(func(ctx context.Context, r grokreview.AttemptReceipt) error {
+		return github.VerifyReconsiderCheck(ctx, token, c.appID, r)
+	})
+	contract, err := reviewer.Load()
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	snapshot, err := github.FetchPullRequest(ctx, c.repository, c.pullRequest, token)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	bundle, err := grokreview.FrozenBundleFor(snapshot, contract.Core.SHA256, contract.Policy.SHA256)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	evidence := grokreview.ControllerChildEvidence{GrantPath: c.originalGrantPath, OutputPath: c.originalOutputPath, OutputSHA256: c.originalOutputSHA256}
+	result, err := a.CompleteControllerChild(ctx, c.recoveryFrom, evidence, bundle, github, token, c.checkName, contract.Core.SHA256, contract.Policy.SHA256)
 	return writeCompletionResult(result, err, stdout, stderr)
 }
 
