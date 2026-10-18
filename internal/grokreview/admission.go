@@ -185,7 +185,7 @@ func (a *Admission) Start(ctx context.Context, bundle []byte) error {
 		return a.startReconsider(ctx, bundle, identity)
 	}
 	if a.restart != nil {
-		return a.startRestart(ctx, identity)
+		return a.startRestart(ctx, bundle, identity)
 	}
 	if a.humanRestart != nil {
 		return a.startHumanRestart(ctx, bundle, identity)

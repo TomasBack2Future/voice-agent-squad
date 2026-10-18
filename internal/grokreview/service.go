@@ -142,13 +142,7 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 		s.observe(ReviewObservation{State: ReviewStateError, FailureStage: "freezing", Snapshot: snapshot})
 		return ReviewReport{Snapshot: snapshot, FailureStage: "freezing"}, err
 	}
-	bundle, err := json.Marshal(FrozenReviewBundle{
-		SchemaVersion: FrozenReviewSchemaVersion,
-		Repository:    snapshot.Repository, PullRequest: snapshot.Number,
-		BaseRef: snapshot.BaseRef, BaseSHA: snapshot.BaseSHA, HeadSHA: snapshot.HeadSHA,
-		Title: snapshot.Title, Description: snapshot.Description, Diff: snapshot.Diff,
-		CoreHash: s.coreHash, PolicyHash: s.policyHash,
-	})
+	bundle, err := FrozenBundleFor(snapshot, s.coreHash, s.policyHash)
 	if err != nil {
 		s.observe(ReviewObservation{State: ReviewStateError, FailureStage: "freezing", Snapshot: snapshot})
 		return ReviewReport{Snapshot: snapshot, FailureStage: "freezing"}, fmt.Errorf("encode frozen review bundle: %w", err)
@@ -250,6 +244,18 @@ func (s *LocalReviewService) review(ctx context.Context, token, checkName, repos
 	}
 	s.observe(ReviewObservation{State: state, Snapshot: snapshot, Result: result, Audit: audit, Publication: publication})
 	return report, nil
+}
+
+// FrozenBundleFor encodes the exact complete input admitted and sampled for a
+// snapshot. Completion recovery rebuilds it only to compare its bound hash.
+func FrozenBundleFor(snapshot PullRequestSnapshot, coreHash, policyHash string) ([]byte, error) {
+	return json.Marshal(FrozenReviewBundle{
+		SchemaVersion: FrozenReviewSchemaVersion,
+		Repository:    snapshot.Repository, PullRequest: snapshot.Number,
+		BaseRef: snapshot.BaseRef, BaseSHA: snapshot.BaseSHA, HeadSHA: snapshot.HeadSHA,
+		Title: snapshot.Title, Description: snapshot.Description, Diff: snapshot.Diff,
+		CoreHash: coreHash, PolicyHash: policyHash,
+	})
 }
 
 func (s *LocalReviewService) observe(observation ReviewObservation) {

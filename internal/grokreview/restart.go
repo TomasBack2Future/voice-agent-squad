@@ -49,7 +49,7 @@ func unverdicted(r AttemptReceipt) bool {
 		(r.Publication.CheckRunID == 0 || r.Publication.Conclusion == "failure")
 }
 
-func (a *Admission) startRestart(ctx context.Context, identity ReviewIdentity) error {
+func (a *Admission) startRestart(ctx context.Context, bundle []byte, identity ReviewIdentity) error {
 	g := a.restart
 	prior, err := a.load(ctx, g.Parent)
 	if err != nil {
@@ -98,6 +98,7 @@ func (a *Admission) startRestart(ctx context.Context, identity ReviewIdentity) e
 	})
 	if err == nil {
 		a.receipt = candidate
+		a.frozenBundle = append([]byte(nil), bundle...)
 	}
 	return err
 }
