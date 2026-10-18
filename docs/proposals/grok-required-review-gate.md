@@ -686,11 +686,22 @@ leaving a joined verdict with no seal or Check.
 state (joined reconsideration, valid verdict, no seal, no publication). It
 never resolves a model, allocates an attempt or edits the receipt. It requires
 the untouched join journal, absent original processes, the grant whose digest
-the receipt recorded, the wrapper's original stdout document at the
-controller's recorded hash, field-for-field equality of attribution, terminal
-and accounting with the receipt, and the live frozen input whose bundle hash
-and grant-augmented model-input hash both reproduce the terminal record. Only
-then does it seal, re-verify the reconsidered blocking Check, publish once
-under the exact attempt identity and record the publication on the seal. A
-lost write response is joined only by exact-attempt readback; replay of a
-published seal is read-only.
+the receipt recorded, field-for-field equality of the wrapper output's
+attribution, terminal and accounting with the receipt, and the live frozen
+input whose bundle hash and grant-augmented model-input hash both reproduce
+the terminal record. Only then does it seal, re-verify the reconsidered
+blocking Check, publish once under the exact attempt identity and record the
+publication on the seal.
+
+`--original-output-sha256` is caller-asserted: the provider only checks that
+the supplied document hashes to it. The summary and findings are not
+otherwise bound by the provider receipt, so the caller must take the hash from
+its own durable record. The Coordinator client binds it to the child review's
+recorded `output sha256=` evidence and refuses any mismatch before invoking
+the command; an operator invoking it directly carries that obligation.
+
+A seal left in `publishing` (lost write response or killed publisher) is
+resolved only by rerunning the same command: once the recorded publisher
+process is absent it performs exact-attempt Check readback and records a found
+publication, and otherwise reports the publication uncertain without writing
+again. Replay of a published seal is read-only.
