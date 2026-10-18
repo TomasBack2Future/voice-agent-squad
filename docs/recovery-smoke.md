@@ -57,6 +57,13 @@ and the existing installer-qualified configuration. Preserve the tests' native
 receipts and client hashes alongside the report. Missing prerequisites cause
 skips which this runner converts to failure; it never falls back to simulation.
 
+The runner disables Muse launcher installation and automatic updates before
+loading suites, including their version probes, and restores the caller's
+environment afterward. Prefer the exact qualified binary to a launcher wrapper.
+This guard does not isolate shared account quota, native configuration, hooks or
+plugins. Verify those boundaries before a real native run; an isolated workspace
+alone does not establish non-interference with running tasks.
+
 The existing Muse suites qualify only **source Worker new/resume/hold** on their
 actual configuration. Even a passing run explicitly leaves cross-runtime
 migration unqualified. They do not qualify Deployer/ENV operations, Reviewer,
