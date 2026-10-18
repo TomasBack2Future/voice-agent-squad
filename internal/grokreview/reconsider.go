@@ -95,6 +95,7 @@ func (a *Admission) startReconsider(ctx context.Context, bundle []byte, identity
 	})
 	if err == nil {
 		a.receipt = candidate
+		a.frozenBundle = append([]byte(nil), bundle...)
 	}
 	return err
 }
