@@ -535,7 +535,7 @@ their existing no-resampling and one-use rules.
 
 The `squad.review-human-restart.v1` operator receipt binds `directive_path`, its
 `directive_sha256`, `human_message_id`, `previous_attempt`, the exact complete
-`identity` (including bundle hash), unchanged `settings`, and `custody` using
+`identity` (including bundle hash), the new attempt's exact `settings`, and `custody` using
 `squad.review-completion.custody.v1`. The custody disclosure uses the existing
 `managed_review` authorization-readback contract. Prepare it from the genuine
 human directive under the existing local operator trust boundary; a JSON file
@@ -549,7 +549,18 @@ title, body hash and complete patch hash. The command reads the current default
 work ledger without migration: held primary claim, dispatched native binding,
 proceed decision and the authorizing nonretired Dispatcher epoch must all match.
 Actual complete input and settings must match the canonical joined sampling
-timeout receipt; a valid verdict cannot be sampled again. Invalid scope fails
+timeout receipt; a valid verdict cannot be sampled again. One narrowly scoped
+exception allows an original Worker chat to authorize its existing Dispatcher
+chat: the directive's `delegation.authorizing_worker_native` and
+`authorizing_worker_actor` must match both the authenticated human-message thread
+and the held original Worker claim, while the controller native and epoch must
+match the current nonretired Dispatcher binding. For that delegated grant only,
+`timeout_override.from_ms` must bind the old 20-minute receipt and `to_ms` may
+increase the new attempt to at most 40 minutes. The configured `--timeout` and
+grant settings must equal `to_ms`; every other setting, including model, effort,
+mode, output bounds and GitHub App identity, must equal the old receipt. Without
+the delegation and override, the existing same-chat and unchanged-settings rules
+continue to apply. Invalid scope fails
 before the provider call. No new issuer, signer, platform API or self-asserted
 `authorized=true` is introduced.
 
