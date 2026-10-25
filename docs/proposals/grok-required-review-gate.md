@@ -226,6 +226,25 @@ blocks import; a failure comment is insufficient. Existing receipt/slot custody
 cannot be overwritten by reimporting legacy JSON. Preserve old receipts read-only.
 
 
+### Coordinator-authorized no-verdict restart lineage
+
+The trusted Coordinator host adapter can provide a private
+`coordinator.review-restart.v1` grant for an exact joined sampling failure
+without a valid verdict. This is separate from the single-use `recover` command
+above. A controller restart child that also joins with a sampling timeout or
+cancellation may become the parent of another controller-authorized restart;
+there is no fixed limit on this chain. Each invocation still needs its own
+current controller admission and immediate-parent grant.
+
+Every ancestor must retain the same frozen input and settings and a joined
+no-verdict sampling failure. Non-root ancestors must be authenticated controller
+restart receipts; a reconsideration or human-restart lineage cannot be converted
+into this lane. Missing, cyclic, mismatched or valid-verdict history rejects.
+The immediate parent's wrapper and reviewer must be absent, only one child may
+consume a parent, and the repository/PR single-flight still applies. Existing
+receipts and consumed attempts are never rewritten or refunded. A valid verdict
+ends restart eligibility; publication failures do not permit re-sampling.
+
 ### Prospective re-admission when original full input is unavailable
 
 `readmit` is explicitly a **new-input** operation, not legacy replay. The original

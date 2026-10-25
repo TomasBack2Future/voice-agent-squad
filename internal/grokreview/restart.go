@@ -12,8 +12,9 @@ import (
 )
 
 // RestartGrant is issued by the trusted host review adapter after the current
-// Coordinator controller durably admitted the single restart of an original
-// review whose joined attempt produced no verdict. It never applies to an
+// Coordinator controller durably admitted one child of a review whose joined
+// attempt produced no verdict. A child may itself become a parent after another
+// joined no-verdict result. It never applies to an
 // attempt with a valid verdict, so it cannot select a different outcome.
 type RestartGrant struct {
 	Schema        string `json:"schema"`
@@ -41,12 +42,38 @@ func (a *Admission) ImportRestart(path string) error {
 	return nil
 }
 
-// unverdicted reports an original joined attempt whose sampling ended without
+// unverdicted reports a joined attempt whose sampling ended without
 // any valid verdict and whose only publication, if any, is a failed Check.
 func unverdicted(r AttemptReceipt) bool {
-	return r.Joined && r.CompletedAt > 0 && r.Parent == "" && r.Verdict == VerdictError && r.FailureStage == "sampling" &&
+	return r.Joined && r.CompletedAt > 0 && r.Verdict == VerdictError && r.FailureStage == "sampling" &&
 		(r.FailureKind == CLIFailureTimeout || r.FailureKind == CLIFailureCanceled) &&
 		(r.Publication.CheckRunID == 0 || r.Publication.Conclusion == "failure")
+}
+
+// Verify the whole immutable lineage: a failed reconsideration or human restart
+// must not turn an earlier valid verdict into an unlimited controller retry.
+func (a *Admission) validateRestartLineage(ctx context.Context, prior AttemptReceipt, identity ReviewIdentity) error {
+	seen := map[string]bool{}
+	for {
+		if prior.ID == "" || seen[prior.ID] || !unverdicted(prior) || prior.Identity != identity || prior.Settings != a.settings {
+			return fmt.Errorf("restart requires a joined unverdicted sampling lineage with exact input/settings")
+		}
+		seen[prior.ID] = true
+		if prior.Parent == "" {
+			return nil
+		}
+		if prior.InputProvenance != "controller-unverdicted-restart" || prior.AuthorizationReference == "" || !contentHashValid(prior.AuthorizationSHA256) {
+			return fmt.Errorf("controller no-verdict restart lineage required")
+		}
+		parent, err := a.load(ctx, prior.Parent)
+		if err != nil {
+			return err
+		}
+		if parent.ID != prior.Parent {
+			return fmt.Errorf("restart parent identity mismatch")
+		}
+		prior = parent
+	}
 }
 
 func (a *Admission) startRestart(ctx context.Context, bundle []byte, identity ReviewIdentity) error {
@@ -55,8 +82,8 @@ func (a *Admission) startRestart(ctx context.Context, bundle []byte, identity Re
 	if err != nil {
 		return err
 	}
-	if !unverdicted(prior) || prior.Identity != identity || prior.Settings != a.settings {
-		return fmt.Errorf("restart requires an original joined unverdicted sampling attempt with exact input/settings")
+	if err = a.validateRestartLineage(ctx, prior, identity); err != nil {
+		return err
 	}
 	for _, pid := range []int{prior.WrapperPID, prior.ReviewerPID} {
 		if pid > 0 {
@@ -88,7 +115,7 @@ func (a *Admission) startRestart(ctx context.Context, bundle []byte, identity Re
 			return err
 		}
 		if used != 0 {
-			return fmt.Errorf("original restart already consumed; no chain or retry")
+			return fmt.Errorf("restart parent already has a child")
 		}
 		if _, err = tx.ExecContext(ctx, "INSERT INTO review_attempts(id,identity,receipt) VALUES(?,?,?)", candidate.ID, string(identityRaw), string(raw)); err != nil {
 			return err
