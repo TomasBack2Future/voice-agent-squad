@@ -87,6 +87,8 @@ issuance. Scope must exactly match the claim (`""` legacy scope maps to `*`).
 This is a shape example, deliberately not executable. Obtain every value from the
 reviewed release and actual ledger. Canonical `cutover`/`rollback` bind `studio-go`
 and `studio-frontend`; other supported operations bind candidate releases.
+`catalog-migration` binds the exact surface its sealed plan names (candidate or
+canonical pair); `candidate-evaluation-layout-enable`/`-disable` bind candidate only.
 `preflight` has no admission because it cannot mutate the cluster.
 
 HTTP bodies contain `binding` (the object above), positive integer `run_id`,

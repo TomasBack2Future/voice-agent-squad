@@ -38,6 +38,36 @@ func fixture(t *testing.T) (*Store, *sql.DB, Binding) {
 	return s, db, b
 }
 func req(b Binding) Request { return Request{b, 100, 1, "rollout"} }
+func TestBindingAcceptsCatalogAndLayoutOperations(t *testing.T) {
+	_, _, base := fixture(t)
+	now := base.ExpiresAt - 3600
+	for _, operation := range []string{"catalog-migration", "candidate-evaluation-layout-enable", "candidate-evaluation-layout-disable"} {
+		b := base
+		b.Operation = operation
+		b.Target = map[string]string{"environment": "production", "cluster_context": "prod", "namespace": "studio-prod", "public_host": "studio.example", "go_release": "studio-go-production-candidate", "frontend_release": "studio-frontend-production-candidate"}
+		if err := b.Validate(now); err != nil {
+			t.Fatalf("%s on candidate rejected: %v", operation, err)
+		}
+	}
+	// catalog-migration may also name the canonical surface in its sealed plan.
+	b := base
+	b.Operation = "catalog-migration"
+	b.Target = map[string]string{"environment": "production", "cluster_context": "prod", "namespace": "studio-prod", "public_host": "studio.example", "go_release": "studio-go", "frontend_release": "studio-frontend"}
+	if err := b.Validate(now); err != nil {
+		t.Fatalf("catalog-migration on canonical rejected: %v", err)
+	}
+	// Layout flag operations are candidate-only: a canonical target is refused.
+	b.Operation = "candidate-evaluation-layout-enable"
+	if err := b.Validate(now); err == nil {
+		t.Fatal("layout operation on canonical accepted")
+	}
+	b.Operation = "studio-data-write"
+	b.Target["go_release"], b.Target["frontend_release"] = "studio-go-production-candidate", "studio-frontend-production-candidate"
+	if err := b.Validate(now); err == nil {
+		t.Fatal("unknown operation accepted")
+	}
+}
+
 func TestBindingAndReplay(t *testing.T) {
 	for _, mutation := range []string{"holder", "generation", "manifest", "target", "sha", "operation", "expired", "attempt", "missing-begin"} {
 		t.Run(mutation, func(t *testing.T) {

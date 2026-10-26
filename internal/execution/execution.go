@@ -78,7 +78,8 @@ func (b Binding) Validate(now int64) error {
 		return errors.New("invalid execution binding")
 	}
 	switch b.Operation {
-	case "api-health-only", "preview", "candidate-upgrade", "cutover", "rollback", "candidate-rollback", "candidate-retirement":
+	case "api-health-only", "preview", "candidate-upgrade", "cutover", "rollback", "candidate-rollback", "candidate-retirement",
+		"catalog-migration", "candidate-evaluation-layout-enable", "candidate-evaluation-layout-disable":
 	default:
 		return errors.New("unsupported operation")
 	}
@@ -93,14 +94,21 @@ func (b Binding) Validate(now int64) error {
 			return fmt.Errorf("missing target %s", k)
 		}
 	}
-	candidate := b.Operation == "api-health-only" || b.Operation == "preview" || b.Operation == "candidate-upgrade" || b.Operation == "candidate-rollback" || b.Operation == "candidate-retirement"
+	candidate := b.Operation == "api-health-only" || b.Operation == "preview" || b.Operation == "candidate-upgrade" || b.Operation == "candidate-rollback" || b.Operation == "candidate-retirement" ||
+		b.Operation == "candidate-evaluation-layout-enable" || b.Operation == "candidate-evaluation-layout-disable"
 	goRelease, frontRelease := "studio-go", "studio-frontend"
 	if candidate {
 		goRelease += "-production-candidate"
 		frontRelease += "-production-candidate"
 	}
 	if b.Target["go_release"] != goRelease || b.Target["frontend_release"] != frontRelease {
-		return errors.New("target release mismatch")
+		// catalog-migration names its surface in the sealed plan: either the
+		// candidate pair or the canonical pair is an exact target for it.
+		if b.Operation != "catalog-migration" ||
+			b.Target["go_release"] != "studio-go-production-candidate" ||
+			b.Target["frontend_release"] != "studio-frontend-production-candidate" {
+			return errors.New("target release mismatch")
+		}
 	}
 	return nil
 }
