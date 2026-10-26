@@ -25,6 +25,7 @@ large prompt:
 | Concern | Canonical source |
 | --- | --- |
 | Generic Worker lifecycle | `roles/worker/SKILL.md` |
+| Concise Worker updates and explanatory Dispatcher reports | `communication.md` |
 | Review admission, single-flight and freeze | `roles/worker/references/review-readiness.md` |
 | Studio repository and delivery capabilities | `projects/studio/profile.json` |
 | Importer repository and Compose delivery capabilities | `projects/importer/profile.json` |

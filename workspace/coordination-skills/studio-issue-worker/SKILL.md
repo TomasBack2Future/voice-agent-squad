@@ -5,6 +5,10 @@ description: "Resolve exactly one explicitly assigned Voice Agent Studio GitHub 
 
 # Studio Single-Issue Worker
 
+Read [role communication](../../agent-loop/communication.md) at startup and
+resume. Apply the concise Worker standard while preserving required evidence
+and Dispatcher callbacks.
+
 Before work-package planning, ENV admission, shared-failure retry or blocker
 handoff, performance sampling, repeated review corrections or retained fixtures,
 read [delivery quality](references/delivery-quality.md).
