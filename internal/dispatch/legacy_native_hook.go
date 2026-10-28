@@ -56,6 +56,7 @@ type nativeHookObservation struct {
 	DecisionRevision  int64              `json:"decision_revision"`
 	DecisionOutcomeID int64              `json:"decision_outcome_id"`
 	RequestSHA256     string             `json:"request_sha256,omitempty"`
+	Bootstrap         bool               `json:"bootstrap,omitempty"`
 }
 
 func readLegacyFile(path string, limit int64) ([]byte, error) {
@@ -219,9 +220,16 @@ func observeLegacyHook(ctx context.Context, actor, native, config string) (nativ
 	return nativeHookObservation{Client: identity, Hook: hook}, nil
 }
 
+// NativeHookTool is the tool of the real PreToolUse event, as relayed by the
+// installed hook. It only narrows the pre-claim bootstrap window.
+type NativeHookTool struct {
+	Name    string
+	Command string
+}
+
 // CheckWorkerNativeHook has no caller-supplied receipt or PID import. It records
 // the actual hook execution and eligibility atomically before permitting tools.
-func (s *Store) CheckWorkerNativeHook(ctx context.Context, actor, native, config string) error {
+func (s *Store) CheckWorkerNativeHook(ctx context.Context, actor, native, config string, tool NativeHookTool) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	observation, err := observeLegacyHook(ctx, actor, native, config)
@@ -229,40 +237,77 @@ func (s *Store) CheckWorkerNativeHook(ctx context.Context, actor, native, config
 		return err
 	}
 	return store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
-		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM worker_native_fences WHERE repo_id=? AND native_session=?`, s.repoID, native).Scan(&count); err != nil || count != 0 {
-			return errors.New("original native is fenced; tool execution blocked")
-		}
-		rows, err := tx.QueryContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(m.body,''),COALESCE(m.agent_id,''),r.reserved_by FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation LEFT JOIN messages m ON m.repo_id=d.repo_id AND m.id=d.outcome_id WHERE r.repo_id=? AND r.worker_thread_id=? AND (d.worker_agent=? OR (d.worker_agent IS NULL AND EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=? AND c.state='held')))`, s.repoID, native, actor, actor)
-		if err != nil {
+		return s.recordNativeHookEligibility(ctx, tx, actor, native, tool, observation)
+	})
+}
+
+func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, actor, native string, tool NativeHookTool, observation nativeHookObservation) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM worker_native_fences WHERE repo_id=? AND native_session=?`, s.repoID, native).Scan(&count); err != nil || count != 0 {
+		return errors.New("original native is fenced; tool execution blocked")
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(m.body,''),COALESCE(m.agent_id,''),r.reserved_by FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation LEFT JOIN messages m ON m.repo_id=d.repo_id AND m.id=d.outcome_id WHERE r.repo_id=? AND r.worker_thread_id=? AND (d.worker_agent=? OR (d.worker_agent IS NULL AND EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=? AND c.state='held')))`, s.repoID, native, actor, actor)
+	if err != nil {
+		return err
+	}
+	var body, author, controller string
+	count = 0
+	for rows.Next() {
+		count++
+		if err := rows.Scan(&observation.DecisionRevision, &observation.DecisionOutcomeID, &body, &author, &controller); err != nil {
+			rows.Close()
 			return err
 		}
-		var body, author, controller string
-		count = 0
-		for rows.Next() {
-			count++
-			if err := rows.Scan(&observation.DecisionRevision, &observation.DecisionOutcomeID, &body, &author, &controller); err != nil {
-				rows.Close()
-				return err
-			}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		// A newly bound Worker holds neither a decision nor a claim: the claim is
+		// the first thing it must do and a decision needs a claimant. Admit only
+		// that exact bound, unfenced, unclaimed state, and only for the tools
+		// needed to read its assignment and claim.
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_reservations r WHERE r.repo_id=? AND r.worker_thread_id=? AND r.state='dispatched' AND r.canonical_item_id<>'' AND r.reserved_by<>? AND NOT EXISTS(SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation) AND NOT EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.state='held')`, s.repoID, native, actor).Scan(&count); err != nil {
+			return err
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil || count != 1 {
+		if count != 1 || !bootstrapToolAllowed(tool) {
 			return errors.New("native hook current original Worker binding unavailable")
 		}
-		var admission LegacyNativeAdmission
-		observation.RequestSHA256 = ""
-		if author == controller && len(body) <= 16384 && json.Unmarshal([]byte(body), &admission) == nil && admission.Schema == "squad.legacy-worker-native-admission.v1" && validLegacyHash(admission.RequestSHA256) {
-			observation.RequestSHA256 = admission.RequestSHA256
-		}
-		raw, err := json.Marshal(observation)
-		if err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO worker_native_hook_observations(repo_id,native_session,actor,observation,observed_at) VALUES(?,?,?,?,?) ON CONFLICT(repo_id,native_session) DO UPDATE SET actor=excluded.actor,observation=excluded.observation,observed_at=excluded.observed_at`, s.repoID, native, actor, string(raw), s.now().Unix())
+		observation.Bootstrap = true
+	} else if count != 1 {
+		return errors.New("native hook current original Worker binding unavailable")
+	}
+	var admission LegacyNativeAdmission
+	observation.RequestSHA256 = ""
+	if author == controller && len(body) <= 16384 && json.Unmarshal([]byte(body), &admission) == nil && admission.Schema == "squad.legacy-worker-native-admission.v1" && validLegacyHash(admission.RequestSHA256) {
+		observation.RequestSHA256 = admission.RequestSHA256
+	}
+	raw, err := json.Marshal(observation)
+	if err != nil {
 		return err
-	})
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO worker_native_hook_observations(repo_id,native_session,actor,observation,observed_at) VALUES(?,?,?,?,?) ON CONFLICT(repo_id,native_session) DO UPDATE SET actor=excluded.actor,observation=excluded.observation,observed_at=excluded.observed_at`, s.repoID, native, actor, string(raw), s.now().Unix())
+	return err
+}
+
+var bootstrapReadTools = map[string]bool{"Read": true, "Glob": true, "Grep": true, "Skill": true, "ToolSearch": true}
+
+var bootstrapSquadCommands = map[string]bool{"claim": true, "go": true, "register": true, "claim-inspect": true}
+
+// bootstrapToolAllowed admits read-only inspection tools, the Squad claim MCP
+// tools and one plain `squad claim|go|register ...` command. Any shell syntax
+// that could chain another command is refused.
+func bootstrapToolAllowed(tool NativeHookTool) bool {
+	if bootstrapReadTools[tool.Name] || strings.HasPrefix(tool.Name, "mcp__squad__squad_") && bootstrapSquadCommands[strings.TrimPrefix(tool.Name, "mcp__squad__squad_")] {
+		return true
+	}
+	if tool.Name != "Bash" || len(tool.Command) > 4096 || strings.ContainsAny(tool.Command, ";&|<>$`()\n\r\\\"'*?{}!#~") {
+		return false
+	}
+	words := strings.Fields(tool.Command)
+	return len(words) >= 2 && filepath.Base(words[0]) == "squad" && bootstrapSquadCommands[words[1]]
 }
 
 func (s *Store) legacyNativeAdmission(ctx context.Context, q WorkerHandoffRequest, digest string, processes []LegacyProcess) (LegacyNativeAdmission, error) {

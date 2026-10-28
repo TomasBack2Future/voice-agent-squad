@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-def check(config, native, config_path):
+def check(config, native, config_path, tool_name='', tool_command=''):
     if native != config['native_session_id']:
         raise ValueError('native fence hook identity differs from its selected client')
     env = {k: v for k, v in os.environ.items() if k not in (
@@ -17,7 +17,8 @@ def check(config, native, config_path):
                SQUAD_SESSION_ID='claude:' + native, SQUAD_NO_AUTO_DAEMON='1',
                SQUAD_NO_BROWSER='1', SQUAD_NO_HYGIENE='1', PYTHONDONTWRITEBYTECODE='1')
     result = subprocess.run([config['squad_executable'], 'dispatch', 'worker-native-hook-check',
-                             '--native-session', native, '--hook-config', str(config_path.resolve())], cwd=config['ledger_directory'], env=env,
+                             '--native-session', native, '--hook-config', str(config_path.resolve()),
+                             '--tool-name', tool_name, '--tool-command', tool_command], cwd=config['ledger_directory'], env=env,
                             capture_output=True, text=True, timeout=10)
     if result.returncode:
         raise ValueError('old native is fenced or ledger verification unavailable; retain custody and reconcile with its controller')
@@ -37,7 +38,10 @@ def main():
         event = json.load(sys.stdin)
         if event.get('hook_event_name') != 'PreToolUse':
             raise ValueError('native fence requires a real PreToolUse event')
-        check(config, event.get('session_id'), args.config)
+        tool_input = event.get('tool_input')
+        command = tool_input.get('command') if isinstance(tool_input, dict) else ''
+        check(config, event.get('session_id'), args.config, str(event.get('tool_name') or ''),
+              command if isinstance(command, str) else '')
         return 0
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         print('Squad native fence blocked this tool. Verify the original session, custody and ledger before continuing.', file=sys.stderr)

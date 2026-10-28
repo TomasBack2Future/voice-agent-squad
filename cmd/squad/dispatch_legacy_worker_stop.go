@@ -122,7 +122,7 @@ func legacyWorkerStopCommands() []*cobra.Command {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"state": "eligible", "native_session": workerNative})
 	}}
 	check.Flags().StringVar(&workerNative, "native-session", "", "actual Worker native")
-	var hookNative, hookConfig string
+	var hookNative, hookConfig, hookTool, hookCommand string
 	hook := &cobra.Command{Use: "worker-native-hook-check", Short: "Kernel-qualified synchronous hook eligibility and execution observation; no receipt imports", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if os.Getenv("SQUAD_NATIVE_SESSION_ID") != hookNative {
 			return errors.New("exact original hook native runtime required")
@@ -132,13 +132,15 @@ func legacyWorkerStopCommands() []*cobra.Command {
 			return err
 		}
 		defer bc.Close()
-		if err := dispatch.New(bc.db, bc.repoID, nil).CheckWorkerNativeHook(cmd.Context(), bc.agentID, hookNative, hookConfig); err != nil {
+		if err := dispatch.New(bc.db, bc.repoID, nil).CheckWorkerNativeHook(cmd.Context(), bc.agentID, hookNative, hookConfig, dispatch.NativeHookTool{Name: hookTool, Command: hookCommand}); err != nil {
 			return err
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"state": "eligible", "native_session": hookNative})
 	}}
 	hook.Flags().StringVar(&hookNative, "native-session", "", "actual original hook native")
 	hook.Flags().StringVar(&hookConfig, "hook-config", "", "actual selected native hook configuration")
+	hook.Flags().StringVar(&hookTool, "tool-name", "", "tool of the real PreToolUse event")
+	hook.Flags().StringVar(&hookCommand, "tool-command", "", "Bash command of the real PreToolUse event")
 	_ = hook.MarkFlagRequired("native-session")
 	_ = hook.MarkFlagRequired("hook-config")
 	hookGet := &cobra.Command{Use: "worker-native-hook-get NATIVE", Short: "Read actual kernel-observed native hook identity for controller admission", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {

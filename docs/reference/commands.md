@@ -1178,6 +1178,19 @@ Remaining children must be the exact selected
 receiver or the reviewed binary's bounded listener, and all must later join.
 The source worktree has no general adapter for arbitrary detached writers.
 
+The same hook also guards a newly launched Worker, which has neither a decision
+(a decision requires a claimant) nor a claim yet. The hook relays the real
+event's `--tool-name`/`--tool-command`. For a native whose reservation is
+`dispatched` to exactly that native, with no fence, no decision row, no held
+claim on the canonical item and a reserver other than the actor, the check
+admits only read-only inspection tools (`Read`, `Glob`, `Grep`, `Skill`,
+`ToolSearch`), the Squad claim MCP tools, and one plain
+`squad claim|go|register|claim-inspect` command with no shell chaining,
+substitution or redirection. The observation records `bootstrap: true`, which
+never qualifies a controller handoff. Once the claim is held the ordinary
+decision/claim rule applies; unassigned, mismatched, closed, fenced or
+already-claimed natives still fail closed.
+
 For each managed review in the inventory, that controller admission also has a
 `managed_reviews` entry containing `id`, the canonical `database_path` of the
 actual configured reviewer installation, and `receipt_sha256` of its exact

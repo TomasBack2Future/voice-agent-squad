@@ -20,9 +20,10 @@ class NativeFenceTests(unittest.TestCase):
     def test_native_readback_and_sanitized_identity(self):
         result = subprocess.CompletedProcess([], 0, json.dumps({'state': 'eligible', 'native_session': 'old-native'}), '')
         with patch('claude_native_fence.subprocess.run', return_value=result) as run:
-            fence.check(self.config, 'old-native', Path('/fixture/config.json'))
+            fence.check(self.config, 'old-native', Path('/fixture/config.json'), 'Bash', 'squad claim T')
         args, kwargs = run.call_args
-        self.assertEqual(args[0][2:], ['worker-native-hook-check', '--native-session', 'old-native', '--hook-config', '/fixture/config.json'])
+        self.assertEqual(args[0][2:], ['worker-native-hook-check', '--native-session', 'old-native', '--hook-config', '/fixture/config.json',
+                                       '--tool-name', 'Bash', '--tool-command', 'squad claim T'])
         self.assertEqual(kwargs['env']['SQUAD_AGENT'], 'old-actor')
         self.assertEqual(kwargs['env']['SQUAD_NATIVE_SESSION_ID'], 'old-native')
         self.assertEqual(kwargs['env']['PYTHONDONTWRITEBYTECODE'], '1')
@@ -57,3 +58,18 @@ class NativeFenceTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertEqual(result.stdout, '')
             self.assertIn('blocked', result.stderr)
+
+
+class NativeFenceEventRelayTests(unittest.TestCase):
+    def test_real_event_tool_is_relayed_to_ledger_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+            path.write_text(json.dumps(dict(native_session_id='n', agent_id='a', ledger_directory='/f', squad_executable='/f/squad')))
+            event = json.dumps(dict(hook_event_name='PreToolUse', session_id='n', tool_name='Bash',
+                                    tool_input=dict(command='squad claim T')))
+            result = subprocess.CompletedProcess([], 0, json.dumps({'state': 'eligible', 'native_session': 'n'}), '')
+            with patch('sys.argv', ['claude_native_fence.py', '--config', str(path)]), \
+                    patch('sys.stdin', __import__('io').StringIO(event)), \
+                    patch('claude_native_fence.subprocess.run', return_value=result) as run:
+                self.assertEqual(fence.main(), 0)
+            self.assertEqual(run.call_args[0][0][-4:], ['--tool-name', 'Bash', '--tool-command', 'squad claim T'])

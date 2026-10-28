@@ -72,7 +72,7 @@ func TestLegacyHookReadinessCannotBeImportedFromOrdinaryCaller(t *testing.T) {
 	if _, err := s.db.Exec(`DELETE FROM worker_native_hook_observations`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CheckWorkerNativeHook(context.Background(), q.Claim.Actor, q.Expected.WorkerThreadID, "/isolated/config.json"); err == nil {
+	if err := s.CheckWorkerNativeHook(context.Background(), q.Claim.Actor, q.Expected.WorkerThreadID, "/isolated/config.json", NativeHookTool{}); err == nil {
 		t.Fatal("ordinary caller forged native hook execution")
 	}
 	var count int
