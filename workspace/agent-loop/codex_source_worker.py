@@ -314,7 +314,7 @@ def main():
     elif args.check:
         assignment = validate_file(args.assignment, ROOT / 'schemas/assignment-envelope.schema.json')
         check_launch(assignment, source_config(args.config), args.resume)
-        result = {'status': 'launch-checked', 'native_qualified': False, 'surface': 'original-cli-exec', 'execution': 'custody-pin-and-contained-tools'}
+        result = {'status': 'launch-checked', 'native_qualified': False, 'surface': 'original-native-cli', 'execution': 'custody-pin-and-contained-tools'}
     else:
         result = prepare(args.config) if args.prepare else run(args.assignment, args.config, args.resume)
     print(json.dumps(result))
