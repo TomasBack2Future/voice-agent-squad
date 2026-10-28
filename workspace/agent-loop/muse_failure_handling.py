@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 
-NON_RETRYABLE = ('auth', 'quota', 'config')
+NON_RETRYABLE = ('auth', 'quota', 'config', 'unknown')
 
 _ERROR_CLASSES = ('exhausted', 'connection', 'auth', 'quota', 'config', 'unknown')
 
@@ -31,8 +31,8 @@ def error_class(event) -> str:
     """Resolve the closed-enum error class for a receipt.
 
     Prefer an explicit field; otherwise parse the sanitized message-body
-    token the hook persists. Anything unrecognized stays 'unknown',
-    which is retryable only through the normal budget path.
+    token the hook persists. Anything unrecognized stays 'unknown'
+    until the owning recovery path diagnoses it.
     """
     direct = event.get('error_class')
     if direct in _ERROR_CLASSES:

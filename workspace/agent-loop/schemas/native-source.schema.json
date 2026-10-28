@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Original native CLI source Worker",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent_id",
+    "dispatcher_agent_id",
+    "controller_native",
+    "controller_epoch",
+    "coordination_executable",
+    "ledger_directory",
+    "client_executable",
+    "workspace",
+    "state_directory",
+    "prompt_file",
+    "coordination_home",
+    "claim_generation",
+    "tool_runtime",
+    "execution_mode",
+    "runtime",
+    "role",
+    "model",
+    "effort",
+    "native_state"
+  ],
+  "properties": {
+    "native_session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "dispatcher_agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "controller_native": {
+      "type": "string",
+      "minLength": 1
+    },
+    "controller_epoch": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "coordination_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "ledger_directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "client_executable": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "state_directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "prompt_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "coordination_home": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "claim_generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tool_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable",
+        "context",
+        "daemon_id",
+        "image"
+      ],
+      "properties": {
+        "executable": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "context": {
+          "type": "string",
+          "minLength": 1
+        },
+        "daemon_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "human_authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignment_id",
+        "repository",
+        "reference",
+        "operations",
+        "managed_review"
+      ],
+      "properties": {
+        "assignment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$"
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "source",
+              "test",
+              "pull_request",
+              "managed_review",
+              "gated_merge",
+              "issue_close"
+            ]
+          }
+        },
+        "managed_review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "destination",
+            "content"
+          ],
+          "properties": {
+            "provider": {
+              "const": "grok"
+            },
+            "destination": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"
+            },
+            "content": {
+              "const": "source_diff_and_issue_contract_only"
+            }
+          }
+        }
+      }
+    },
+    "execution_mode": {
+      "const": "native-cli-source"
+    },
+    "runtime": {
+      "enum": [
+        "codex",
+        "muse"
+      ]
+    },
+    "role": {
+      "const": "worker"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "effort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "max",
+        "xhigh",
+        "ultra"
+      ]
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "approval_policy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sandbox": {
+      "type": "string",
+      "minLength": 1
+    },
+    "native_state": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "auth_file": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "max_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 82800
+    },
+    "contributor_mode": {
+      "enum": [
+        "on",
+        "off"
+      ]
+    },
+    "permission_mode": {
+      "enum": [
+        "bypassPermissions",
+        "yolo"
+      ]
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "prior_writer",
+            "prior_writer_sha256"
+          ],
+          "not": {
+            "required": [
+              "legacy_stop_id"
+            ]
+          }
+        },
+        {
+          "required": [
+            "legacy_stop_id"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "prior_writer"
+                ]
+              },
+              {
+                "required": [
+                  "prior_writer_sha256"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "prior_writer": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "prior_writer_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "legacy_stop_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        }
+      }
+    }
+  }
+}

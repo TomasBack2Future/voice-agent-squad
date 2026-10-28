@@ -54,6 +54,14 @@ class RuntimeEntryTests(unittest.TestCase):
                              'custody-pin-and-contained-tools' if runtime == 'muse' else 'unavailable')
             self.assertEqual(result['events']['handling_ack'], 'explicit-after-handling')
 
+    def test_deferred_claude_lane_cannot_start_a_current_native_client(self):
+        import native_runtime
+        self.assertIsNone(entry.capabilities('claude')['current_source_lane'])
+        with patch.object(native_runtime.importlib,'import_module') as load:
+            with self.assertRaisesRegex(ValueError,'awaits qualification'):
+                native_runtime.backend({'runtime':'claude'})
+        load.assert_not_called()
+
     def test_muse_worker_routes_to_custody_launcher_and_preserves_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / 'launch.json'
@@ -69,6 +77,18 @@ class RuntimeEntryTests(unittest.TestCase):
             capability = entry.capabilities('muse')
             self.assertEqual(capability['managed_worker']['admission'], 'source-test-handoff-only')
             self.assertFalse(capability['native_qualified'])
+
+    def test_current_codex_source_lane_is_explicit_and_preserves_legacy_route(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'source.json'
+            for mode, launcher in (('native-cli-source', 'native_source_worker.py'), ('legacy', 'codex_worker_launcher.py')):
+                config.write_text(json.dumps({'execution_mode': mode, 'runtime': 'codex'}))
+                argv = ['runtime_entry.py', '--runtime', 'codex', 'worker', '--assignment', '/assignment.json',
+                        '--config', str(config), '--check']
+                with patch.object(sys, 'argv', argv), patch.object(entry.subprocess, 'run') as run:
+                    run.return_value.returncode = 17
+                    self.assertEqual(entry.main(), 17)
+                    self.assertEqual(Path(run.call_args.args[0][1]).name, launcher)
 
     def test_handled_receipt_cannot_ack_other_native_or_delivery_or_duplicate(self):
         receipt = {'schema_version': 'squad.handled-events.v1', 'runtime': 'codex',

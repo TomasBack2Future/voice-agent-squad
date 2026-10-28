@@ -99,6 +99,33 @@ class HookAdapterTests(unittest.TestCase):
             with self.subTest(error=error):
                 self.assertEqual(hook.classify_error(error), want)
 
+    def test_subscription_limits_are_not_transient_provider_failures(self):
+        for error in (
+                'Weekly usage limit reached. Try again after reset.',
+                'Your subscription limit has been reached',
+                'Subscription usage exhausted after 10 provider attempts',
+                'You have reached your usage limit',
+                'API error 402: insufficient credits',
+                'API error: 402 Payment Required; retry after reset',
+                'HTTP: 402; retry after reset',
+                'HTTP/1.1 402; retry after reset',
+                'status_code=402; retry after reset',
+                '{"status_code":402,"message":"retry after reset"}'):
+            with self.subTest(error=error):
+                observation = hook.observe(payload(error=error), self.cfg)
+                self.assertEqual(observation['error_class'], 'quota')
+                self.assertEqual(handling.decide(dict(observation, kind='runtime-failure'),
+                                                terminal=True)[0], 'stop')
+
+    def test_model_stream_disconnect_is_connection_but_tool_errors_are_unknown(self):
+        self.assertEqual(hook.classify_error('stream disconnected before completion'), 'connection')
+        self.assertEqual(hook.classify_error('transport failed: stream disconnected before completion'),
+                         'connection')
+        for error in ('tool output disconnected', 'failed to parse tool output',
+                      'tool execution failed before completion'):
+            with self.subTest(error=error):
+                self.assertEqual(hook.classify_error(error), 'unknown')
+
     def test_dedupe_by_generation_native_turn_and_episode(self):
         # D84-4: the open marker is written only after confirmed publication.
         # duplicate() is a read; publish() confirms then marks.
@@ -305,6 +332,14 @@ class HandlingTests(unittest.TestCase):
         self.assertEqual(action, 'stop')
         action, _ = handling.decide(self.event(), terminal=True, seen=set(), completed=True)
         self.assertEqual(action, 'stop')
+
+    def test_unknown_failure_requires_diagnosis_before_continuation(self):
+        for event in (self.event(error_class='unknown'), self.event(error_class='future-class'),
+                      self.event(error_class=None, body='')):
+            with self.subTest(event=event):
+                action, reason = handling.decide(event, terminal=True, seen=set())
+                self.assertEqual(action, 'stop')
+                self.assertIn('unknown', reason)
 
     def test_episode_key_stable_per_outage(self):
         first = handling.episode_key(self.event())

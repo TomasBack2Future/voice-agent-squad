@@ -13,7 +13,7 @@ import (
 
 func newWorkerExecutionCmd() *cobra.Command {
 	root := &cobra.Command{Use: "worker-execution", Short: "Pin and check one source Worker's complete custody tuple"}
-	for _, action := range []string{"acquire", "check", "check-read", "check-write", "suspend", "outcome", "close"} {
+	for _, action := range []string{"acquire", "inspect", "check", "check-read", "check-write", "suspend", "outcome", "close"} {
 		var path, evidence, report string
 		c := &cobra.Command{Use: action, Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 			info, err := os.Lstat(path)
@@ -41,6 +41,12 @@ func newWorkerExecutionCmd() *cobra.Command {
 			defer bc.Close()
 			s := dispatch.New(bc.db, bc.repoID, nil)
 			switch action {
+			case "inspect":
+				result, err := s.InspectWorkerExecution(c.Context(), bc.agentID, b)
+				if err != nil {
+					return err
+				}
+				return json.NewEncoder(c.OutOrStdout()).Encode(result)
 			case "acquire":
 				err = s.AcquireWorkerExecution(c.Context(), bc.agentID, b)
 			case "check":

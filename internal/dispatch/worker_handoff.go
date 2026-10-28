@@ -27,23 +27,24 @@ type HandoffClaim struct {
 // to revoke a live native, bypass execution pins, or recover protected ENV.
 // For a terminal reservation, Claim may name a same-owner claimed continuation.
 type WorkerHandoffRequest struct {
-	RequestID            string            `json:"request_id"`
-	Controller           ControllerBinding `json:"controller"`
-	Expected             Reservation       `json:"expected"`
-	Claim                HandoffClaim      `json:"claim"`
-	ExecutionID          string            `json:"execution_id"`
-	NewActor             string            `json:"new_actor"`
-	NewNative            string            `json:"new_native"`
-	DecisionRevision     int64             `json:"decision_revision"`
-	ConsentOutcomeID     int64             `json:"consent_outcome_id"`
-	CustodyEvidence      string            `json:"custody_evidence"`
-	LegacyStopID         string            `json:"legacy_stop_id,omitempty"`
-	LegacyStopSHA256     string            `json:"legacy_stop_sha256,omitempty"`
-	HumanAuthoritySHA256 string            `json:"human_authority_sha256,omitempty"`
-	LegacyExpiresAt      int64             `json:"legacy_expires_at,omitempty"`
-	LegacyAttestationID  int64             `json:"legacy_attestation_id,omitempty"`
-	LegacyRecoveryID     string            `json:"legacy_recovery_id,omitempty"`
-	RetainedPhase        string            `json:"retained_phase,omitempty"`
+	RequestID            string                `json:"request_id"`
+	Controller           ControllerBinding     `json:"controller"`
+	Expected             Reservation           `json:"expected"`
+	Claim                HandoffClaim          `json:"claim"`
+	ExecutionID          string                `json:"execution_id"`
+	NewActor             string                `json:"new_actor"`
+	NewNative            string                `json:"new_native"`
+	DecisionRevision     int64                 `json:"decision_revision"`
+	ConsentOutcomeID     int64                 `json:"consent_outcome_id"`
+	CustodyEvidence      string                `json:"custody_evidence"`
+	LegacyStopID         string                `json:"legacy_stop_id,omitempty"`
+	LegacyStopSHA256     string                `json:"legacy_stop_sha256,omitempty"`
+	HumanAuthoritySHA256 string                `json:"human_authority_sha256,omitempty"`
+	LegacyExpiresAt      int64                 `json:"legacy_expires_at,omitempty"`
+	LegacyAttestationID  int64                 `json:"legacy_attestation_id,omitempty"`
+	LegacyRecoveryID     string                `json:"legacy_recovery_id,omitempty"`
+	RetainedPhase        string                `json:"retained_phase,omitempty"`
+	SourceRecovery       *SourceWorkerRecovery `json:"source_recovery,omitempty"`
 }
 
 type WorkerHandoffReceipt struct {
@@ -94,6 +95,11 @@ func WorkerHandoffDigest(q WorkerHandoffRequest) (string, error) {
 	q.ConsentOutcomeID = 0
 	q.LegacyStopSHA256 = ""
 	q.LegacyAttestationID = 0
+	if q.SourceRecovery != nil {
+		copy := *q.SourceRecovery
+		copy.AttestationOutcomeID = 0
+		q.SourceRecovery = &copy
+	}
 	return handoffJSONHash(q)
 }
 
@@ -135,7 +141,10 @@ func (s *Store) WorkerHandoff(ctx context.Context, actor string, q WorkerHandoff
 	if q.LegacyStopID != "" && (q.ExecutionID != "" || !validLegacyHash(q.LegacyStopSHA256) || !validLegacyHash(q.HumanAuthoritySHA256) || q.LegacyAttestationID < 1) {
 		return out, errors.New("legacy handoff requires an actual observed stop and current controller attestation")
 	}
-	if actor != q.Controller.Actor || q.Controller.Epoch < 1 || q.Expected.RepoID != s.repoID || q.Expected.ReservedBy != actor || q.Expected.Generation < 1 || q.Claim.Generation < 1 || q.DecisionRevision < 1 || q.ConsentOutcomeID < 1 || q.NewActor == q.Claim.Actor || q.NewActor == actor || q.NewNative == q.Expected.WorkerThreadID || q.NewNative == q.Controller.Native || strings.TrimSpace(q.CustodyEvidence) == "" || len(q.CustodyEvidence) > 8192 {
+	if q.SourceRecovery != nil && (q.LegacyStopID != "" || q.ConsentOutcomeID != 0) {
+		return out, errors.New("source recovery requires its own current-controller attestation, without legacy or original consent")
+	}
+	if actor != q.Controller.Actor || q.Controller.Epoch < 1 || q.Expected.RepoID != s.repoID || q.Expected.ReservedBy != actor || q.Expected.Generation < 1 || q.Claim.Generation < 1 || q.DecisionRevision < 1 || (q.SourceRecovery == nil && q.ConsentOutcomeID < 1) || q.NewActor == q.Claim.Actor || q.NewActor == actor || q.NewNative == q.Expected.WorkerThreadID || q.NewNative == q.Controller.Native || strings.TrimSpace(q.CustodyEvidence) == "" || len(q.CustodyEvidence) > 8192 {
 		return out, errors.New("distinct Worker, current controller, exact custody and original consent required")
 	}
 	hash, err := handoffJSONHash(q)
@@ -229,21 +238,27 @@ func (s *Store) WorkerHandoff(ctx context.Context, actor string, q WorkerHandoff
 		var revision, outcome int64
 		var action, condition, worker string
 		if err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, r.ItemID, r.Generation, r.CanonicalItemID).Scan(&revision, &outcome, &action, &condition, &worker); err != nil || revision != q.DecisionRevision || action != "hold" || worker != claim.Actor {
-			return errors.New("exact original handled hold decision required")
+			return errors.New("exact original hold decision required")
 		}
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND processed_at=0`, s.repoID, r.ItemID, r.Generation).Scan(&count); err != nil || count != 0 {
-			return errors.New("original pending events require owner reconciliation before handoff")
-		}
-		var body string
-		if err = tx.QueryRowContext(ctx, `SELECT body FROM messages WHERE repo_id=? AND id=? AND agent_id=? AND thread=? AND ts>=?`, s.repoID, q.ConsentOutcomeID, claim.Actor, r.CanonicalItemID, r.ReservedAt).Scan(&body); err != nil {
-			return errors.New("original owner canonical consent unavailable")
-		}
-		var consent struct {
-			Schema string `json:"schema_version"`
-			Hash   string `json:"request_sha256"`
-		}
-		if len(body) > workerHandoffConsentLimit || json.Unmarshal([]byte(body), &consent) != nil || consent.Schema != "squad.worker-handoff-consent.v1" || consent.Hash != originalConsentHash {
-			return errors.New("original owner did not authorize this exact Worker handoff")
+		if q.SourceRecovery != nil {
+			if err = s.validateSourceWorkerRecovery(ctx, tx, q, consentHash); err != nil {
+				return err
+			}
+		} else {
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND processed_at=0`, s.repoID, r.ItemID, r.Generation).Scan(&count); err != nil || count != 0 {
+				return errors.New("original pending events require owner reconciliation before handoff")
+			}
+			var body string
+			if err = tx.QueryRowContext(ctx, `SELECT body FROM messages WHERE repo_id=? AND id=? AND agent_id=? AND thread=? AND ts>=?`, s.repoID, q.ConsentOutcomeID, claim.Actor, r.CanonicalItemID, r.ReservedAt).Scan(&body); err != nil {
+				return errors.New("original owner canonical consent unavailable")
+			}
+			var consent struct {
+				Schema string `json:"schema_version"`
+				Hash   string `json:"request_sha256"`
+			}
+			if len(body) > workerHandoffConsentLimit || json.Unmarshal([]byte(body), &consent) != nil || consent.Schema != "squad.worker-handoff-consent.v1" || consent.Hash != originalConsentHash {
+				return errors.New("original owner did not authorize this exact Worker handoff")
+			}
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM agents WHERE repo_id=? AND id=?`, s.repoID, q.NewActor).Scan(&count); err != nil || count != 1 {
 			return errors.New("replacement actor must register legitimately before handoff")

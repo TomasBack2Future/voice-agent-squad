@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT=Path(__file__).parents[1]
 sys.path.insert(0,str(ROOT))
 import muse_worker_tools as tools
+import muse_worker_container as container
 
 
 class MuseToolsTests(unittest.TestCase):
@@ -39,6 +40,15 @@ class MuseToolsTests(unittest.TestCase):
                 self.bridge.write({'path':'marker','content':'BAD','expected_sha256':'absent'})
         self.assertFalse((self.work/'marker').exists())
         self.assertFalse(self.bridge.journal)
+
+    def test_definite_container_create_refusal_does_not_retain_a_phantom_writer(self):
+        refusal = getattr(container, 'CreateRefused', ValueError)('engine rejected create before allocating a container')
+        with patch('muse_worker_tools.coordination'), patch.object(self.bridge.runtime, 'create', side_effect=refusal):
+            with self.assertRaises(ValueError):
+                self.bridge.shell({'command': 'true'})
+        self.assertEqual(self.bridge.journal[-1]['state'], 'joined')
+        self.assertNotIn('container', self.bridge.journal[-1])
+        self.assertTrue((self.root / 'closed').exists())
 
     def test_write_cas_and_durable_operation(self):
         with patch('muse_worker_tools.coordination') as check:

@@ -39,10 +39,10 @@ func workerHandoffCommands() []*cobra.Command {
 	for _, digestOnly := range []bool{false, true} {
 		var path string
 		name := "worker-handoff"
-		description := "Current-controller CAS of a joined, consenting source Worker; preserves hold, excludes ENV"
+		description := "Current-controller CAS of a joined source Worker with exact owner consent or human-authorized recovery; preserves hold, excludes ENV"
 		if digestOnly {
 			name = "worker-handoff-digest"
-			description = "Hash the exact request for original-owner canonical consent; no mutation"
+			description = "Hash exact Worker consent or source recovery attestation inputs; no mutation"
 		}
 		cmd := &cobra.Command{Use: name, Short: description, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			file, err := os.Open(path)
@@ -79,7 +79,7 @@ func workerHandoffCommands() []*cobra.Command {
 			}
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(receipt)
 		}}
-		cmd.Flags().StringVar(&path, "request", "", "exact JSON Worker custody and original-owner consent request")
+		cmd.Flags().StringVar(&path, "request", "", "exact JSON Worker custody and consent or source recovery request")
 		_ = cmd.MarkFlagRequired("request")
 		commands = append(commands, cmd)
 	}

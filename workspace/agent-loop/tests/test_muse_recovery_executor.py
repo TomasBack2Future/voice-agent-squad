@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import muse_recovery_executor as executor
@@ -55,8 +57,14 @@ class RecoveryFixture(unittest.TestCase):
     def client(self):
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)',
                                   str(self.client_marker), '--workspace', str(self.workspace)])
-        self.addCleanup(lambda: child.poll() is None and child.kill())
+        self.addCleanup(self.stop_client, child)
         return child
+
+    @staticmethod
+    def stop_client(child):
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
 
 
 class RecoveryAdmissionTests(RecoveryFixture):
@@ -104,6 +112,62 @@ class RecoveryAdmissionTests(RecoveryFixture):
                      body=self.event['body'].replace('ep-1', 'ep-2'))
         self.assertEqual(executor.admit(later, self.cfg)['action'], 'continue')
 
+    def test_invalid_attempt_state_never_restores_a_consumed_budget(self):
+        self.failed_log()
+        executor.spend_attempt(self.event, self.cfg)
+        state = Path(self.cfg['state_directory']) / 'recovery-attempts.json'
+        for content in ('{truncated', 'null', '[]'):
+            with self.subTest(content=content):
+                state.write_text(content)
+                with self.assertRaisesRegex(executor.NotAdmitted, 'attempt state'):
+                    executor.admit(self.event, self.cfg)
+                with self.assertRaisesRegex(executor.NotAdmitted, 'attempt state'):
+                    executor.spend_attempt(self.event, self.cfg)
+                self.assertEqual(state.read_text(), content)
+
+    def test_competing_processes_and_restart_share_one_attempt_budget(self):
+        payload = json.dumps({'event': self.event, 'config': self.cfg})
+        program = ('import json,sys; import muse_recovery_executor as recovery\n'
+                   'data=json.loads(sys.stdin.read())\n'
+                   'try: recovery.spend_attempt(data["event"],data["config"])\n'
+                   'except recovery.NotAdmitted: sys.exit(2)\n')
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1',
+                   PYTHONPATH=str(Path(executor.__file__).parent))
+        children = []
+        for _ in range(2):
+            child = subprocess.Popen([sys.executable, '-c', program], env=env,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+            self.addCleanup(self.stop_client, child)
+            child.stdin.write(payload); child.stdin.close(); child.stdin = None
+            children.append(child)
+        for child in children:
+            child.communicate(timeout=5)
+        self.assertEqual(sorted(child.returncode for child in children), [0, 2])
+        restarted = subprocess.run([sys.executable, '-c', program], env=env, input=payload,
+                                   capture_output=True, text=True, timeout=5)
+        self.assertEqual(restarted.returncode, 2, restarted.stderr)
+
+    def test_attempt_is_synced_before_publication_and_before_return(self):
+        operations = []
+        sync, replace = os.fsync, Path.replace
+        def synced(fd):
+            operations.append('directory-sync' if stat.S_ISDIR(os.fstat(fd).st_mode) else 'file-sync')
+            return sync(fd)
+        def published(source, target):
+            operations.append('publish')
+            return replace(source, target)
+        with mock.patch.object(executor.os, 'fsync', side_effect=synced), \
+                mock.patch.object(Path, 'replace', published):
+            executor.spend_attempt(self.event, self.cfg)
+        self.assertEqual(operations, ['file-sync', 'publish', 'directory-sync'])
+
+    def test_attempt_flush_failure_does_not_admit_continuation(self):
+        with mock.patch.object(executor.os, 'fsync', side_effect=OSError('fixture storage failure')):
+            with self.assertRaisesRegex(executor.NotAdmitted, 'attempt state'):
+                executor.spend_attempt(self.event, self.cfg)
+        self.assertFalse((Path(self.cfg['state_directory']) / 'recovery-attempts.json').exists())
+
     def test_terminates_only_the_recorded_failed_client(self):
         child = self.client()
         bystander = self.client()
@@ -115,7 +179,7 @@ class RecoveryAdmissionTests(RecoveryFixture):
 
     def test_refuses_pid_that_is_not_this_sessions_client(self):
         other = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
-        self.addCleanup(lambda: other.poll() is None and other.kill())
+        self.addCleanup(self.stop_client, other)
         self.failed_log(pid=other.pid)
         with self.assertRaisesRegex(executor.NotAdmitted, 'not the failed client'):
             executor.terminate_failed_client(self.cfg, client_marker=str(self.client_marker))
