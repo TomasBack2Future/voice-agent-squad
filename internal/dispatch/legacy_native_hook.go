@@ -236,12 +236,19 @@ func (s *Store) CheckWorkerNativeHook(ctx context.Context, actor, native, config
 	if err != nil {
 		return err
 	}
+	var cfg struct {
+		Squad string `json:"squad_executable"`
+	}
+	raw, err := readLegacyFile(config, 65536)
+	if err != nil || json.Unmarshal(raw, &cfg) != nil {
+		return errors.New("native hook configuration unavailable")
+	}
 	return store.WithTxRetry(ctx, s.db, func(tx *sql.Tx) error {
-		return s.recordNativeHookEligibility(ctx, tx, actor, native, tool, observation)
+		return s.recordNativeHookEligibility(ctx, tx, actor, native, tool, cfg.Squad, observation)
 	})
 }
 
-func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, actor, native string, tool NativeHookTool, observation nativeHookObservation) error {
+func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, actor, native string, tool NativeHookTool, squadExecutable string, observation nativeHookObservation) error {
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM worker_native_fences WHERE repo_id=? AND native_session=?`, s.repoID, native).Scan(&count); err != nil || count != 0 {
 		return errors.New("original native is fenced; tool execution blocked")
@@ -269,10 +276,11 @@ func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, act
 		// the first thing it must do and a decision needs a claimant. Admit only
 		// that exact bound, unfenced, unclaimed state, and only for the tools
 		// needed to read its assignment and claim.
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_reservations r WHERE r.repo_id=? AND r.worker_thread_id=? AND r.state='dispatched' AND r.canonical_item_id<>'' AND r.reserved_by<>? AND NOT EXISTS(SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation) AND NOT EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.state='held')`, s.repoID, native, actor).Scan(&count); err != nil {
+		var item string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(max(r.canonical_item_id),''),count(*) FROM dispatch_reservations r WHERE r.repo_id=? AND r.worker_thread_id=? AND r.state='dispatched' AND r.canonical_item_id<>'' AND r.reserved_by<>? AND NOT EXISTS(SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation) AND NOT EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.state='held')`, s.repoID, native, actor).Scan(&item, &count); err != nil {
 			return err
 		}
-		if count != 1 || !bootstrapToolAllowed(tool) {
+		if count != 1 || !bootstrapToolAllowed(tool, squadExecutable, item) {
 			return errors.New("native hook current original Worker binding unavailable")
 		}
 		observation.Bootstrap = true
@@ -294,23 +302,39 @@ func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, act
 
 var bootstrapReadTools = map[string]bool{"Read": true, "Glob": true, "Grep": true, "Skill": true, "ToolSearch": true}
 
-// The installed binary and its local coordination wrappers.
-var bootstrapSquadExecutables = map[string]bool{"squad": true, "squad-coordination": true, "squad-codex": true}
+var bootstrapBareExecutables = map[string]bool{"squad": true, "squad-coordination": true}
 
-var bootstrapSquadCommands = map[string]bool{"claim": true, "go": true, "register": true, "claim-inspect": true}
-
-// bootstrapToolAllowed admits read-only inspection tools, the Squad claim MCP
-// tools and one plain `squad claim|go|register ...` command. Any shell syntax
-// that could chain another command is refused.
-func bootstrapToolAllowed(tool NativeHookTool) bool {
-	if bootstrapReadTools[tool.Name] || strings.HasPrefix(tool.Name, "mcp__squad__squad_") && bootstrapSquadCommands[strings.TrimPrefix(tool.Name, "mcp__squad__squad_")] {
+// bootstrapToolAllowed admits read-only inspection tools and exactly one plain
+// `squad claim <canonical item> [--intent words...]` command. The executable
+// is the bare installed name or the configured absolute path; any shell syntax,
+// assignment prefix, other item, or other flag is refused.
+func bootstrapToolAllowed(tool NativeHookTool, squadExecutable, item string) bool {
+	if bootstrapReadTools[tool.Name] {
 		return true
 	}
-	if tool.Name != "Bash" || len(tool.Command) > 4096 || strings.ContainsAny(tool.Command, ";&|<>$`()\n\r\\\"'*?{}!#~") {
+	if tool.Name != "Bash" || len(tool.Command) > 4096 || strings.ContainsAny(tool.Command, ";&|<>$`()\n\r\t\\\"'*?{}!#~=") {
 		return false
 	}
 	words := strings.Fields(tool.Command)
-	return len(words) >= 2 && bootstrapSquadExecutables[filepath.Base(words[0])] && bootstrapSquadCommands[words[1]]
+	if len(words) < 3 || words[1] != "claim" || words[2] != item || item == "" {
+		return false
+	}
+	if words[0] != squadExecutable && !bootstrapBareExecutables[words[0]] {
+		return false
+	}
+	rest := words[3:]
+	if len(rest) == 0 {
+		return true
+	}
+	if rest[0] != "--intent" || len(rest) == 1 {
+		return false
+	}
+	for _, word := range rest[1:] {
+		if strings.HasPrefix(word, "-") {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) legacyNativeAdmission(ctx context.Context, q WorkerHandoffRequest, digest string, processes []LegacyProcess) (LegacyNativeAdmission, error) {
@@ -402,7 +426,7 @@ func (s *Store) checkLegacyNativeHook(ctx context.Context, tx *sql.Tx, q WorkerH
 		return errors.New("actual blocking native hook execution has not been observed")
 	}
 	var value nativeHookObservation
-	if json.Unmarshal([]byte(raw), &value) != nil || value.Client != admission.Client || value.Hook != admission.Hook || observed < decisionAt || value.DecisionRevision != q.DecisionRevision || value.DecisionOutcomeID != outcomeID || value.RequestSHA256 != admission.RequestSHA256 {
+	if json.Unmarshal([]byte(raw), &value) != nil || value.Client != admission.Client || value.Hook != admission.Hook || observed < decisionAt || value.Bootstrap || value.DecisionRevision != q.DecisionRevision || value.DecisionOutcomeID != outcomeID || value.RequestSHA256 != admission.RequestSHA256 {
 		return errors.New("blocking native hook observation differs from current admission or original process start")
 	}
 	return nil

@@ -21,7 +21,7 @@ func record(s *Store, actor, native string, tool NativeHookTool) error {
 	if err != nil {
 		return err
 	}
-	if err := s.recordNativeHookEligibility(context.Background(), tx, actor, native, tool, nativeHookObservation{}); err != nil {
+	if err := s.recordNativeHookEligibility(context.Background(), tx, actor, native, tool, "/opt/squad", nativeHookObservation{}); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -41,8 +41,15 @@ func TestFreshBoundNativeMayOnlyReadAndClaimBeforeFirstClaim(t *testing.T) {
 		{"first claim", "", "worker", "new-native", claim, true},
 		{"read assignment", "", "worker", "new-native", NativeHookTool{Name: "Read"}, true},
 		{"skill", "", "worker", "new-native", NativeHookTool{Name: "Skill"}, true},
-		{"claim mcp", "", "worker", "new-native", NativeHookTool{Name: "mcp__squad__squad_claim"}, true},
-		{"installed absolute path", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "/Users/x/.local/bin/squad claim T --intent work"}, true},
+		{"mcp claim unbound to item", "", "worker", "new-native", NativeHookTool{Name: "mcp__squad__squad_claim"}, false},
+		{"assignment prefix runs go", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "A=/x/squad go run ./evil.go"}, false},
+		{"planted relative binary", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "./squad claim T"}, false},
+		{"other item", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "squad claim ENV-1"}, false},
+		{"go autoclaim", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "squad go"}, false},
+		{"register force", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "squad register --as other --force"}, false},
+		{"extra flag", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "squad claim T --force"}, false},
+		{"configured absolute path", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "/opt/squad claim T --intent do work"}, true},
+		{"unconfigured absolute path", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "/tmp/squad claim T"}, false},
 		{"coordination wrapper", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "squad-coordination claim T"}, true},
 		{"other binary named claim", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "curl claim T"}, false},
 		{"arbitrary bash", "", "worker", "new-native", NativeHookTool{Name: "Bash", Command: "rm -rf x"}, false},
