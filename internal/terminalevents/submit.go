@@ -112,6 +112,9 @@ func (s Store) Submit(ctx context.Context, actor string, q SubmitRequest) (Submi
 		out, e = s.submitTx(ctx, tx, actor, q)
 		return e
 	})
+	if err == nil {
+		s.wakeReceivers(ctx)
+	}
 	return out, err
 }
 

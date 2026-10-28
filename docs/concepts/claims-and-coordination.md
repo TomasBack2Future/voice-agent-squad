@@ -216,6 +216,15 @@ is fabricated. App clients without a qualified native-stop executor remain
 unsupported. Protected ENV, other retained claims, active pins, ambiguous custody,
 unhandled original events and changed ownership fences reject the transition.
 
+A joined source client that cannot produce its final consent can instead use
+an exact current-controller recovery attestation bound to explicit human
+authority, a bounded expiry and the full handoff digest. The source pin and
+custody fences remain required. The recovery request snapshots original-native
+pending decision receipts; it preserves them as undelivered historical facts
+and publishes a new replacement HOLD. It cannot carry unhandled Worker results
+or claim that the failed native handled a decision. The immutable request and
+controller attestation retain the recovery authority and evidence.
+
 The transaction preserves the effective hold, increments claim and reservation
 generations, records an immutable receipt and publishes a real replacement
 decision event. It never grants `proceed` or invents business completion.

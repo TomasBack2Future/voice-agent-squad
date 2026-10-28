@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import terminal_receiver as receiver
@@ -129,5 +130,40 @@ print(json.dumps({"type":"worker-terminal-delivery-v1","events":[{"event_id":"te
         p = self.start(); out, err = p.communicate(timeout=5)
         self.assertFalse((self.root / 'calls').exists())
         self.assertEqual(p.returncode, 2)
+
+    def test_admission_wait_skips_unrelated_tools_and_worker_sessions(self):
+        event = {'session_id': 'session-one', 'tool_name': 'Bash',
+                 'tool_input': {'command': 'squad dispatch bind D-1'}}
+        with mock.patch.object(receiver.subprocess, 'run') as run:
+            self.assertEqual(receiver.wait_ready(self.config, event), 0)
+            self.data.update(role='dispatcher', controller_epoch=2)
+            self.config.write_text(json.dumps(self.data))
+            self.assertEqual(receiver.wait_ready(self.config, dict(event, session_id='foreign')), 0)
+            self.assertEqual(receiver.wait_ready(self.config, dict(event, tool_name='Read')), 0)
+            run.assert_not_called()
+
+    def test_admission_wait_requires_exact_live_receiver(self):
+        self.data.update(role='dispatcher', controller_epoch=2)
+        self.config.write_text(json.dumps(self.data))
+        event = {'session_id': 'session-one', 'tool_name': 'mcp__squad__squad_dispatch_bind',
+                 'tool_input': {}}
+        ready = dict(unattended_ready=True, route='receiver', native_session='session-one',
+                     actor='dispatcher', epoch=2, incarnation='launch-one', owner_pid=os.getpid())
+        for change in ({}, {'native_session': 'other'}, {'epoch': 1},
+                       {'incarnation': 'old'}, {'owner_pid': 1}, {'actor': 'foreign'},
+                       {'unattended_ready': False}, {'route': 'reconciliation-fallback'}):
+            with self.subTest(change=change), mock.patch.object(receiver.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], 0, json.dumps(dict(ready, **change)), '')) as run:
+                result = receiver.wait_ready(self.config, event, timeout=.01)
+                self.assertEqual(result, 2 if change else 0)
+                self.assertEqual(run.call_args.kwargs['env']['SQUAD_NATIVE_SESSION_ID'], 'session-one')
+
+    def test_dispatcher_rearm_preserves_existing_native_fence(self):
+        self.data.update(role='dispatcher', legacy_native_fence=True)
+        self.config.write_text(json.dumps(self.data))
+        hooks = receiver.settings(self.config)['hooks']['PreToolUse']
+        self.assertTrue(hooks[0]['hooks'][0]['asyncRewake'])
+        self.assertIn('--wait-ready', hooks[0]['hooks'][1]['args'])
+        self.assertIn('claude_native_fence.py', hooks[1]['hooks'][0]['command'])
 
 if __name__ == '__main__': unittest.main()

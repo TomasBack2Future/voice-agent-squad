@@ -111,6 +111,8 @@ class SubmitOutcomeDecisionTests(unittest.TestCase):
         self.assertIn('stale-decision', str(ctx.exception))
 
     def test_legacy_unadopted_succeeds_without_decision(self):
+        decision = launcher.read_decision(self.c, self.launcher_env(), self.pin)
+        self.assertIsNone(decision)
         submitted = launcher.submit_outcome(self.c, self.launcher_env(), self.pin, 'handoff-complete', self.body)
         self.assertTrue(submitted['message_id'] and submitted['event_id'])
 

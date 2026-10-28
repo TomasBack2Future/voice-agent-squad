@@ -7,24 +7,77 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
+import time
 
 
 def settings(config_path: Path) -> dict:
-    if json.loads(config_path.read_text()).get('runtime', 'claude') != 'claude':
+    config = json.loads(config_path.read_text())
+    if config.get('runtime', 'claude') != 'claude':
         raise ValueError('Claude only: Codex requires its structured queue adapter')
     entry = {'type': 'command', 'command': sys.executable,
              'args': [str(Path(__file__).resolve()), '--config', str(config_path.resolve())],
              'asyncRewake': True, 'timeout': 86400}
     result = {'hooks': {event: [{'hooks': [entry]}]
                        for event in ('SessionStart', 'PostToolUse', 'Stop')}}
-    if json.loads(config_path.read_text()).get('legacy_native_fence'):
+    if config.get('role', 'dispatcher') == 'dispatcher':
+        wait = dict(entry, args=[*entry['args'], '--wait-ready'], timeout=8)
+        wait.pop('asyncRewake')
+        result['hooks']['PreToolUse'] = [{'matcher': '*', 'hooks': [entry, wait]}]
+    if config.get('legacy_native_fence'):
         command = shlex.join([sys.executable, str(Path(__file__).with_name('claude_native_fence.py').resolve()),
                               '--config', str(config_path.resolve())])
-        result['hooks']['PreToolUse'] = [{'matcher': '*', 'hooks': [{'type': 'command', 'command': command, 'timeout': 15}]}]
+        result['hooks'].setdefault('PreToolUse', []).append(
+            {'matcher': '*', 'hooks': [{'type': 'command', 'command': command, 'timeout': 15}]})
     return result
+
+
+def receiver_environment(config):
+    env = dict(os.environ)
+    for name in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDE_SESSION_ID', 'MUSE_SESSION_ID',
+                 'SQUAD_NATIVE_SESSION_ID', 'SQUAD_SESSION_ID', 'SQUAD_AGENT'):
+        env.pop(name, None)
+    env.update(SQUAD_AGENT=config['agent_id'], SQUAD_NATIVE_SESSION_ID=config['native_session_id'],
+               SQUAD_SESSION_ID='claude:' + config['native_session_id'],
+               SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1', SQUAD_NO_HYGIENE='1',
+               PYTHONDONTWRITEBYTECODE='1')
+    return env
+
+
+def wait_ready(config_path, event, timeout=5):
+    config = json.loads(config_path.read_text())
+    if (event.get('session_id') != config['native_session_id']
+            or config.get('role', 'dispatcher') != 'dispatcher'):
+        return 0
+    tool = event.get('tool_name', '')
+    command = event.get('tool_input', {}).get('command', '')
+    if not (re.search(r'squad_dispatch_(?:bind|launch)$', tool)
+            or tool == 'Bash' and re.search(r'\bdispatch\s+(?:bind|launch)\b', command)):
+        return 0
+    env = receiver_environment(config)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = json.loads(config_path.read_text())
+        if current != config:
+            raise ValueError('receiver configuration changed during admission')
+        result = subprocess.run([config['squad_executable'], 'dispatch', 'receiver-preflight',
+                                 '--actor', config['agent_id']], cwd=config['ledger_directory'],
+                                env=env, capture_output=True, text=True, timeout=1)
+        if result.returncode == 0:
+            ready = json.loads(result.stdout)
+            if (ready.get('unattended_ready') is True and ready.get('route') == 'receiver'
+                    and ready.get('native_session') == config['native_session_id']
+                    and ready.get('actor') == config['agent_id']
+                    and ready.get('epoch') == config.get('controller_epoch', ready.get('epoch'))
+                    and ready.get('incarnation') == config['incarnation']
+                    and ready.get('owner_pid') == config['owner_pid']):
+                return 0
+        time.sleep(.05)
+    print('Squad receiver did not re-arm before dispatch; no Worker admitted. Inspect the receiver.', file=sys.stderr)
+    return 2
 
 
 @contextmanager
@@ -93,12 +146,7 @@ def run(config_path: Path, event: dict) -> int:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        env = dict(os.environ)
-        for name in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDE_SESSION_ID', 'MUSE_SESSION_ID', 'SQUAD_NATIVE_SESSION_ID', 'SQUAD_SESSION_ID', 'SQUAD_AGENT'):
-            env.pop(name, None)
-        env.update(SQUAD_AGENT=config['agent_id'], SQUAD_NATIVE_SESSION_ID=config['native_session_id'],
-                   SQUAD_SESSION_ID='claude:' + config['native_session_id'],
-                   SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1', SQUAD_NO_HYGIENE='1')
+        env = receiver_environment(config)
         max_seconds = config.get('max_seconds', 82800)
         if not 1 <= max_seconds <= 82800:
             raise ValueError('invalid receiver lifetime')
@@ -162,12 +210,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--write-settings', type=Path)
+    parser.add_argument('--wait-ready', action='store_true')
     args = parser.parse_args()
     if args.write_settings:
         args.write_settings.write_text(json.dumps(settings(args.config), indent=2) + '\n')
         return 0
     try:
-        return run(args.config, json.load(sys.stdin))
+        event = json.load(sys.stdin)
+        return wait_ready(args.config, event) if args.wait_ready else run(args.config, event)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         print('Squad receiver configuration/delivery failed; no event acknowledged. Inspect its local configuration.', file=sys.stderr)
         return 2

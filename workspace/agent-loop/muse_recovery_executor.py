@@ -114,13 +114,23 @@ def _locked_attempts(config, update=None):
         try:
             try:
                 attempts = json.loads(path.read_text())
-            except (OSError, ValueError):
+            except FileNotFoundError:
                 attempts = {}
+            except (OSError, ValueError) as error:
+                raise NotAdmitted('recovery attempt state is unreadable; preserve it for reconciliation') from error
+            if not isinstance(attempts, dict):
+                raise NotAdmitted('recovery attempt state must be a mapping; preserve it for reconciliation')
             if update is not None:
                 update(attempts)
-                temp = path.with_suffix('.tmp')
-                temp.write_text(json.dumps(attempts, sort_keys=True))
-                temp.replace(path)
+                try:
+                    msp.atomic(path, attempts)
+                    directory = os.open(path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                except OSError as error:
+                    raise NotAdmitted('recovery attempt state could not be persisted; no continuation admitted') from error
             return attempts
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)

@@ -43,7 +43,10 @@ def capabilities(runtime):
                             idle_wake={'claude': 'native-hooks-requires-adoption',
                                        'codex': 'qualified-cli-only',
                                        'muse': 'bounded-worker-receiver-requires-adoption'}[runtime]),
-                review='bounded-native-cli; separate from Worker custody')
+                review='bounded-native-cli; separate from Worker custody',
+                current_source_lane={'selector': 'execution_mode=native-cli-source', 'launcher': 'native_source_worker.py',
+                    'surface': 'original-native-cli', 'scope': 'source-test-handoff-only',
+                    'qualification': 'explicit-real-native-run-required'} if runtime in ('codex', 'muse') else None)
 
 
 def handled_events(receipt, delivery, runtime, native, agent):
@@ -91,6 +94,13 @@ def main():
     worker.add_argument('--assignment', type=Path, required=True)
     worker.add_argument('--config', type=Path, required=True)
     worker.add_argument('--check', action='store_true')
+    worker.add_argument('--prepare', action='store_true')
+    worker.add_argument('--resume', action='store_true')
+    dispatcher = commands.add_parser('dispatcher')
+    dispatcher.add_argument('--config', type=Path, required=True)
+    dispatcher.add_argument('--prepare', action='store_true')
+    dispatcher.add_argument('--batches', type=int, default=1)
+    dispatcher.add_argument('--timeout', type=int, default=300)
     execute = commands.add_parser('exec')
     execute.add_argument('argv', nargs=argparse.REMAINDER)
     listen = commands.add_parser('listen')
@@ -103,14 +113,33 @@ def main():
     try:
         if args.operation == 'capabilities':
             print(json.dumps(capabilities(args.runtime), sort_keys=True)); return 0
+        if args.operation == 'dispatcher':
+            config = read_json(args.config)
+            if config.get('runtime') != args.runtime or config.get('role') != 'dispatcher':
+                raise ValueError('explicit matching native Dispatcher selection required')
+            argv = [sys.executable, str(Path(__file__).with_name('native_dispatcher_session.py')),
+                    '--config', str(args.config), '--batches', str(args.batches), '--timeout', str(args.timeout)]
+            if args.prepare:
+                argv.append('--prepare')
+            return subprocess.run(argv).returncode
         if args.operation == 'worker':
             launch = capabilities(args.runtime)['managed_worker']['launcher']
             config = read_json(args.config)
-            if args.runtime == 'claude' and any(not config.get(key) for key in ('model', 'effort', 'event_executable')):
+            if config.get('execution_mode') == 'native-cli-source':
+                if config.get('runtime') != args.runtime:
+                    raise ValueError('selected native runtime differs from entrypoint')
+                launch = 'native_source_worker.py'
+            elif args.prepare or args.resume:
+                raise ValueError('prepare/resume requires the explicit native source lane')
+            if launch == 'claude_worker_launcher.py' and any(not config.get(key) for key in ('model', 'effort', 'event_executable')):
                 raise ValueError('portable Claude launch requires model, effort and event_executable')
             argv = [sys.executable, str(Path(__file__).with_name(launch)), '--assignment', str(args.assignment), '--config', str(args.config)]
             if args.check:
                 argv.append('--check')
+            if args.prepare:
+                argv.append('--prepare')
+            if args.resume:
+                argv.append('--resume')
             return subprocess.run(argv).returncode
         if (not args.ledger or not args.ledger.is_absolute() or not (args.ledger / '.squad').is_dir()
                 or not args.squad or not args.squad.is_absolute() or not os.access(args.squad, os.X_OK)):

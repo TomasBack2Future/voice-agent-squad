@@ -49,6 +49,8 @@ def read_decision(c, env, pin):
         decision = json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise ValidationError('decision read returned invalid JSON') from error
+    if decision == {'revision': 0, 'outcome_id': 0, 'action': '', 'condition': '', 'worker_agent': ''}:
+        return None
     if not isinstance(decision, dict) or not decision.get('revision'):
         raise ValidationError('decision read returned no revision')
     return decision

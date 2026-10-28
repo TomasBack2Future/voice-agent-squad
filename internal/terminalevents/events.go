@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zsiec/squad/internal/notify"
 	"github.com/zsiec/squad/internal/store"
 )
 
@@ -47,7 +48,18 @@ var ErrInvalidEvent = errors.New("event rejected: verify reservation, generation
 
 // Publish validates and inserts atomically. Recipient and item come from the ledger.
 func (s Store) Publish(ctx context.Context, actor string, q PublishRequest) (string, error) {
-	return s.record(ctx, actor, q, q.OutcomeID)
+	id, err := s.record(ctx, actor, q, q.OutcomeID)
+	if err == nil {
+		s.wakeReceivers(ctx)
+	}
+	return id, err
+}
+
+func (s Store) wakeReceivers(ctx context.Context) {
+	// Publication is committed; a missing receiver must not turn success into a retry.
+	wakeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
+	_ = notify.WakeKind(wakeContext, notify.NewRegistry(s.DB), s.Repo, notify.KindRewake, 100*time.Millisecond)
 }
 
 func (s Store) record(ctx context.Context, actor string, q PublishRequest, source int64) (string, error) {

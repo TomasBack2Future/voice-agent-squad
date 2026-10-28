@@ -16,16 +16,22 @@ import uuid
 
 from claude_worker_launcher import child_environment as claude_environment, diagnostic
 from muse_session_host import atomic
-from muse_worker_container import Runtime
+from muse_worker_container import CreateRefused, Runtime
 
 LIMIT = 16384
 
 
 def child_environment(c):
-    env = claude_environment(dict(c, coordination_mode='native'))
+    env = {key: value for key, value in claude_environment(dict(c, coordination_mode='native')).items()
+           if not key.startswith('SQUAD_')}
     suffix = hashlib.sha256(str(Path(c['ledger_directory']).resolve()).encode()).hexdigest()[:12]
-    env.update(SQUAD_SESSION_ID=f"muse:{c['native_session_id']}:{suffix}",
-               SQUAD_NO_HYGIENE='1', MUSE_NO_AUTO_UPDATE='1', SQUAD_HOME=c['coordination_home'])
+    runtime = c.get('runtime', 'muse')
+    if runtime not in ('muse', 'codex', 'claude'):
+        raise ValueError('source tool runtime unavailable')
+    env.update(SQUAD_SESSION_ID=f"{runtime}:{c['native_session_id']}:{suffix}",
+               SQUAD_AGENT=c['agent_id'], SQUAD_NATIVE_SESSION_ID=c['native_session_id'],
+               SQUAD_NO_AUTO_DAEMON='1', SQUAD_NO_BROWSER='1', SQUAD_NO_HYGIENE='1',
+               MUSE_NO_AUTO_UPDATE='1', SQUAD_HOME=c['coordination_home'], PYTHONDONTWRITEBYTECODE='1')
     return env
 
 
@@ -49,7 +55,9 @@ def coordination(c, action, evidence=None, report=None):
 class Bridge:
     def __init__(self, config_path):
         self.c = json.loads(config_path.read_text())
-        if os.environ.get('MUSE_SESSION_ID') != self.c['native_session_id']:
+        identity = {'codex': 'CODEX_THREAD_ID', 'muse': 'MUSE_SESSION_ID',
+                    'claude': 'CLAUDE_SESSION_ID'}[self.c.get('runtime', 'muse')]
+        if os.environ.get(identity) != self.c['native_session_id']:
             raise ValueError('MCP native identity mismatch')
         self.state = Path(self.c['execution_binding']).parent
         self.lock = (self.state / 'bridge.lock').open('a')
@@ -119,6 +127,11 @@ class Bridge:
                 return {'exit_code': op['exit_code'],
                         'stdout': stdout.read(LIMIT).decode(errors='replace'),
                         'stderr': stderr.read(LIMIT).decode(errors='replace')}
+        except CreateRefused:
+            op.update(state='joined', not_started=True)
+            self.save()
+            self.suspend()
+            raise
         except BaseException:
             try:
                 self.suspend()
@@ -266,11 +279,11 @@ TOOLS = [
 ]
 
 
-def main():
+def main(bridge_type=Bridge, tools=TOOLS):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     args = parser.parse_args()
-    bridge = Bridge(args.config)
+    bridge = bridge_type(args.config)
     for line in iter(lambda: sys.stdin.readline(2097153), ''):
         if len(line.encode()) > 2097152:
             bridge.suspend()
@@ -283,7 +296,7 @@ def main():
             if method == 'initialize':
                 result = {'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'squad-worker', 'version': '1'}}
             elif method == 'tools/list':
-                result = {'tools': TOOLS}
+                result = {'tools': tools}
             elif method == 'tools/call':
                 q = request['params']
                 result = {'content': [{'type': 'text', 'text': json.dumps(bridge.call(q['name'], q.get('arguments', {})))}]}

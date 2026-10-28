@@ -9,17 +9,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/zsiec/squad/internal/dispatch"
 )
 
+var workerOperationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
 type workerJoinOperation struct {
-	State     string `json:"state"`
-	Kind      string `json:"kind"`
-	Container string `json:"container"`
-	PID       int    `json:"pid"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	NotStarted    bool   `json:"not_started"`
+	CreateRefusal string `json:"create_refusal"`
+	State         string `json:"state"`
+	Kind          string `json:"kind"`
+	Container     string `json:"container"`
+	PID           int    `json:"pid"`
 }
 
 type workerJoinReceipt struct {
@@ -137,6 +145,19 @@ func verifyWorkerJoin(ctx context.Context, b dispatch.WorkerExecutionBinding, bi
 			}
 		}
 		if op.Kind == "write" {
+			continue
+		}
+		if op.Kind == "container" && op.NotStarted {
+			if op.State != "joined" || op.CreateRefusal != "invalid-bind-mount" || op.Container != "" || op.PID != 0 || !workerOperationID.MatchString(op.ID) || op.Name != "squad-muse-"+op.ID {
+				return errors.New("exact rejected container create provenance required")
+			}
+			out, err = docker("container", "ls", "--all", "--format", "{{.Names}}", "--filter", "name="+op.Name)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(string(out)) != "" {
+				return errors.New("rejected container create still has an allocated owned name")
+			}
 			continue
 		}
 		if op.Kind != "container" || len(op.Container) != 64 {

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/zsiec/squad/internal/dispatch"
 	"github.com/zsiec/squad/internal/identity"
@@ -12,6 +15,7 @@ import (
 )
 
 func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
+	registerDispatchAdmissionTools(srv, db, repoID, repoRoot)
 	srv.Register(mcp.Tool{Name: "squad_dispatch_worker_handoff_get", Description: "Read an immutable supervised Worker custody transition receipt.", InputSchema: json.RawMessage(`{"type":"object","required":["request_id"],"properties":{"request_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var args map[string]string
 		if err := json.Unmarshal(raw, &args); err != nil || len(args) != 1 || args["request_id"] == "" {
@@ -22,7 +26,7 @@ func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRo
 		}
 		return dispatch.New(db, repoID, nil).WorkerHandoffReceipt(ctx, args["request_id"])
 	}})
-	srv.Register(mcp.Tool{Name: "squad_dispatch_worker_handoff", Description: "Current-controller supervised source Worker transfer. Requires original-owner exact consent, reconciled pin and joined native; preserves hold, rejects ENV and pending events.", InputSchema: json.RawMessage(`{"type":"object","required":["request"],"properties":{"request":{"type":"object"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+	srv.Register(mcp.Tool{Name: "squad_dispatch_worker_handoff", Description: "Current-controller source Worker transfer with exact original-owner consent or human-authorized source recovery attestation, reconciled pin and joined native; preserves hold and excludes ENV.", InputSchema: json.RawMessage(`{"type":"object","required":["request"],"properties":{"request":{"type":"object"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var outer map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &outer); err != nil {
 			return nil, err
@@ -170,4 +174,85 @@ func registerDispatchControllerTools(srv *mcp.Server, db *sql.DB, repoID, repoRo
 		}})
 	}
 
+}
+
+func decodeDispatchArguments(raw json.RawMessage, value any) error {
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
+		return fmt.Errorf("dispatch arguments must be an object")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("expected one dispatch argument object")
+	}
+	return nil
+}
+
+func registerDispatchAdmissionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
+	caller := func() (*dispatch.Store, string, error) {
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, "", err
+		}
+		actor, err := identity.AgentID()
+		return dispatch.New(db, repoID, nil), actor, err
+	}
+	srv.Register(mcp.Tool{Name: "squad_dispatch_reserve", Description: "Reserve one canonical source under the calling Dispatcher identity.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","source"],"properties":{"reservation":{"type":"string"},"source":{"type":"string"},"note":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args struct {
+			Reservation string `json:"reservation"`
+			Source      string `json:"source"`
+			Note        string `json:"note"`
+		}
+		if err := decodeDispatchArguments(raw, &args); err != nil {
+			return nil, err
+		}
+		store, actor, err := caller()
+		if err != nil {
+			return nil, err
+		}
+		return store.Reserve(ctx, args.Reservation, args.Source, actor, args.Note, 15*time.Minute)
+	}})
+	srv.Register(mcp.Tool{Name: "squad_dispatch_attach", Description: "Attach a canonical item to this caller's exact reservation generation.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","item","generation"],"properties":{"reservation":{"type":"string"},"item":{"type":"string"},"generation":{"type":"integer","minimum":1}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args struct {
+			Reservation string `json:"reservation"`
+			Item        string `json:"item"`
+			Generation  int64  `json:"generation"`
+		}
+		if err := decodeDispatchArguments(raw, &args); err != nil {
+			return nil, err
+		}
+		store, actor, err := caller()
+		if err != nil {
+			return nil, err
+		}
+		return store.Attach(ctx, args.Reservation, args.Item, actor, args.Generation)
+	}})
+	srv.Register(mcp.Tool{Name: "squad_dispatch_bind", Description: "Bind a Worker only after the calling Dispatcher's native receiver is ready.", InputSchema: json.RawMessage(`{"type":"object","required":["reservation","worker_session","generation"],"properties":{"reservation":{"type":"string"},"worker_session":{"type":"string"},"generation":{"type":"integer","minimum":1}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args struct {
+			Reservation string `json:"reservation"`
+			Worker      string `json:"worker_session"`
+			Generation  int64  `json:"generation"`
+		}
+		if err := decodeDispatchArguments(raw, &args); err != nil {
+			return nil, err
+		}
+		store, actor, err := caller()
+		if err != nil {
+			return nil, err
+		}
+		return store.Bind(ctx, args.Reservation, actor, args.Worker, args.Generation)
+	}})
+	srv.Register(mcp.Tool{Name: "squad_dispatch_list", Description: "Read current repository dispatch reservations.", InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		if err := decodeDispatchArguments(raw, new(struct{})); err != nil {
+			return nil, err
+		}
+		store, _, err := caller()
+		if err != nil {
+			return nil, err
+		}
+		reservations, err := store.List(ctx, false)
+		return map[string]any{"reservations": reservations}, err
+	}})
 }

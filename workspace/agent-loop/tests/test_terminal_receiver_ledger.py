@@ -154,5 +154,55 @@ class ReceiverLedgerTests(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertEqual(self.rows(), [('new-native', 2, 'foreign')])
 
+    def test_event_turn_rearms_before_admitting_the_next_worker(self):
+        self.test_delivery_after_handoff_is_not_automatic_handling()
+        hooks = terminal_receiver.settings(self.config)['hooks']
+        self.assertIn('PreToolUse', hooks, 'event-handling turns need a receiver before dispatch bind')
+        entries = hooks['PreToolUse'][0]['hooks']
+        event = json.dumps({'session_id': 'new-native', 'tool_name': 'Bash',
+                            'tool_input': {'command': 'squad dispatch bind D-2'}})
+        children = []
+        for entry in entries:
+            argv = [entry['command'], *entry['args']]
+            if entry.get('asyncRewake'):
+                p = subprocess.Popen(argv, env=self.env, stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                p.stdin.write(event); p.stdin.close(); p.stdin = None
+                children.append(p)
+                self.addCleanup(lambda p=p: self.stop_receiver(p))
+            else:
+                result = subprocess.run(argv, input=event, env=self.env, capture_output=True,
+                                        text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(children)
+        self.squad('new', 'new', 'BUG', 'Next isolated delivery fixture', '--ready')
+        self.squad('new', 'dispatch', 'reserve', 'D-2', '--source', 'github:example/repo#2')
+        self.squad('new', 'dispatch', 'attach', 'D-2', '--item', 'BUG-002', '--generation', '1')
+        self.squad('new', 'dispatch', 'bind', 'D-2', '--thread-id', 'second-worker', '--generation', '1')
+        self.assertIsNone(children[0].poll())
+        self.squad('worker-two', 'register', '--as', 'worker-two')
+        self.squad('worker-two', 'claim', 'BUG-002', '--long')
+        self.squad('worker-two', 'milestone', '--to', 'BUG-002', 'Second Worker result')
+        with sqlite3.connect(self.root / 'home/global.db') as db:
+            outcome = db.execute("SELECT max(id) FROM messages WHERE agent_id='worker-two' AND thread='BUG-002'").fetchone()[0]
+        published = json.loads(self.squad('worker-two', 'terminal-events', 'publish', '--reservation', 'D-2',
+                    '--generation', '1', '--worker-session', 'second-worker', '--kind', 'blocked', '--outcome', str(outcome)))
+        _, err = children[0].communicate(timeout=5)
+        self.assertEqual(children[0].returncode, 2, err)
+        self.assertIn(published['event_id'], err)
+        self.squad('new', 'terminal-events', 'ack', published['event_id'],
+                   '--native-session', 'new-native', '--note', 'Second Worker result reconciled')
+        with sqlite3.connect(self.root / 'home/global.db') as db:
+            processed = db.execute('SELECT processed_at FROM terminal_event_receipts WHERE event_id=?',
+                                   (published['event_id'],)).fetchone()[0]
+        self.assertGreater(processed, 0)
+        self.assertEqual(self.rows(), [])
+
+    @staticmethod
+    def stop_receiver(p):
+        if p.poll() is None:
+            p.kill()
+        p.communicate(timeout=5)
+
 if __name__ == '__main__':
     unittest.main()

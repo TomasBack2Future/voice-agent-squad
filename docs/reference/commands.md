@@ -885,6 +885,10 @@ Print the squad version.
 squad version
 ```
 
+`squad version --json` also reports the Go version and embedded VCS revision and
+dirty flag. Missing VCS metadata is reported as an omitted revision and a null
+`modified` value. Neither form opens a ledger or runs coordination hygiene.
+
 ## Protected resource scopes
 
 - `squad resources define policy.json`: atomically register an array of
@@ -1065,6 +1069,17 @@ mechanism is introduced. External dependency or authentication recovery still
 needs verified evidence from its owner before the Dispatcher sets `proceed`.
 
 
+### Source execution admission readback
+
+`worker-execution inspect --binding /absolute/private-binding.json` and MCP
+`squad_worker_execution_inspect` (`binding` object) read one exact immutable pin
+after an ambiguous acquisition response. The result contains `status: ok`,
+`action: inspect`, `id`, and `state` (`absent`, `active` or `reconciled`); present
+pins also include `gate` (`gate-open` or `gate-closed`). Expiry or changed current
+custody does not hide the original pin. A foreign holder, changed binding,
+unsupported state or database error fails inspection; only an actual missing row
+returns `absent`. This read does not admit tools, renew ownership or release a pin.
+
 ### Supervised source Worker handoff
 
 Use the current controller's actual actor/native/epoch, not the legacy takeover
@@ -1087,6 +1102,21 @@ hash and supervisory attestation message ID.
 The current controller invokes the transition after joining the original source
 execution and handling pending events. Only a handled hold is eligible.
 `SQUAD_NATIVE_SESSION_ID` must equal the request's current controller native.
+
+For a joined source client that cannot return a final reply, the same request
+can set `consent_outcome_id: 0` and include `source_recovery` with
+`human_authority_sha256`, `expires_at`, sorted `pending_event_ids` (at most 32)
+and `attestation_outcome_id`. The digest command hashes this complete transition
+with the attestation ID cleared. The current controller records a canonical
+message with `say --to ITEM` containing
+`schema_version: squad.source-worker-recovery-attestation.v1`, `request_sha256`,
+`human_authority_sha256` and `expires_at`; its actual message ID is the
+attestation ID. The expiry must be within 24 hours. This route still requires
+the original reconciled execution pin, absent native process, unchanged custody
+and effective HOLD. Only the exact listed original-native decision receipts may
+remain pending: they remain undelivered in history, while the replacement gets
+a fresh HOLD event. Other unhandled results block the transition. Source recovery
+and legacy-stop inputs are separate; this does not authorize protected ENV.
 
 Same exact retries return the immutable receipt; changed replay fails. Readback
 includes previous/current reservations, original actor, claim generation and the

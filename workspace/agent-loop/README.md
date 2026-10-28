@@ -213,6 +213,12 @@ reminder, not a handling ACK. Run `test_terminal_receiver_ledger.py` to exercise
 handoff, binding/replacement, foreign/stale rejection and actual delivery against
 an isolated built Squad CLI and SQLite ledger.
 
+Dispatcher `PreToolUse` hooks also re-arm the session-owned listener. Before a
+dispatch bind or launch, a synchronous hook waits up to five seconds for the
+exact native/epoch/incarnation to be listening. Other tools continue normally.
+Published outcomes and decisions wake listeners after their transaction commits;
+the durable event remains pending until the recipient explicitly handles it.
+
 ## Local repository skill synchronization
 
 `skill_sync.py` installs local Git `post-merge`, `post-checkout` and
@@ -1175,3 +1181,41 @@ MSP still lacks a qualified per-thread writer-epoch transfer (see the shared-App
 boundary above), so ownership continuity after a stop remains an adapter gap,
 not proven delivery. The recovery executor above is the only admitted return
 path, and only for the same native under its unchanged custody.
+
+## Current native source lane
+
+`runtime_entry.py --runtime codex|muse worker` accepts an explicit
+`execution_mode: native-cli-source` configuration validated by
+`schemas/native-source.schema.json`. `native_source_worker.py` uses the selected
+original native client with private configuration and authentication by reference.
+It retains the existing assignment, claim, execution pin and contained source
+tools. It supports preparation, same-native resume and receipt-verified adoption
+of a joined source handoff. Its scope is source changes, tests and outcome
+publication; other delivery phases use their existing adapters.
+
+`runtime_entry.py --runtime <client> dispatcher --config <path>` runs bounded
+native event-handling turns. `--prepare` allocates its original native identity;
+the existing controller binding remains a separate prerequisite. One exact
+receiver stays live while the model reconciles results and admits another Worker.
+The MCP process enters the selected ledger directory. Events remain pending until
+the native recipient explicitly records delivery and handling. `terminal-events
+listen --stream --defer-delivery` exposes the same bounded batches as JSONL while
+keeping that wake endpoint registered.
+
+Each backend pins the executable it actually qualified. Changing the native
+binary requires fresh qualification; binary presence or unit tests alone do not
+establish model, tool, resume or cross-client readiness. The Codex surface is
+original CLI `exec`/`resume` and Muse uses its original MSP server. The current
+Claude native lane remains unqualified; its existing legacy route is unchanged.
+These adapters do not qualify an App or interactive
+terminal surface. `test_native_dispatch_matrix.py` and
+`test_native_failure_dispatch_recovery.py` are opt-in, real-client tests using private ledgers,
+source fixtures and owned processes. They retain native policy, actual source
+test output, delivery/handling receipts and cleanup evidence. A rate-limited or
+skipped client remains unverified.
+
+A startup refusal joins only owned processes. A lost execution-acquire response
+uses exact-binding `worker-execution inspect` to distinguish an absent pin from
+an active one before cleanup; unavailable status retains custody. The source
+adapter's `--reconcile <evidence-directory>` also handles a retained, proven
+unstarted constructor intent without replaying source or native input.

@@ -18,7 +18,7 @@ func newTerminalEventsCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "terminal-events", Short: "Durable recipient acknowledgements and safe hook delivery"}
 	var session, nativeSession string
 	var max time.Duration
-	var deferDelivery bool
+	var deferDelivery, stream bool
 	listen := &cobra.Command{Use: "listen", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		bc, err := bootClaimContext(cmd.Context())
 		if err != nil {
@@ -28,12 +28,13 @@ func newTerminalEventsCmd() *cobra.Command {
 		if session == "" || max <= 0 || max > 24*time.Hour {
 			return fmt.Errorf("delivery-session required and max must be in (0,24h]")
 		}
-		return receiveTerminalEvents(cmd.Context(), terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}, session, max, cmd.OutOrStdout(), deferDelivery)
+		return receiveTerminalEventBatches(cmd.Context(), terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}, session, max, cmd.OutOrStdout(), deferDelivery, stream)
 	}}
 	listen.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native, distinct from receiver incarnation")
 	listen.Flags().StringVar(&session, "delivery-session", "", "Receiver incarnation, unique for each client start/resume")
 	listen.Flags().DurationVar(&max, "max", 23*time.Hour, "Maximum receiver lifetime")
 	listen.Flags().BoolVar(&deferDelivery, "defer-delivery", false, "Leave events pending until structured transport confirms acceptance")
+	listen.Flags().BoolVar(&stream, "stream", false, "Keep the native wake endpoint open and emit bounded JSONL event batches")
 	poll := &cobra.Command{Use: "poll", Short: "Read a bounded pending event batch without marking it delivered", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		bc, err := bootClaimContext(cmd.Context())
 		if err != nil {
@@ -135,6 +136,18 @@ func listenTerminalEvents(ctx context.Context, s terminalevents.Store, session s
 }
 
 func receiveTerminalEvents(ctx context.Context, s terminalevents.Store, session string, max time.Duration, out io.Writer, deferDelivery bool) error {
+	return receiveTerminalEventBatches(ctx, s, session, max, out, deferDelivery, false)
+}
+
+func pruneTerminalEmissions(emitted map[string]time.Time, now time.Time) {
+	for id, at := range emitted {
+		if now.Sub(at) >= 2*time.Minute {
+			delete(emitted, id)
+		}
+	}
+}
+
+func receiveTerminalEventBatches(ctx context.Context, s terminalevents.Store, session string, max time.Duration, out io.Writer, deferDelivery, stream bool) error {
 	l, err := listener.New("127.0.0.1:0")
 	if err != nil {
 		return err
@@ -148,6 +161,7 @@ func receiveTerminalEvents(ctx context.Context, s terminalevents.Store, session 
 	defer func() { _ = reg.Unregister(context.Background(), instance, notify.KindRewake) }()
 	ctx, cancel := context.WithTimeout(ctx, max)
 	defer cancel()
+	emitted := map[string]time.Time{}
 	for {
 		if err = s.Discover(ctx); err != nil {
 			return err
@@ -155,6 +169,16 @@ func receiveTerminalEvents(ctx context.Context, s terminalevents.Store, session 
 		events, err := s.Pending(ctx, session, 2*time.Minute)
 		if err != nil {
 			return err
+		}
+		if stream {
+			pruneTerminalEmissions(emitted, time.Now())
+			pending := events[:0]
+			for _, event := range events {
+				if time.Since(emitted[event.ID]) >= 2*time.Minute {
+					pending = append(pending, event)
+				}
+			}
+			events = pending
 		}
 		if len(events) > 0 {
 			if err = json.NewEncoder(out).Encode(map[string]any{"type": "worker-terminal-delivery-v1", "recipient": s.Recipient, "delivery_session": session, "events": events}); err != nil {
@@ -167,7 +191,12 @@ func receiveTerminalEvents(ctx context.Context, s terminalevents.Store, session 
 					}
 				}
 			}
-			return nil
+			if !stream {
+				return nil
+			}
+			for _, event := range events {
+				emitted[event.ID] = time.Now()
+			}
 		}
 		if _, err = l.WaitWake(ctx, 15*time.Second); err != nil {
 			if ctx.Err() != nil {

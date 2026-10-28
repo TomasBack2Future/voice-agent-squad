@@ -168,6 +168,9 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 		_, err = publisher.recordTx(ctx, tx, actor, PublishRequest{Reservation: q.Reservation, Generation: q.Generation, WorkerSession: q.WorkerSession, Kind: "decision-resolved", OutcomeID: q.OutcomeID}, q.OutcomeID)
 		return err
 	})
+	if err == nil {
+		s.wakeReceivers(ctx)
+	}
 	return d, err
 }
 

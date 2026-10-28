@@ -2,16 +2,17 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
 
-// Even commands such as version run post-command hygiene. Keep the default
-// test process away from the operator's live ledger; individual tests can
-// still replace SQUAD_HOME with their own fixtures through t.Setenv.
+// Keep command tests away from the operator's live ledger.
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "squad-cli-test-home-")
 	if err != nil {
@@ -49,5 +50,45 @@ func TestVersionCommand_PrintsVersion(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out.String()); got != versionString {
 		t.Fatalf("got %q want %q", got, versionString)
+	}
+}
+
+func TestVersionJSONDoesNotInitializeCoordinationState(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "untouched-home")
+	t.Setenv("SQUAD_HOME", home)
+	t.Setenv("SQUAD_NO_HYGIENE", "")
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"version", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Version   string `json:"version"`
+		GoVersion string `json:"go_version"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != versionString || result.GoVersion == "" {
+		t.Fatalf("missing build identity: %s", out.String())
+	}
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatalf("version changed coordination state: %v", err)
+	}
+}
+
+func TestBuildVersionPreservesUnknownAndDirtyProvenance(t *testing.T) {
+	if result := buildVersion(nil); result.Revision != "" || result.Modified != nil {
+		t.Fatalf("missing provenance became known: %+v", result)
+	}
+	for _, dirty := range []string{"true", "false"} {
+		result := buildVersion(&debug.BuildInfo{GoVersion: "go-test", Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "exact-source"}, {Key: "vcs.modified", Value: dirty},
+		}})
+		if result.Revision != "exact-source" || result.Modified == nil || *result.Modified != (dirty == "true") {
+			t.Fatalf("incorrect provenance: %+v", result)
+		}
 	}
 }

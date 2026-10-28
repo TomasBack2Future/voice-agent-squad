@@ -14,7 +14,7 @@ import (
 )
 
 func registerWorkerExecutionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string) {
-	for _, action := range []string{"acquire", "check", "check-read", "check-write", "suspend"} {
+	for _, action := range []string{"acquire", "inspect", "check", "check-read", "check-write", "suspend"} {
 		srv.Register(mcp.Tool{Name: "squad_worker_execution_" + action,
 			Description: "Source Worker execution " + action + " under immutable native/claim/reservation/controller custody; suspension retains the execution pin.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"binding":{"type":"object"}},"required":["binding"],"additionalProperties":false}`),
@@ -39,6 +39,8 @@ func registerWorkerExecutionTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot 
 				}
 				s := dispatch.New(db, repoID, nil)
 				switch action {
+				case "inspect":
+					return s.InspectWorkerExecution(ctx, actor, q.Binding)
 				case "acquire":
 					err = s.AcquireWorkerExecution(ctx, actor, q.Binding)
 				case "check":

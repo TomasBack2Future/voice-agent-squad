@@ -5,6 +5,10 @@ import subprocess
 from claude_worker_launcher import diagnostic
 
 
+class CreateRefused(ValueError):
+    """The engine explicitly rejected creation before allocating a container."""
+
+
 class Runtime:
     def __init__(self, config):
         self.c = config
@@ -52,7 +56,13 @@ class Runtime:
                 '--init', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512',
                 '--mount', 'type=bind,source=' + workspace + ',target=' + workspace,
                 '--workdir', str(cwd), '--env', 'HOME=/tmp', '--entrypoint', '/bin/sh', self.runtime['image'], '-c', command]
-        result = self.call(args).strip()
+        created = subprocess.run([*self.argv, *args], capture_output=True, text=True, timeout=15)
+        if created.returncode:
+            if 'Error response from daemon: invalid mount config for type' in created.stderr:
+                op['create_refusal'] = 'invalid-bind-mount'
+                raise CreateRefused('container creation rejected before allocation: ' + diagnostic(created.stderr))
+            raise ValueError('owned container operation failed: ' + diagnostic(created.stderr))
+        result = created.stdout.strip()
         if len(result) != 64 or any(ch not in '0123456789abcdef' for ch in result):
             raise ValueError('container creation receipt unavailable; custody retained')
         op['container'] = result

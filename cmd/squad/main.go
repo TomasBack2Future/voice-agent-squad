@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -132,6 +133,9 @@ func newRootCmd() *cobra.Command {
 // dir, no repo, write failure) is silently swallowed so user commands never
 // fail because hygiene tripped. Disable entirely with SQUAD_NO_HYGIENE=1.
 func postRunHygiene(cmd *cobra.Command, args []string) error {
+	if cmd.Name() == "version" {
+		return nil
+	}
 	if os.Getenv("SQUAD_NO_HYGIENE") != "" {
 		return nil
 	}
@@ -183,14 +187,46 @@ func postRunHygiene(cmd *cobra.Command, args []string) error {
 }
 
 func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the squad version",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if asJSON {
+				info, _ := debug.ReadBuildInfo()
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(buildVersion(info))
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), versionString)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print version and embedded source provenance without accessing coordination state")
+	return cmd
+}
+
+type versionInfo struct {
+	Version   string `json:"version"`
+	GoVersion string `json:"go_version"`
+	Revision  string `json:"revision,omitempty"`
+	Modified  *bool  `json:"modified"`
+}
+
+func buildVersion(info *debug.BuildInfo) versionInfo {
+	result := versionInfo{Version: versionString}
+	if info == nil {
+		return result
+	}
+	result.GoVersion = info.GoVersion
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			result.Revision = setting.Value
+		case "vcs.modified":
+			modified := setting.Value == "true"
+			result.Modified = &modified
+		}
+	}
+	return result
 }
 
 func main() {
