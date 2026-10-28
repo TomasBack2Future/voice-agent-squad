@@ -294,6 +294,9 @@ func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, act
 
 var bootstrapReadTools = map[string]bool{"Read": true, "Glob": true, "Grep": true, "Skill": true, "ToolSearch": true}
 
+// The installed binary and its local coordination wrappers.
+var bootstrapSquadExecutables = map[string]bool{"squad": true, "squad-coordination": true, "squad-codex": true}
+
 var bootstrapSquadCommands = map[string]bool{"claim": true, "go": true, "register": true, "claim-inspect": true}
 
 // bootstrapToolAllowed admits read-only inspection tools, the Squad claim MCP
@@ -307,7 +310,7 @@ func bootstrapToolAllowed(tool NativeHookTool) bool {
 		return false
 	}
 	words := strings.Fields(tool.Command)
-	return len(words) >= 2 && filepath.Base(words[0]) == "squad" && bootstrapSquadCommands[words[1]]
+	return len(words) >= 2 && bootstrapSquadExecutables[filepath.Base(words[0])] && bootstrapSquadCommands[words[1]]
 }
 
 func (s *Store) legacyNativeAdmission(ctx context.Context, q WorkerHandoffRequest, digest string, processes []LegacyProcess) (LegacyNativeAdmission, error) {
