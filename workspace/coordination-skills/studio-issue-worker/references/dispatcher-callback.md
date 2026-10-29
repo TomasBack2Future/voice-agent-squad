@@ -142,6 +142,19 @@ A duplicate reminder may contain an old processing snapshot; read current ledger
 state before diagnosing failure. Capture the command's actual exit status, never
 `$?` after piping to `head`. Delivery/ack do not close reservations or release claims.
 
+## Partial delivery
+
+When this execution ends with unmet Issue acceptance, publish `blocked` with the
+completed scope, exact remaining gate, next owner/action, resume condition and
+retained/released custody. Keep GitHub open and the canonical unfinished item
+blocked (or use an already supported acknowledged handoff). Do not emit
+`issue-closed`, mark the unfinished item done, or call the Issue assignment
+completed. `handoff-complete` requires a real supported recipient receipt;
+prose alone does not transfer ownership. The Dispatcher reconciles the actual
+execution termination separately and uses only supported reservation transitions.
+If safe partial retirement is unavailable, retain the explicit unresolved
+reservation/custody and route the tool gap; do not fabricate a completion.
+
 ## Payload
 
 Include only sanitized identifiers and evidence pointers, no logs, credentials,

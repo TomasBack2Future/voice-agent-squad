@@ -99,6 +99,13 @@ For a Studio Worker, include:
 - a requirement to report terminal evidence in Squad and the task response;
 - “Do not discover, reserve, dispatch, or start another Issue.”
 
+Assignments must say that successful authorized closeout needs no routine
+Dispatcher approval. Request a decision only for an actual exception; keep
+current holds, review/CI and shared-environment gates. Require one owned GitHub
+progress summary at material phase changes, with remaining work and next owner.
+A partial delivery must say "本轮交付结束，Issue 未完成" and preserve its supported
+continuation/custody route; never equate a terminal client with Issue completion.
+
 Template:
 
 ```text

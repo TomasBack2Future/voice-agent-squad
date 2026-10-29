@@ -229,6 +229,25 @@ and do not claim the environment.
   acceptance, the required staging log disposition in
   [references/staging.md](references/staging.md), and cleanup succeed.
 
+Before a background wait, resume or phase report, apply the shared
+[background-result rule](../../agent-loop/roles/worker/SKILL.md#completion):
+read the owned operation result and handle its actual exit before retaining a
+waiting summary. This rule also applies to Studio acceptance and cleanup.
+
+After the assigned acceptance, required logs, cleanup and safe release pass,
+close the Issue under existing authority and publish the closure outcome. Do not
+request a routine Dispatcher ready-to-close approval. Escalate only a concrete
+unmet gate, acceptance waiver, material scope change or unresolved custody;
+an explicit current human hold or bounded merge order still applies.
+
+At merge, acceptance start, a new blocker, partial delivery and closure, update
+one owned GitHub progress comment rather than posting routine messages. Include
+verified revision/time, delivered work, remaining gates, next owner/action and
+resume condition, with sanitized evidence links. Preserve unrelated comments;
+if publication fails, retain the pending update in the existing item for retry.
+A partial result keeps the Issue open and follows the callback contract; ending
+this turn is not Issue completion.
+
 Return Issue, PR, head/merge SHA, CI/deploy evidence, applicable Grok mode and
 authorizing Check Run metadata when enforced, exact running revision,
 acceptance/cleanup results, released locks, and residual risk. Do not continue

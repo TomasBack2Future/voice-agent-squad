@@ -122,6 +122,29 @@ justify serializing independent preparation. Never bypass current merge/ENV rule
 A prepared release is not a deployed release, and unfinished production acceptance
 must remain visibly pending even when earlier phases are complete.
 
+## Autonomous closeout and current status
+
+Carry the user's existing delivery authority into assignments and effective
+decisions. Do not introduce a universal ready-to-close approval. After gates
+pass the owning Worker closes and reports; reconcile the actual closure,
+acceptance, cleanup and released/retained custody afterwards. Resolve exceptions
+without repeating authorization already granted. When adopting this rule,
+supersede only obsolete routine approval conditions through the existing decision
+and Worker readback route; preserve genuine holds and unmet acceptance gates.
+
+In each existing cycle, compare GitHub disposition, item status, reservation,
+Worker execution and owned external operations. Keep a single current summary in
+the existing checkpoint with verification time, phase, remaining condition,
+next owner/action and evidence; mark older summaries superseded. A stale summary
+is not a reason to restart a Worker. Reconcile closed Issues with remaining
+reservations only after verifying operations and custody, using owner-supported
+transitions. For partial delivery keep the Issue open and the unfinished item
+blocked or handed off with an explicit recipient; do not close an Issue Worker
+reservation as completed while its Issue remains open. If the installed tool
+cannot represent safe partial retirement/continuation, record that capability
+gap and retained ownership rather than inventing a state, force-releasing WIP,
+or silently relabelling partial delivery as completion.
+
 ## Delivery capability admission
 
 Before launching a Worker, verify how it can reach the requested final outcome,
