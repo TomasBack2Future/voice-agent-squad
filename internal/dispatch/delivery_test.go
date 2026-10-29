@@ -14,6 +14,9 @@ func TestDeliveryProjectionSeparatesIssueAndExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.db.Exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES('repo-test','D',1,'T',1,1,'proceed','old execution scope','worker')`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = s.db.Exec(`UPDATE dispatch_reservations SET canonical_item_id='T',state='completed'; INSERT INTO items(repo_id,item_id,title,type,status,path,updated_at) VALUES('repo-test','T','test','task','blocked','/fixture/T.md',1000)`); err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +30,9 @@ func TestDeliveryProjectionSeparatesIssueAndExecution(t *testing.T) {
 		}
 		if got.IssueState != tc.state {
 			t.Fatalf("%+v", got)
+		}
+		if got.NextOwner != "owner" {
+			t.Fatalf("terminal reconciliation routed to former Worker: %+v", got)
 		}
 		found := false
 		for _, d := range got.Drift {

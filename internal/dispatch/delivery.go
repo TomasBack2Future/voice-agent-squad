@@ -75,6 +75,11 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
+	// A retained decision records the last execution scope, not ownership of
+	// terminal reconciliation after that execution has ended.
+	if r.State == "completed" || r.State == "failed" || r.State == "cancelled" {
+		out.NextOwner = r.ReservedBy
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT item_id FROM claims WHERE repo_id=? AND agent_id IN (SELECT agent_id FROM claims WHERE repo_id=? AND item_id=? UNION SELECT agent_id FROM claim_history WHERE repo_id=? AND item_id=? AND claimed_at>=?) ORDER BY item_id LIMIT 101`, s.repoID, s.repoID, r.CanonicalItemID, s.repoID, r.CanonicalItemID, r.ReservedAt)
 	if err != nil {
 		return nil, err
