@@ -131,6 +131,15 @@ terminal state from a quiet session.
 
 ## Completion
 
+Before reporting a background operation as running, waiting, failed or complete,
+read its owned process/task result and latest bounded output. Record operation
+identity, revision, exit/result and the next action in the existing checkpoint.
+At completion, resume and interruptible wait boundaries, handle an actual failure
+with authorized bounded recovery or an explicit blocker; do not retain an old
+"waiting" summary after the operation exited. A delivered event or acknowledged
+message is not proof that its downstream operation completed. Preserve unsafe
+resource custody and do not create an extra watcher or timer.
+
 Return one terminal outcome containing the Issue/item/reservation generation,
 exact PR and revision, deterministic checks, review result, environment and
 acceptance disposition, released resources, remaining limitations and safe
