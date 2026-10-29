@@ -211,3 +211,23 @@ func TestFailedDoneGateKeepsExternalIssueOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSameSecondCustodyAndCompetingHistory(t *testing.T) {
+	// Both fixture timestamps are 1, exercising inclusive reservation-second custody.
+	e, q, _ := engineFixture(t)
+	if _, err := e.Run(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []int{1, 2} {
+		e, q, b := engineFixture(t)
+		if _, err := e.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','T','other',?,2,'released')`, at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Run(context.Background(), q); err == nil {
+			t.Fatalf("ambiguous custody at %d accepted", at)
+		}
+		if len(b.calls) != 0 {
+			t.Fatal("external effect before ambiguous custody rejection")
+		}
+	}
+}
