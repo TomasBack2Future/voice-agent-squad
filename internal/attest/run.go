@@ -10,17 +10,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/zsiec/squad/internal/ownedexec"
 )
 
 type RunOpts struct {
-	ItemID   string
-	Kind     Kind
-	Command  string
-	Argv     []string
-	AgentID  string
-	AttDir   string
-	RepoRoot string
-	WorkDir  string // Optional absolute execution directory; RepoRoot still owns evidence.
+	ItemID       string
+	Kind         Kind
+	Command      string
+	Argv         []string
+	AgentID      string
+	AttDir       string
+	RepoRoot     string
+	WorkDir      string // Optional absolute execution directory; RepoRoot still owns evidence.
+	OperationKey string // Assigned by the owned-operation wrapper, not copied into evidence.
 }
 
 func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
@@ -74,6 +78,7 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", opts.Command)
 	}
+	ownedexec.Configure(cmd)
 	cmd.Dir = workDir
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -87,6 +92,14 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 		}
 	}
 
+	if exitCode != 0 || opts.OperationKey != "" {
+		// A quiet failed command must not deduplicate against a prior quiet
+		// success (attestations are keyed by output hash per item/kind).
+		fmt.Fprintf(&buf, "\nsquad execution exit code: %d\n", exitCode)
+		if opts.OperationKey != "" {
+			fmt.Fprintf(&buf, "squad owned operation: %s\n", l.Hash([]byte(opts.OperationKey)))
+		}
+	}
 	hash := l.Hash(buf.Bytes())
 	if err := os.MkdirAll(opts.AttDir, 0o755); err != nil {
 		return Record{}, fmt.Errorf("mkdir attestations dir: %w", err)
@@ -105,7 +118,12 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 		OutputPath: out,
 		AgentID:    opts.AgentID,
 	}
-	id, err := l.Insert(ctx, rec)
+	// The process has joined. Its cancellation must not cancel persistence of
+	// the observed failure, otherwise a resumed owner sees no terminal result.
+	// Bound this final local write independently of the execution lifetime.
+	resultCtx, cancelResult := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelResult()
+	id, err := l.Insert(resultCtx, rec)
 	if err != nil {
 		return Record{}, err
 	}

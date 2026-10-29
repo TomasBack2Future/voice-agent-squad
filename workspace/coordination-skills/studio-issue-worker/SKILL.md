@@ -272,3 +272,11 @@ clear its color before the final response. This includes a verified terminal
 handoff even when the Issue remains open. Color failure is nonblocking; include
 it in the terminal outcome for Dispatcher reconciliation. Never clear another
 workspace or treat a turn ending as assignment completion.
+
+When the installed executable exposes `closeout`, use its explicit resumable
+closeout only after the assigned gates pass; read the owning
+[delivery lifecycle command contract](../../../docs/reference/delivery-lifecycle.md).
+A missing capability retains the existing authorized gh/done/event sequence,
+not a new approval. For long owned commands, an available `operation run` records
+start/exit and original-native delivery; a started record without a terminal
+result requires reconciliation, never an automatic second execution.

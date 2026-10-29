@@ -12,6 +12,7 @@ import (
 
 func newDispatchCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "dispatch", Short: "Manage durable Dispatcher-to-Worker reservations"}
+	cmd.AddCommand(newDispatchDeliveryCmd(), newDispatchRetirePartialCmd())
 	cmd.AddCommand(dispatchControllerCommands()...)
 	cmd.AddCommand(workerHandoffCommands()...)
 	cmd.AddCommand(legacyWorkerStopCommands()...)

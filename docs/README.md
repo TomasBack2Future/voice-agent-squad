@@ -62,3 +62,6 @@ Both paths converge. `squad go` is idempotent — first run inits `.squad/` and 
 - **Contribute?** [contributing.md](contributing.md).
 - **Comparing to agent-teams?** [concepts/squad-vs-agent-teams.md](concepts/squad-vs-agent-teams.md).
 - **Migrating from agent-teams?** [recipes/migrating-from-agent-teams.md](recipes/migrating-from-agent-teams.md).
+
+- [Delivery lifecycle](reference/delivery-lifecycle.md): read-only delivery state,
+  explicit resumable closeout, partial retirement and owned command exit handling.

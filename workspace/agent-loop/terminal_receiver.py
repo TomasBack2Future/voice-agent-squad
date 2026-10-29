@@ -188,7 +188,7 @@ def run(config_path: Path, event: dict) -> int:
             if role == 'worker':
                 action = ('Read terminal-events decision-get for the latest adopted revision (or the canonical Issue for an unmigrated assignment), then verify the existing assignment '
                           'generation before resuming that same task. A decision changes neither authority '
-                          'nor ownership. Do not dispatch another Worker.')
+                          'nor ownership. For operation-exit, read the owned operation result, reconcile the actual next phase or blocker in the existing checkpoint, then acknowledge; exit is not Issue completion. Do not dispatch another Worker.')
             else:
                 action = ('Invoke $squad-dispatcher for one bounded reconciliation cycle within the configured WIP. '
                           'decision-request needs the current recorded design decision (decision-set for an adopted assignment) and its durable wake, '
