@@ -157,3 +157,10 @@ reconciliation; never target an implicit current workspace.
 
 For an assignment migrated to versioned decisions, read
 [current decisions and recovery](references/decision-recovery.md).
+
+If installed `operation run/status` is available, use its owned-command contract
+for a long command whose result must resume this native session; see
+[delivery lifecycle](../../../../docs/reference/delivery-lifecycle.md).
+Read `operation-exit` as an observation: reconcile the actual result/next phase
+under the current decision before ACK. It grants no retry, deployment or closure
+authority. A skill synchronization alone does not activate a new binary feature.

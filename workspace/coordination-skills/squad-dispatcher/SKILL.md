@@ -458,3 +458,11 @@ Review readiness is a phase signal independent of merge release. Preserve
 source/test/review progress during merge holds, and track readiness-to-start
 delay through the rolling planner. Resolve costly cross-repository contract
 questions during design admission; do not postpone them until final code review.
+
+When supported by the installed binary, use `dispatch delivery` for a joined
+read-only state and `dispatch retire-partial` for an already handled blocked
+execution with verified released custody. Read the
+[delivery lifecycle command contract](../../../docs/reference/delivery-lifecycle.md)
+before mutation. These commands do not add approval gates or waive external
+operation checks. Without installed capability, retain explicit custody and route
+the gap rather than inventing a completed Issue.

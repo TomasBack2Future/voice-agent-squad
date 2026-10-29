@@ -61,7 +61,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newForceReleaseCmd())
 	root.AddCommand(newRecoverCmd())
 	root.AddCommand(newReassignCmd())
-	root.AddCommand(newDispatchCmd())
+	root.AddCommand(newDispatchCmd(), newCloseoutCmd(), newOperationCmd())
 	root.AddCommand(newSayCmd())
 	root.AddCommand(newAskCmd())
 	root.AddCommand(newChattyCmd(thinkingVerb))

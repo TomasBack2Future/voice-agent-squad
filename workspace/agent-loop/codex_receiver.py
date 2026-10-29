@@ -19,7 +19,7 @@ from codex_heartbeat import heartbeat, CustodyRejected, require_execution_fence
 from validate_context_package import ROOT, ValidationError, validate_file
 from codex_writer_fence import writer_intent, writer_record
 
-EVENT = re.compile(r'worker-terminal-v1/([A-Za-z0-9_-]+)/([1-9][0-9]*)/([A-Za-z0-9_-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed|runtime-failure)/([1-9][0-9]*)(/[A-Za-z0-9_.-]{1,128})?\Z')
+EVENT = re.compile(r'worker-terminal-v1/([A-Za-z0-9_-]+)/([1-9][0-9]*)/([A-Za-z0-9_-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed|runtime-failure|operation-exit)/([1-9][0-9]*)(/[A-Za-z0-9_.-]{1,128})?\Z')
 
 
 def process_start(pid):
@@ -52,10 +52,11 @@ def validate_events(receipt, c):
         if not match or (match[4], int(match[5])) != (event.get('kind'), event.get('outcome_id')):
             raise ValidationError('malformed fenced event')
         if c['role'] == 'worker':
-            if (match[1], int(match[2]), match[3], match[4], event.get('item_id')) != (
-                    c['reservation'], c['generation'], c['native_session_id'], 'decision-resolved', c['item']):
+            if ((match[1], int(match[2]), match[3], event.get('item_id')) != (
+                    c['reservation'], c['generation'], c['native_session_id'], c['item'])
+                    or match[4] not in ('decision-resolved', 'operation-exit')):
                 raise ValidationError('event does not belong to this Worker assignment')
-        elif c['role'] != 'dispatcher' or match[4] == 'decision-resolved':
+        elif c['role'] != 'dispatcher' or match[4] in ('decision-resolved', 'operation-exit'):
             raise ValidationError('event has the wrong receiver role')
     return receipt['events']
 
@@ -64,6 +65,7 @@ def message(event, c):
     if c['role'] == 'worker':
         action = ('Read terminal-events decision-get for the latest adopted revision, or the canonical Issue '
                   'for an unmigrated assignment. Verify generation and reclaim normally before protected writes. '
+                  'For operation-exit, read the owned result and reconcile the next phase or blocker in the existing checkpoint before ACK. '
                   'Continue only this assigned work; no new Worker or authority.')
     else:
         action = ('Invoke $squad-dispatcher for one bounded reconciliation cycle. Re-read current decisions, '

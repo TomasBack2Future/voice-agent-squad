@@ -10,7 +10,7 @@ import (
 var readCommands = strings.Fields("version whoami status who next inbox ready claim-inspect history stats touches")
 var writeCommands = strings.Fields("register new accept reject claim release done handoff blocked say ask thinking stuck milestone fyi progress review-request tick heartbeat touch untouch")
 var controllerCommands = strings.Fields("dispatch terminal-events resources")
-var readTools = strings.Fields("squad_whoami squad_status squad_who squad_next squad_list_items squad_get_item squad_claim_inspect squad_history squad_stats squad_resources_check squad_terminal_decision_get")
+var readTools = strings.Fields("squad_whoami squad_status squad_who squad_next squad_list_items squad_get_item squad_claim_inspect squad_history squad_stats squad_resources_check squad_terminal_decision_get squad_dispatch_delivery")
 var writeTools = strings.Fields("squad_register squad_new squad_accept squad_reject squad_done squad_handoff squad_claim squad_release squad_blocked squad_say squad_ask squad_tick squad_progress squad_review_request squad_heartbeat squad_touch squad_untouch squad_terminal_events_poll squad_terminal_events_publish squad_terminal_events_ack squad_terminal_events_delivered")
 var controllerTools = strings.Fields("squad_dispatch_controller_bind squad_dispatch_controller_status squad_dispatch_receiver_preflight squad_dispatch_continue squad_terminal_decision_set")
 
