@@ -16,7 +16,7 @@ func TestOwnedOperationExitWakesOriginalWorkerAndRemainsPendingUntilHandled(t *t
 			if _, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo','TASK','worker',1,1)`); err != nil {
 				t.Fatal(err)
 			}
-			q := OperationRequest{Reservation: "DISPATCH-1", Generation: 1, WorkerSession: "worker-session", RequestKey: "cleanup"}
+			q := OperationRequest{Reservation: "DISPATCH-1", Generation: 1, WorkerSession: "worker-session", RequestKey: "cleanup", Phase: "cleanup", Revision: "exact-sha", ResumeStep: "inspect cleanup result"}
 			opts := attest.RunOpts{ItemID: "TASK", Kind: attest.KindTest, AgentID: "worker", Command: "exit " + string(rune('0'+code)), RepoRoot: t.TempDir(), AttDir: filepath.Join(t.TempDir(), "evidence")}
 			r, err := s.RunOperation(context.Background(), "worker", q, opts)
 			if err != nil || r.ExitCode != code || r.EventID == "" {
@@ -47,6 +47,11 @@ func TestOwnedOperationExitWakesOriginalWorkerAndRemainsPendingUntilHandled(t *t
 			_ = s.DB.QueryRow(`SELECT count(*) FROM attestations`).Scan(&n)
 			if n != 1 {
 				t.Fatalf("command reran %d", n)
+			}
+			changed := q
+			changed.Revision = "other-sha"
+			if _, err = s.RunOperation(context.Background(), "worker", changed, opts); err == nil {
+				t.Fatal("changed revision reused operation key")
 			}
 			opts.Command = "exit 1"
 			if _, err = s.RunOperation(context.Background(), "worker", q, opts); err == nil {

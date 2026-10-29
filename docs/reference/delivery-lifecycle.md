@@ -10,7 +10,9 @@ help before using them; updating skills does not install a new binary.
 
 `squad dispatch delivery KEY [--issue-observation FILE]` returns independent
 Issue, item, reservation, decision, retained claims and latest command-result
-fields. MCP: `squad_dispatch_delivery` (`reservation`, optional `issue`).
+fields, plus recorded operation phase/revision, resume action and evidence reference.
+Missing operation provenance remains `unknown`; caller-provided phase references
+are not proof of downstream handling or deployed revision. MCP: `squad_dispatch_delivery` (`reservation`, optional `issue`).
 An observation is `{ "source_ref":"github:owner/repo#123", "state":"OPEN",
 "verified_at":1790000000 }`, obtained by an authorized read of that exact Issue.
 It is caller-supplied evidence, not acceptance or closure authority. A missing
@@ -86,11 +88,14 @@ wraps a command explicitly, with identity/custody and decision checks:
 
 ```json
 {"identity":{"reservation":"DISPATCH-PRODUCT-123","generation":1,
- "worker_session":"native-session","expected_decision":2,"request_key":"cleanup-1"},
+ "worker_session":"native-session","expected_decision":2,"request_key":"cleanup-1",
+ "phase":"cleanup","revision":"exact-revision","resume_step":"inspect cleanup result"},
  "kind":"test","argv":["go","test","./internal/example"],"timeout_seconds":600}
 ```
 
-Use a client-native tracked background task for a long command. No permanent
+Optional `phase`, `revision` and `resume_step` are bounded single-line references
+saved with the operation and included in its request digest. Changed provenance
+under the same key is rejected. Use a client-native tracked background task for a long command. No permanent
 watcher is created. A durable start precedes execution; exit records reference
 captured attestation evidence and enqueue `operation-exit` for the original
 Worker's qualified native receiver. Timeout preserves a failed result even when

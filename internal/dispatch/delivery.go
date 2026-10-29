@@ -19,6 +19,11 @@ type IssueObservation struct {
 type DeliveryStatus struct {
 	ExecutionDisposition  string      `json:"execution_disposition"`
 	WorkerState           string      `json:"worker_state"`
+	Phase                 string      `json:"phase"`
+	Revision              string      `json:"revision"`
+	NextAction            string      `json:"next_action"`
+	OperationReference    string      `json:"operation_reference,omitempty"`
+	OperationAttestation  int64       `json:"operation_attestation,omitempty"`
 	OperationState        string      `json:"operation_state"`
 	OperationRecordedAt   int64       `json:"operation_recorded_at,omitempty"`
 	PendingOperationExits int         `json:"pending_operation_exits"`
@@ -44,6 +49,7 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 		return nil, err
 	}
 	out := &DeliveryStatus{Reservation: *r, ExecutionDisposition: r.State, IssueState: "unknown", WorkerState: "unknown", OperationState: "unknown", ItemState: "unknown", Claims: []string{}, Drift: []string{}, NextOwner: r.ReservedBy, VerifiedAt: s.now().Unix()}
+	out.Phase, out.Revision, out.NextAction = "unknown", "unknown", "unknown"
 	if observed.Source != "" && observed.Source != r.SourceRef {
 		return nil, fmt.Errorf("issue observation source does not match reservation")
 	}
@@ -107,9 +113,27 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 	}
 	if err == nil {
 		var observed struct {
-			State string `json:"state"`
+			State         string `json:"state"`
+			AttestationID int64  `json:"attestation_id"`
+			Request       struct {
+				Phase      string `json:"phase"`
+				Revision   string `json:"revision"`
+				ResumeStep string `json:"resume_step"`
+				RequestKey string `json:"request_key"`
+			} `json:"request"`
 		}
 		if json.Unmarshal([]byte(operation), &observed) == nil {
+			if observed.Request.Phase != "" {
+				out.Phase = observed.Request.Phase
+			}
+			if observed.Request.Revision != "" {
+				out.Revision = observed.Request.Revision
+			}
+			if observed.Request.ResumeStep != "" {
+				out.NextAction = observed.Request.ResumeStep
+			}
+			out.OperationReference = observed.Request.RequestKey
+			out.OperationAttestation = observed.AttestationID
 			switch observed.State {
 			case "started":
 				out.OperationState = "started-unresolved"

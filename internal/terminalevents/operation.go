@@ -20,6 +20,9 @@ type OperationRequest struct {
 	WorkerSession    string `json:"worker_session"`
 	ExpectedDecision int64  `json:"expected_decision"`
 	RequestKey       string `json:"request_key"`
+	Phase            string `json:"phase,omitempty"`
+	Revision         string `json:"revision,omitempty"`
+	ResumeStep       string `json:"resume_step,omitempty"`
 }
 type OperationResult struct {
 	Request       OperationRequest `json:"request"`
@@ -55,11 +58,17 @@ func (s Store) RunOperation(ctx context.Context, actor string, q OperationReques
 	if s.Repo == "" || actor == "" || opts.AgentID != actor || q.Generation < 1 || q.RequestKey == "" || len(q.RequestKey) > 96 || strings.ContainsAny(q.RequestKey, "/\x00") {
 		return result, fmt.Errorf("bound operation identity and stable request key required")
 	}
+	for _, field := range []string{q.Phase, q.Revision, q.ResumeStep} {
+		if len(field) > 512 || strings.ContainsAny(field, "\x00\r\n") {
+			return result, fmt.Errorf("operation phase, revision and resume step must be bounded single-line references")
+		}
+	}
 	raw, _ := json.Marshal(struct {
-		Command             string
-		Argv                []string
-		WorkDir, Root, Kind string
-	}{opts.Command, opts.Argv, opts.WorkDir, opts.RepoRoot, string(opts.Kind)})
+		Command                     string
+		Argv                        []string
+		WorkDir, Root, Kind         string
+		Phase, Revision, ResumeStep string
+	}{opts.Command, opts.Argv, opts.WorkDir, opts.RepoRoot, string(opts.Kind), q.Phase, q.Revision, q.ResumeStep})
 	sum := sha256.Sum256(raw)
 	hash := hex.EncodeToString(sum[:])
 	item := ""
