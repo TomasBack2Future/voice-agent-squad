@@ -56,14 +56,14 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 		if e = tx.QueryRowContext(ctx, `SELECT status FROM items WHERE repo_id=? AND item_id=?`, s.repoID, current.CanonicalItemID).Scan(&status); e != nil || status != "blocked" {
 			return fmt.Errorf("canonical item must remain blocked")
 		}
-		if e = tx.QueryRowContext(ctx, `SELECT worker_agent,action FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, current.ItemID, current.Generation, current.CanonicalItemID).Scan(&worker, &action); e != nil || worker == "" || action != "hold" {
-			return fmt.Errorf("original Worker must be fenced by its current hold decision")
+		if e = tx.QueryRowContext(ctx, `SELECT worker_agent,action FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, current.ItemID, current.Generation, current.CanonicalItemID).Scan(&worker, &action); e != nil || worker == "" || (current.State == "dispatched" && action != "hold") {
+			return fmt.Errorf("original active Worker must be fenced by its current hold decision")
 		}
 		var n int
 		if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e JOIN messages m ON m.id=e.outcome_id AND m.repo_id=e.repo_id WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.recipient=? AND e.item_id=? AND e.kind='blocked' AND e.outcome_id=? AND e.processed_at>0 AND m.agent_id=?`, s.repoID, current.ItemID, current.Generation, current.WorkerThreadID, actor, current.CanonicalItemID, q.BlockedOutcome, worker).Scan(&n); e != nil || n != 1 {
 			return fmt.Errorf("original Worker's blocked outcome must be handled by its owner")
 		}
-		if e = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM claims WHERE repo_id=? AND agent_id=?)+(SELECT count(*) FROM execution_authorizations WHERE repo_id=? AND holder=? AND state='active')`, s.repoID, worker, s.repoID, worker).Scan(&n); e != nil {
+		if e = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM claims WHERE repo_id=? AND (agent_id=? OR item_id=?))+(SELECT count(*) FROM execution_authorizations WHERE repo_id=? AND holder=? AND state='active')`, s.repoID, worker, current.CanonicalItemID, s.repoID, worker).Scan(&n); e != nil {
 			return e
 		}
 		if n != 0 {
@@ -79,8 +79,18 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 		if _, e = tx.ExecContext(ctx, `INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?,'partial-retirement',?,'[]','normal')`, s.repoID, now, actor, current.CanonicalItemID, string(body)); e != nil {
 			return e
 		}
-		_, e = tx.ExecContext(ctx, `UPDATE dispatch_reservations SET state='failed',note=?,updated_at=?,expires_at=0 WHERE repo_id=? AND item_id=? AND reserved_by=? AND generation=?`, "Partial delivery; Issue OPEN; see partial-retirement audit outcome", now, s.repoID, current.ItemID, actor, current.Generation)
-		return e
+		result, e := tx.ExecContext(ctx, `UPDATE dispatch_reservations SET state='failed',note=?,updated_at=?,expires_at=0 WHERE repo_id=? AND item_id=? AND reserved_by=? AND generation=? AND state=? AND worker_thread_id=? AND canonical_item_id=?`, "Partial delivery; Issue OPEN; see partial-retirement audit outcome", now, s.repoID, current.ItemID, actor, current.Generation, current.State, current.WorkerThreadID, current.CanonicalItemID)
+		if e != nil {
+			return e
+		}
+		n64, e := result.RowsAffected()
+		if e != nil {
+			return e
+		}
+		if n64 != 1 {
+			return fmt.Errorf("partial retirement was not applied; read current reservation")
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

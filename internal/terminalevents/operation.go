@@ -139,6 +139,7 @@ func (s Store) RunOperation(ctx context.Context, actor string, q OperationReques
 			result.State = "exited-without-evidence"
 		default:
 			result.State = "result-unavailable"
+			result.ExitCode = -1
 		}
 	}
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

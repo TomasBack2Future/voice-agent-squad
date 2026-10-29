@@ -107,7 +107,9 @@ func (l *Ledger) run(ctx context.Context, opts RunOpts, observed *Execution) (Re
 	observed.Started = true
 	runErr := cmd.Wait()
 	if cmd.ProcessState != nil {
-		observed.Joined = true
+		// WaitDelay can leave an owned descendant holding the pipes after
+		// the direct child exits. Retain unresolved custody in that case.
+		observed.Joined = !errors.Is(runErr, exec.ErrWaitDelay)
 		observed.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	exitCode := observed.ExitCode

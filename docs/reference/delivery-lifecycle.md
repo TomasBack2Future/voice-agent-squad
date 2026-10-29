@@ -75,9 +75,13 @@ reservation returned by list), `issue` (fresh matching OPEN observation), and
 `blocked_outcome` (the original Worker's handled blocked event).
 
 This is an audited transition from dispatched or erroneously completed to the
-existing failed state, labelled partial delivery. It requires the current hold,
-matching native/generation/actor, blocked canonical item, handled outcome and no
-held claims/active execution pins. It does not close the Issue or invent a done
+existing failed state, labelled partial delivery. A dispatched assignment requires
+its current hold. A completed assignment is already excluded by current-decision
+lookup and new-operation admission; do not manufacture a new work decision to
+retire it. Both paths require matching native/generation/actor, blocked canonical
+item, handled original outcome, no retained Worker claims/active execution pins
+and no other claimant of the canonical item. Audit and the exact one-row
+reservation update commit together; an unapplied update rolls back the audit. It does not close the Issue or invent a done
 item. A new authorized continuation can use existing reserve/attach/bind with
 next generation and the same canonical item. A process exit or Issue observation
 alone never qualifies retirement. Unmanaged external operation custody still
@@ -110,14 +114,20 @@ result handling, and neither supplies missing acceptance evidence. After handlin
 they do not leave phantom live custody blocking closeout or partial retirement.
 A corrected, already-authorized command uses a new key; the failed key never
 runs again. `result-unavailable` remains unresolved when a started process has
-no proven join. A missing result is never converted to success. On Unix cancellation targets the process group created
+no proven join. `exec.ErrWaitDelay` also retains this state: the direct child
+may have exited while a descendant still holds its pipes. ACK does not remove
+that unresolved custody. A successful command result is not proof that an
+independent background service or external workflow stopped; its original owner
+still verifies that custody. A missing result is never converted to success. On Unix cancellation targets the process group created
 by that invocation; Windows descendant supervision is unqualified.
 
 `squad operation status --request IDENTITY.json` (local MCP
 `squad_operation_status`, `request`) reads the saved record. A start without a
 terminal result is unresolved and refuses automatic rerun. A changed command
 under the same request key is rejected. Changed generation/native/custody cannot
-receive an old exit. Results remain durable when routing needs reconciliation.
+receive an old exit. The original Worker may still deliver/handle its recorded
+operation exit after the same reservation reaches completed. This reconciliation
+permission does not reopen execution or deliver a new work decision. Results remain durable when routing needs reconciliation.
 
 The Worker reads its effective decision and real result, updates the next phase
 or blocker in its existing checkpoint, then ACKs the event with that reference.

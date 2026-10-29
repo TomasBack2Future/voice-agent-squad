@@ -52,10 +52,11 @@ func TestPartialRetirementRejectsUnsafeAndStaleInputs(t *testing.T) {
 		name, sql string
 		change    func(*PartialRetirement)
 	}{
+		{"other-primary-owner", `INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo-test','T','intruder',1,1)`, nil},
 		{"retained-env", `INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo-test','ENV-001','worker',1,1)`, nil},
 		{"unhandled-event", `UPDATE terminal_event_receipts SET processed_at=0`, nil},
 		{"other-worker", `UPDATE messages SET agent_id='intruder'`, nil},
-		{"not-held", `UPDATE dispatch_decisions SET action='proceed'`, nil},
+		{"not-held", `UPDATE dispatch_decisions SET action='proceed'; UPDATE dispatch_reservations SET state='dispatched'`, func(q *PartialRetirement) { q.Expected.State = "dispatched" }},
 		{"item-done", `UPDATE items SET status='done'`, nil},
 		{"changed-generation", `UPDATE dispatch_reservations SET generation=2`, nil},
 		{"closed-issue", "", func(q *PartialRetirement) { q.Issue.State = "CLOSED" }},
@@ -85,5 +86,30 @@ func TestPartialRetirementRejectsUnsafeAndStaleInputs(t *testing.T) {
 	s, q := partialFixture(t)
 	if _, err := s.RetirePartial(context.Background(), "intruder", q); err == nil {
 		t.Fatal("wrong owner accepted")
+	}
+}
+
+func TestPartialCompletedExecutionNeedsNoNewHoldDecision(t *testing.T) {
+	s, q := partialFixture(t)
+	if _, err := s.db.Exec(`UPDATE dispatch_decisions SET action='proceed'`); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.RetirePartial(context.Background(), "owner", q)
+	if err != nil || r.State != "failed" {
+		t.Fatalf("terminal execution cannot reconcile original blocked result: %+v %v", r, err)
+	}
+}
+
+func TestPartialRetirementRollsBackAuditWhenUpdateIsNotApplied(t *testing.T) {
+	s, q := partialFixture(t)
+	if _, err := s.db.Exec(`CREATE TRIGGER suppress_retirement BEFORE UPDATE ON dispatch_reservations BEGIN SELECT RAISE(IGNORE); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RetirePartial(context.Background(), "owner", q); err == nil {
+		t.Fatal("zero-row retirement reported success")
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM messages WHERE kind='partial-retirement'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("unapplied transition left audit: %d %v", n, err)
 	}
 }

@@ -4,6 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -194,5 +198,88 @@ func TestKnownOperationFailuresDoNotLeaveUnresolvedCustody(t *testing.T) {
 				t.Fatalf("same key reran or lost process: %q %v", data, readErr)
 			}
 		})
+	}
+}
+
+func TestOwnedExitRemainsHandleableAfterCompletion(t *testing.T) {
+	for _, deliveredBefore := range []bool{false, true} {
+		t.Run(map[bool]string{false: "late-delivery", true: "late-ack"}[deliveredBefore], func(t *testing.T) {
+			s := fixture(t)
+			if _, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo','TASK','worker',1,1)`); err != nil {
+				t.Fatal(err)
+			}
+			q := OperationRequest{Reservation: "DISPATCH-1", Generation: 1, WorkerSession: "worker-session", RequestKey: "completed"}
+			r, err := s.RunOperation(context.Background(), "worker", q, attest.RunOpts{ItemID: "TASK", AgentID: "worker", Kind: attest.KindTest, Command: "exit 0", RepoRoot: t.TempDir(), AttDir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker"}
+			if deliveredBefore {
+				if err = worker.Delivered(context.Background(), r.EventID, "inc"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = s.DB.Exec(`UPDATE dispatch_reservations SET state='completed'; INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','TASK','worker',1,2,'partial');DELETE FROM claims`); err != nil {
+				t.Fatal(err)
+			}
+			if !deliveredBefore {
+				events, err := worker.Pending(context.Background(), "inc", 0)
+				if err != nil || len(events) != 1 {
+					t.Fatalf("completed exit hidden: %+v %v", events, err)
+				}
+				if err = worker.Delivered(context.Background(), r.EventID, "inc"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = worker.Ack(context.Background(), r.EventID, "checkpoint: original completed execution result handled; no new work"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.RunOperation(context.Background(), "worker", q, attest.RunOpts{ItemID: "TASK", AgentID: "worker", Kind: attest.KindTest, Command: "exit 0", RepoRoot: t.TempDir(), AttDir: t.TempDir()}); err == nil {
+				t.Fatal("result handling granted new execution after completion")
+			}
+		})
+	}
+}
+
+func TestLiveDescendantWaitDelayRetainsUnresolvedCustody(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix descendant fixture; Windows supervision unqualified")
+	}
+	s := fixture(t)
+	if _, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo','TASK','worker',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	q := OperationRequest{Reservation: "DISPATCH-1", Generation: 1, WorkerSession: "worker-session", RequestKey: "descendant"}
+	r, err := s.RunOperation(context.Background(), "worker", q, attest.RunOpts{ItemID: "TASK", AgentID: "worker", Kind: attest.KindTest, Command: "sleep 30 & echo $! > descendant.pid", RepoRoot: root, AttDir: filepath.Join(root, "evidence")})
+	raw, readErr := os.ReadFile(filepath.Join(root, "descendant.pid"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if parseErr != nil || pid <= 0 {
+		t.Fatalf("invalid owned fixture PID: %q %v", raw, parseErr)
+	}
+	child, findErr := os.FindProcess(pid)
+	if findErr != nil {
+		t.Fatal(findErr)
+	}
+	defer func() { _ = child.Kill() }()
+	if aliveErr := child.Signal(syscall.Signal(0)); aliveErr != nil {
+		t.Fatalf("fixture descendant unexpectedly terminal: %v", aliveErr)
+	}
+	if err == nil || r.State != "result-unavailable" || r.ExitCode != -1 || r.EventID == "" {
+		t.Fatalf("incomplete group treated as joined: %+v %v", r, err)
+	}
+	worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker"}
+	if err = worker.Delivered(context.Background(), r.EventID, "inc"); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.Ack(context.Background(), r.EventID, "checkpoint: WaitDelay with live owned descendant; retain custody, no retry or closure"); err != nil {
+		t.Fatal(err)
+	}
+	unresolved, err := store.UnresolvedOperation(context.Background(), s.DB, s.Repo, "worker", q.Reservation, q.WorkerSession, q.Generation)
+	if err != nil || !unresolved {
+		t.Fatalf("ACK removed unknown descendant custody fence: %v %v", unresolved, err)
 	}
 }

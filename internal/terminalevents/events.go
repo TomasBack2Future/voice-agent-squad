@@ -255,7 +255,7 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
  ON r.repo_id=e.repo_id AND r.item_id=e.reservation_key AND r.generation=e.generation
  AND r.worker_thread_id=e.worker_session
  AND r.state IN ('dispatched','completed')
- AND (r.reserved_by=e.recipient OR (e.kind IN ('decision-resolved','operation-exit') AND r.state='dispatched' AND EXISTS
+ AND (r.reserved_by=e.recipient OR (e.kind IN ('decision-resolved','operation-exit') AND (e.kind='operation-exit' OR r.state='dispatched') AND EXISTS
  (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id=e.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=e.repo_id AND c.item_id=e.item_id AND c.agent_id!=e.recipient AND c.claimed_at>=r.reserved_at)))
  WHERE e.repo_id=? AND e.recipient=? AND e.processed_at=0
  AND (e.kind NOT IN ('decision-resolved','operation-exit') OR e.item_id=r.canonical_item_id)
@@ -295,7 +295,7 @@ func (s Store) Delivered(ctx context.Context, id, session string) error {
  AND r.worker_thread_id=terminal_event_receipts.worker_session
  AND r.state IN ('dispatched','completed')
  AND (terminal_event_receipts.kind NOT IN ('decision-resolved','operation-exit') OR terminal_event_receipts.item_id=r.canonical_item_id)
- AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind IN ('decision-resolved','operation-exit') AND r.state='dispatched' AND EXISTS
+ AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind IN ('decision-resolved','operation-exit') AND (terminal_event_receipts.kind='operation-exit' OR r.state='dispatched') AND EXISTS
  (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id!=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, session, time.Now().Unix(), s.Repo, s.Recipient, id)
 		if err != nil {
 			return err
@@ -329,7 +329,7 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
  AND r.worker_thread_id=terminal_event_receipts.worker_session
  AND r.state IN ('dispatched','completed')
  AND (terminal_event_receipts.kind NOT IN ('decision-resolved','operation-exit') OR terminal_event_receipts.item_id=r.canonical_item_id)
- AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind IN ('decision-resolved','operation-exit') AND r.state='dispatched' AND EXISTS
+ AND (r.reserved_by=terminal_event_receipts.recipient OR (terminal_event_receipts.kind IN ('decision-resolved','operation-exit') AND (terminal_event_receipts.kind='operation-exit' OR r.state='dispatched') AND EXISTS
  (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at) AND NOT EXISTS (SELECT 1 FROM (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id!=terminal_event_receipts.recipient AND c.claimed_at>=r.reserved_at))))`, time.Now().Unix(), note, s.Repo, s.Recipient, id)
 		if err != nil {
 			return err
