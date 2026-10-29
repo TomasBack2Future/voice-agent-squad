@@ -11,6 +11,9 @@ help before using them; updating skills does not install a new binary.
 `squad dispatch delivery KEY [--issue-observation FILE]` returns independent
 Issue, item, reservation, decision, retained claims and latest command-result
 fields, plus recorded operation phase/revision, resume action and evidence reference.
+`unresolved_operations` names every current unresolved request on that exact
+assignment (bounded to 100), even when a newer request has already exited.
+`owned-operation-unresolved` flags that drift independently of the latest result.
 Missing operation provenance remains `unknown`; caller-provided phase references
 are not proof of downstream handling or deployed revision. MCP: `squad_dispatch_delivery` (`reservation`, optional `issue`).
 An observation is `{ "source_ref":"github:owner/repo#123", "state":"OPEN",
@@ -100,7 +103,14 @@ watcher is created. A durable start precedes execution; exit records reference
 captured attestation evidence and enqueue `operation-exit` for the original
 Worker's qualified native receiver. Timeout preserves a failed result even when
 the execution context is cancelled. Quiet failure evidence cannot deduplicate
-against quiet success. On Unix cancellation targets the process group created
+against quiet success. Process custody and evidence persistence are separate:
+`not-started` proves launch did not occur; `exited-without-evidence` retains the
+observed exit code when evidence saving fails. Both still require original-owner
+result handling, and neither supplies missing acceptance evidence. After handling,
+they do not leave phantom live custody blocking closeout or partial retirement.
+A corrected, already-authorized command uses a new key; the failed key never
+runs again. `result-unavailable` remains unresolved when a started process has
+no proven join. A missing result is never converted to success. On Unix cancellation targets the process group created
 by that invocation; Windows descendant supervision is unqualified.
 
 `squad operation status --request IDENTITY.json` (local MCP

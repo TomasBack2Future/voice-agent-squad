@@ -27,7 +27,26 @@ type RunOpts struct {
 	OperationKey string // Assigned by the owned-operation wrapper, not copied into evidence.
 }
 
+// Execution separates process custody from evidence persistence. A failed
+// evidence write cannot erase an observed exit or invent a live process.
+type Execution struct {
+	Started  bool
+	Joined   bool
+	ExitCode int
+}
+
 func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
+	rec, _, err := l.RunObserved(ctx, opts)
+	return rec, err
+}
+
+func (l *Ledger) RunObserved(ctx context.Context, opts RunOpts) (Record, Execution, error) {
+	observed := Execution{ExitCode: -1}
+	rec, err := l.run(ctx, opts, &observed)
+	return rec, observed, err
+}
+
+func (l *Ledger) run(ctx context.Context, opts RunOpts, observed *Execution) (Record, error) {
 	if opts.ItemID == "" || opts.AgentID == "" || opts.AttDir == "" {
 		return Record{}, fmt.Errorf("attest.Run: ItemID, AgentID, AttDir required")
 	}
@@ -82,8 +101,17 @@ func (l *Ledger) Run(ctx context.Context, opts RunOpts) (Record, error) {
 	cmd.Dir = workDir
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
-	exitCode := 0
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return Record{}, fmt.Errorf("attest.Run exec: %w (output: %s)", err, buf.String())
+	}
+	observed.Started = true
+	runErr := cmd.Wait()
+	if cmd.ProcessState != nil {
+		observed.Joined = true
+		observed.ExitCode = cmd.ProcessState.ExitCode()
+	}
+	exitCode := observed.ExitCode
+	if err := runErr; err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			exitCode = ee.ExitCode()

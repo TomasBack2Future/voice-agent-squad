@@ -2,11 +2,13 @@ package terminalevents
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/zsiec/squad/internal/attest"
+	"github.com/zsiec/squad/internal/store"
 )
 
 func TestOwnedOperationExitWakesOriginalWorkerAndRemainsPendingUntilHandled(t *testing.T) {
@@ -143,5 +145,54 @@ func TestOperationEventCannotBeForgedOrDeliveredToSuccessor(t *testing.T) {
 	}
 	if err = worker.Delivered(context.Background(), r.EventID, "old-native"); err == nil {
 		t.Fatal("recorded stale delivery")
+	}
+}
+
+func TestKnownOperationFailuresDoNotLeaveUnresolvedCustody(t *testing.T) {
+	for _, before := range []bool{false, true} {
+		t.Run(map[bool]string{false: "evidence-write", true: "before-start"}[before], func(t *testing.T) {
+			s := fixture(t)
+			if _, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo','TASK','worker',1,1)`); err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			evidence := filepath.Join(root, "evidence")
+			if err := os.WriteFile(evidence, []byte("occupied"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			q := OperationRequest{Reservation: "DISPATCH-1", Generation: 1, WorkerSession: "worker-session", RequestKey: "failure"}
+			opts := attest.RunOpts{ItemID: "TASK", AgentID: "worker", Kind: attest.KindTest, Command: "echo ran >> marker; exit 7", RepoRoot: root, AttDir: evidence}
+			state, exit := "exited-without-evidence", 7
+			if before {
+				opts.WorkDir = "relative"
+				state, exit = "not-started", -1
+			}
+			r, err := s.RunOperation(context.Background(), "worker", q, opts)
+			if err == nil || r.State != state || r.ExitCode != exit || r.EventID == "" {
+				t.Fatalf("lost known outcome %+v %v", r, err)
+			}
+			worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker"}
+			if err = worker.Delivered(context.Background(), r.EventID, "inc"); err != nil {
+				t.Fatal(err)
+			}
+			if err = worker.Ack(context.Background(), r.EventID, "checkpoint: known command failure handled; evidence missing, retry only under a new authorized key"); err != nil {
+				t.Fatal(err)
+			}
+			unresolved, err := store.UnresolvedOperation(context.Background(), s.DB, s.Repo, "worker", q.Reservation, q.WorkerSession, q.Generation)
+			if err != nil || unresolved {
+				t.Fatalf("known joined/not-started result wedges custody: %v %v", unresolved, err)
+			}
+			if _, err = s.RunOperation(context.Background(), "worker", q, opts); err != nil {
+				t.Fatal(err)
+			}
+			data, readErr := os.ReadFile(filepath.Join(root, "marker"))
+			if before {
+				if !os.IsNotExist(readErr) {
+					t.Fatalf("command ran before validation: %q %v", data, readErr)
+				}
+			} else if readErr != nil || string(data) != "ran\n" {
+				t.Fatalf("same key reran or lost process: %q %v", data, readErr)
+			}
+		})
 	}
 }

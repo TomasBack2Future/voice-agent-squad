@@ -126,13 +126,20 @@ func (s Store) RunOperation(ctx context.Context, actor string, q OperationReques
 		return s.Operation(ctx, actor, q)
 	}
 	opts.OperationKey = q.Reservation + "/" + fmt.Sprint(q.Generation) + "/" + q.WorkerSession + "/" + q.RequestKey
-	rec, runErr := attest.New(s.DB, s.Repo, nil).Run(ctx, opts)
+	rec, execution, runErr := attest.New(s.DB, s.Repo, nil).RunObserved(ctx, opts)
 	result.State = "exited"
 	result.AttestationID = rec.ID
 	result.ExitCode = rec.ExitCode
 	if runErr != nil && rec.ID == 0 {
-		result.State = "result-unavailable"
-		result.ExitCode = -1
+		result.ExitCode = execution.ExitCode
+		switch {
+		case !execution.Started:
+			result.State = "not-started"
+		case execution.Joined:
+			result.State = "exited-without-evidence"
+		default:
+			result.State = "result-unavailable"
+		}
 	}
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()

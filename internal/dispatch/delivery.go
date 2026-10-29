@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/zsiec/squad/internal/store"
 )
 
 // IssueObservation is a timestamped external observation, never closure authority.
@@ -26,6 +28,7 @@ type DeliveryStatus struct {
 	OperationAttestation  int64       `json:"operation_attestation,omitempty"`
 	OperationState        string      `json:"operation_state"`
 	OperationRecordedAt   int64       `json:"operation_recorded_at,omitempty"`
+	UnresolvedOperations  []string    `json:"unresolved_operations"`
 	PendingOperationExits int         `json:"pending_operation_exits"`
 	Reservation           Reservation `json:"reservation"`
 	IssueState            string      `json:"issue_state"`
@@ -142,10 +145,17 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 			switch observed.State {
 			case "started":
 				out.OperationState = "started-unresolved"
-			case "exited", "result-unavailable":
+			case "exited", "result-unavailable", "not-started", "exited-without-evidence":
 				out.OperationState = observed.State
 			}
 		}
+	}
+	out.UnresolvedOperations, err = store.UnresolvedOperationKeys(ctx, s.db, s.repoID, "", key, r.WorkerThreadID, r.Generation)
+	if err != nil {
+		return nil, err
+	}
+	if len(out.UnresolvedOperations) > 0 {
+		out.Drift = append(out.Drift, "owned-operation-unresolved")
 	}
 	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND worker_session=? AND kind='operation-exit' AND processed_at=0`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&out.PendingOperationExits); err != nil {
 		return nil, err

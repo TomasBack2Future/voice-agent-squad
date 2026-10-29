@@ -77,3 +77,48 @@ func TestDeliveryProjectsRecordedOperationProvenance(t *testing.T) {
 		t.Fatalf("stale provenance: %+v %v", got, err)
 	}
 }
+
+func TestDeliverySurfacesEarlierUnresolvedOperation(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	if _, err := s.Reserve(ctx, "D", "github:o/r#1", "owner", "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE dispatch_reservations SET canonical_item_id='T',worker_thread_id='native'; INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',1000,'worker','T','owned-operation','{"request":{"reservation":"D","generation":1,"worker_session":"native","request_key":"old"},"state":"started"}','[]','normal'),('repo-test',1000,'worker','T','owned-operation','{"request":{"reservation":"D","generation":1,"worker_session":"native","request_key":"new"},"state":"exited"}','[]','normal')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Delivery(ctx, "D", IssueObservation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, drift := range got.Drift {
+		found = found || drift == "owned-operation-unresolved"
+	}
+	if got.OperationState != "exited" || !found || len(got.UnresolvedOperations) != 1 || got.UnresolvedOperations[0] != "old" {
+		t.Fatalf("older unresolved start hidden by new exit: %+v", got)
+	}
+	if _, err = s.db.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',1000,'worker','T','owned-operation','{"request":{"reservation":"D","generation":1,"worker_session":"native","request_key":"old"},"state":"exited"}','[]','normal')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Delivery(ctx, "D", IssueObservation{})
+	if err != nil || len(got.UnresolvedOperations) != 0 {
+		t.Fatalf("resolved old key still pending: %+v %v", got, err)
+	}
+}
+
+func TestDeliveryUnresolvedRequestOutputIsBounded(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	if _, err := s.Reserve(ctx, "D", "github:o/r#1", "owner", "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE dispatch_reservations SET worker_thread_id='native'; WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<101) INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) SELECT 'repo-test',1000,'worker','T','owned-operation',json_object('request',json_object('reservation','D','generation',1,'worker_session','native','request_key','key-'||i),'state','started'),'[]','normal' FROM n`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Delivery(ctx, "D", IssueObservation{}); err == nil {
+		t.Fatal("unbounded unresolved request output")
+	}
+}
