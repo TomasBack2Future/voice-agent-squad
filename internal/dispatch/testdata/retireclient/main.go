@@ -27,6 +27,14 @@ func main() {
 	if err := child.Start(); err != nil {
 		os.Exit(3)
 	}
+	if argv := os.Getenv("FIXTURE_CALLER"); argv != "" {
+		caller := exec.Command("/bin/sh", "-c", argv)
+		caller.Env = os.Environ()
+		caller.Stdout, caller.Stderr = os.Stdout, os.Stderr
+		if err := caller.Start(); err != nil {
+			os.Exit(4)
+		}
+	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM)
 	for {

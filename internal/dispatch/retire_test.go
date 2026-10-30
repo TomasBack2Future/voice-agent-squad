@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/zsiec/squad/internal/store"
 )
 
 var (
@@ -334,5 +336,60 @@ func TestColorIsNotClearedForNonTerminalAssignments(t *testing.T) {
 	run := func(context.Context, string) error { called = true; return nil }
 	if _, err := s.RetireColor(context.Background(), "dispatcher", req(native), "2DCB442A-9B79-4FC2-9BF6-125E4073DBA6", run); err == nil || called {
 		t.Fatal("blue workspace of live assignment must stay", err)
+	}
+}
+
+// A Worker (or launcher supervisor) that runs retirement from inside the client's
+// own process tree is an ancestor/descendant of the target; it must not wait on itself.
+func TestRetireFromInsideTheClientsTreeDoesNotWaitOnItself(t *testing.T) {
+	if os.Getenv("RETIRE_CALLER_DB") != "" {
+		db, err := store.Open(os.Getenv("RETIRE_CALLER_DB"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := New(db, "repo-test", nil)
+		s.retireWait = 3 * time.Second
+		out, err := s.RetireClient(context.Background(), "worker", false, req(os.Getenv("RETIRE_CALLER_NATIVE")))
+		if err != nil || out.State != "exited" {
+			t.Fatal(out, err)
+		}
+		return
+	}
+	native := "native-inside"
+	path := filepath.Join(t.TempDir(), "global.db")
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(10000, 0)
+	s := New(db, "repo-test", func() time.Time { return now })
+	t.Cleanup(func() { _ = db.Close() })
+	for _, q := range []string{
+		`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES('repo-test','D','github:o/r#1','dispatcher',1,1,0,'completed',1,'` + native + `','','T')`,
+		`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo-test','T','worker',2,3,'done')`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := "RETIRE_CALLER_DB=" + path + " RETIRE_CALLER_NATIVE=" + native + " " + exe + " -test.run=TestRetireFromInsideTheClientsTreeDoesNotWaitOnItself -test.count=1"
+	client := startClient(t, native, "FIXTURE_CALLER="+caller)
+	select {
+	case <-client.exited:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the in-tree caller never retired its client")
+	}
+	var st *RetirementStatus
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if st, _ = s.Retirement(context.Background(), req(native)); st != nil && st.ClientExit.State != "running" {
+			break
+		}
+	}
+	if st == nil || st.ClientExit.State != "exited" {
+		t.Fatalf("%+v", st)
 	}
 }

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,14 +34,55 @@ func processStart(ctx context.Context, pid int) string {
 }
 
 func ownedAlive(ctx context.Context, p ownedProcess) bool {
-	if p.start == "" {
+	if ctx.Err() != nil {
+		return true // unknown is never "gone"
+	}
+	if err := syscall.Kill(p.pid, 0); errors.Is(err, syscall.ESRCH) {
 		return false
 	}
-	stat, err := legacyPS(ctx, p.pid, "stat")
-	if err != nil || stat == "" || strings.HasPrefix(stat, "Z") {
+	if stat, err := legacyPS(ctx, p.pid, "stat"); err == nil && strings.HasPrefix(stat, "Z") {
 		return false
 	}
-	return processStart(ctx, p.pid) == p.start
+	if p.start != "" {
+		if now := processStart(ctx, p.pid); now != "" && now != p.start {
+			return false // the PID now belongs to a different process
+		}
+	}
+	return true
+}
+
+// ownProcessTable returns pid->ppid and the own-user pids whose argv is unreadable.
+func ownProcessTable(ctx context.Context) (map[int]int, []int, error) {
+	raw, err := exec.CommandContext(ctx, "/bin/ps", "-axo", "pid=,ppid=,uid=").Output()
+	if err != nil {
+		return nil, nil, err
+	}
+	parents := map[int]int{}
+	var unreadable []int
+	self := os.Getuid()
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		pid, e1 := strconv.Atoi(f[0])
+		ppid, e2 := strconv.Atoi(f[1])
+		uid, e3 := strconv.Atoi(f[2])
+		if e1 != nil || e2 != nil || e3 != nil {
+			continue
+		}
+		parents[pid] = ppid
+		if uid == self {
+			if args, e := legacyProcessArguments(pid); e != nil || len(args) == 0 {
+				if syscall.Kill(pid, 0) == nil {
+					if stat, e := legacyPS(ctx, pid, "stat"); e == nil && !strings.HasPrefix(stat, "Z") {
+						unreadable = append(unreadable, pid)
+					}
+				}
+			}
+		}
+	}
+	return parents, unreadable, nil
 }
 
 func descendants(parents map[int]int, root int) []int {
@@ -86,9 +130,16 @@ func (s *Store) terminateClient(ctx context.Context, q RetirementRequest) (strin
 	if wait <= 0 {
 		wait = 20 * time.Second
 	}
-	parents, err := legacyProcessParents(ctx)
+	parents, unreadable, err := ownProcessTable(ctx)
 	if err != nil {
 		return "failed", "process table unavailable"
+	}
+	if len(unreadable) > 0 {
+		return "failed", "cannot read arguments of own-user processes " + pidList(unreadable) + "; retry"
+	}
+	ancestors := map[int]bool{}
+	for pid := os.Getpid(); pid > 1 && !ancestors[pid]; pid = parents[pid] {
+		ancestors[pid] = true
 	}
 	var clients []int
 	var helpers []ownedProcess
@@ -134,11 +185,14 @@ func (s *Store) terminateClient(ctx context.Context, q RetirementRequest) (strin
 		}
 	}
 	var remaining []string
+	deadline := time.Now().Add(wait)
 	for _, h := range helpers {
-		if h.pid == client.pidOrZero() {
+		// The caller and its ancestors (e.g. the launcher supervisor blocked on
+		// this very call, or a Worker shell) can never leave before we return.
+		if h.pid == client.pidOrZero() || ancestors[h.pid] {
 			continue
 		}
-		if !waitGone(ctx, wait, h) {
+		if !waitGone(ctx, time.Until(deadline), h) {
 			remaining = append(remaining, fmt.Sprintf("%s:%d", h.role, h.pid))
 		}
 	}
@@ -173,7 +227,7 @@ func waitGone(ctx context.Context, bound time.Duration, p ownedProcess) bool {
 		if !ownedAlive(ctx, p) {
 			return true
 		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
+		if !time.Now().Before(deadline) || ctx.Err() != nil {
 			return false
 		}
 		time.Sleep(100 * time.Millisecond)

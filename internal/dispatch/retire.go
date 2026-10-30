@@ -327,8 +327,6 @@ func pidList(pids []int) string {
 	return strings.Join(s, ",")
 }
 
-var _ = time.Second
-
 var workspaceUUID = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
 // ColorRunner performs the presentation-only clear-color action for one explicit
