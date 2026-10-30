@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -115,15 +116,41 @@ func newExecutionCmd() *cobra.Command {
 		if len(token) < 32 || len(token) > 512 || strings.ContainsAny(token, " \t\r\n") {
 			return errors.New("token must contain 32-512 non-whitespace bytes")
 		}
+		// A missing gh or credentials is a start-up defect, not something to
+		// discover at /begin; a GitHub outage is reported but does not stop us.
+		if err := execution.CheckStartup(cmd.Context()); err != nil {
+			if execution.StartupFatal(err) {
+				return fmt.Errorf("execution_startup_failed: %s (gh must be on PATH with credentials reachable via HOME or GH_CONFIG_DIR; see `squad execution launchd-plist`)", err)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "execution admission start-up warning: %s\n", err)
+		}
 		bc, err := bootClaimContext(cmd.Context())
 		if err != nil {
 			return err
 		}
 		defer bc.Close()
-		handler := execution.Handler(execution.New(bc.db, bc.repoID, nil), token, func(r *http.Request, q execution.Request) error {
+		// Bind before announcing anything: a taken port is a failed start, never a
+		// "listening" line, and the occupant is identified, not stopped.
+		listener, err := net.Listen("tcp", listen)
+		if err != nil {
+			if !errors.Is(err, syscall.EADDRINUSE) {
+				return err
+			}
+			if cert != "" {
+				return fmt.Errorf("listener_conflict: %s is already in use by a listener that cannot be identified over TLS; it was not touched", listen)
+			}
+			switch execution.ProbeListener(cmd.Context(), listen, token, bc.repoID) {
+			case execution.ListenerSameService:
+				return fmt.Errorf("listener_conflict: %s is already served by this ledger's admission service; no second instance was started", listen)
+			default:
+				return fmt.Errorf("listener_conflict: %s is in use by a different listener that is not this ledger's admission service; it was not touched", listen)
+			}
+		}
+		store := execution.New(bc.db, bc.repoID, nil)
+		handler := execution.HandlerWithDiagnostics(store, token, func(r *http.Request, q execution.Request) error {
 			return execution.VerifyGitHubRun(r.Context(), q.Binding, q.RunID, q.RunAttempt, false)
-		})
-		server := &http.Server{Addr: listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 25 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
+		}, execution.VerifyGitHubLookup)
+		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 25 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 		done := make(chan struct{})
 		defer close(done)
 		go func() {
@@ -135,11 +162,11 @@ func newExecutionCmd() *cobra.Command {
 			case <-done:
 			}
 		}()
-		fmt.Fprintf(cmd.ErrOrStderr(), "execution admission listening on %s; repo %s\n", listen, bc.repoID)
+		fmt.Fprintf(cmd.ErrOrStderr(), "execution admission listening on %s; repo %s\n", listener.Addr(), bc.repoID)
 		if cert != "" {
-			err = server.ListenAndServeTLS(cert, key)
+			err = server.ServeTLS(listener, cert, key)
 		} else {
-			err = server.ListenAndServe()
+			err = server.Serve(listener)
 		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -151,5 +178,6 @@ func newExecutionCmd() *cobra.Command {
 	serve.Flags().StringVar(&cert, "tls-cert", "", "TLS certificate file")
 	serve.Flags().StringVar(&key, "tls-key", "", "TLS private key file")
 	root.AddCommand(serve)
+	root.AddCommand(newExecutionLaunchdCmd())
 	return root
 }
