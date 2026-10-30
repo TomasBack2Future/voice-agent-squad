@@ -118,6 +118,53 @@ Serving a network listener remains a CLI process operation. Their arguments are
 `binding`; `id`; and `id/run_id/run_attempt/evidence/confirm_external_stopped`,
 respectively. No tool grants broader production authorization.
 
+## Start-up environment, readiness and failure classes
+
+The service uses its own `gh` for the GitHub run lookup, so a launchd job must not
+depend on an interactive shell. Print the canonical job instead of hand-writing it:
+
+```sh
+squad execution launchd-plist --squad-binary /abs/squad --token-file /abs/admission.token \
+  --working-dir /abs/ledger-repo --squad-home /abs/.squad --gh /opt/homebrew/bin/gh \
+  --log-dir /abs/logs > com.example.admission.plist
+```
+
+The command is pure: it validates absolute paths, an executable `gh`, an existing
+`GH_CONFIG_DIR` and an owner-only token file, never reads the token, and installs
+or restarts nothing. The job pins `HOME`, `GH_CONFIG_DIR`, a `PATH` that starts at
+`gh`'s directory, the ledger as `WorkingDirectory` and `KeepAlive.SuccessfulExit=false`.
+A job that omits `HOME`/`GH_CONFIG_DIR` makes `gh` answer "not logged in" (exit 4);
+a `PATH` without `gh` cannot run it at all. Installing the generated job is a
+separate owner operation.
+
+`serve` checks the same environment before it listens. A missing `gh` or credentials
+exits non-zero with `execution_startup_failed: tool_missing|credential_missing`;
+a GitHub outage is a warning because `/readiness` reports it. The listener is bound
+**before** "listening" is printed. If the address is taken, `serve` challenges the
+occupant (`GET /v1/executions/identity?nonce=`, an HMAC keyed by the token and ledger
+id, so the token is never sent) and exits with `listener_conflict`, naming either this
+ledger's own service or a different listener. It never signals or replaces a process.
+
+`POST /v1/executions/readiness` with `{"repository":"owner/repo"}` and the bearer
+token is the dispatch-time diagnostic. It reads the ledger's claim and authorization
+tables and performs one bounded Actions read through the service's own `gh`; it
+never begins, checks, pins, reconciles or writes. `200` carries `ready: true`; `503`
+carries `ready: false` and one `class`. An authenticated empty `/check` answering
+409 only proves authentication and routing and is not readiness.
+
+Failures reach the runner as a sanitized `class` only (never stderr, paths, headers,
+tokens or response bodies):
+
+| class | status | meaning |
+| --- | --- | --- |
+| `tool_missing` | 503 | `gh` is not on the service's `PATH` |
+| `credential_missing` | 503 | `gh` has no usable credentials (missing `HOME`/`GH_CONFIG_DIR`, rejected token) |
+| `github_unavailable` | 503 | the Actions API could not be read (outage, timeout, no access) |
+| `ledger_unavailable` | 503 | the claim or authorization tables could not be read |
+| `run_mismatch` | 403 | GitHub answered but the run, attempt, workflow or SHA does not match |
+| `authorization_rejected` | 409 | the binding, claim holder, generation, scope or run pin was refused |
+| `diagnostics_unavailable` | 503 | the service has no run verifier / diagnostics wired |
+
 ## Limits
 
 This fences cooperative workflow writes and ledger ownership. It is not a sandbox
