@@ -106,4 +106,39 @@ func registerDeliveryTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		}
 		return dispatch.New(db, repoID, nil).RetirePartial(ctx, actor, a.Request)
 	}})
+	retirementSchema := json.RawMessage(`{"type":"object","required":["reservation","generation","worker_session"],"properties":{"reservation":{"type":"string"},"generation":{"type":"integer"},"worker_session":{"type":"string"},"agent_id":{"type":"string"}},"additionalProperties":false}`)
+	srv.Register(mcp.Tool{Name: "squad_dispatch_retirement", Description: "Read terminal client-retirement eligibility and recorded client-exit/color steps; no ledger writes.", InputSchema: retirementSchema, Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			dispatch.RetirementRequest
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		return dispatch.New(db, repoID, nil).Retirement(ctx, a.RetirementRequest)
+	}})
+	srv.Register(mcp.Tool{Name: "squad_dispatch_retire_client", Description: "Local-only: normally end the finished assignment's own Claude client; original Worker or owning Dispatcher; gated on terminal custody.", InputSchema: retirementSchema, Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var a struct {
+			dispatch.RetirementRequest
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			return nil, err
+		}
+		if err := requireRepo(repoRoot, repoID); err != nil {
+			return nil, err
+		}
+		actor, err := resolveAgentID(a.AgentID)
+		if err != nil {
+			return nil, err
+		}
+		controller, err := retirementController(ctx, &claimContext{db: db, repoID: repoID, agentID: actor}, a.RetirementRequest)
+		if err != nil {
+			return nil, err
+		}
+		return dispatch.New(db, repoID, nil).RetireClient(ctx, actor, controller, a.RetirementRequest)
+	}})
 }

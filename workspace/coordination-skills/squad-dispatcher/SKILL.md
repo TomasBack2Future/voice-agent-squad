@@ -394,6 +394,13 @@ Worker workspace Blue. During existing reconciliation, retain Blue for all
 nonterminal assignments and clear the color for verified terminal assignments
 with resolved claims/external operations, even if the terminal session remains
 open. Project this for existing mapped Workers when the skill is reloaded.
+During the same cycle, for each terminal assignment whose `squad dispatch retirement`
+is eligible and whose client-exit step is not yet successful, run `squad dispatch
+retire-client` (when the installed executable has it) for the exact reservation,
+generation and Worker native read from the ledger and cmux mapping now, then
+`retire-color`. Never retire a held, dispatched, fenced or claim-holding assignment,
+never from an old PID, and never by name or port. Report `exit-timeout`,
+`helpers-remain` and color failures as they are.
 This authorized presentation update needs no Worker message or extra role;
 never infer completion from a quiet screen or failed process alone.
 

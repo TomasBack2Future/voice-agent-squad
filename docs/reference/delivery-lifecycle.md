@@ -88,6 +88,41 @@ alone never qualifies retirement. Unmanaged external operation custody still
 requires the original owner's verification; absence from this ledger is not
 proof that those operations stopped. Remote mutation remains disabled.
 
+## Finished-client retirement
+
+Task completion, client exit and workspace color are three recorded results.
+They reuse the reservation, claims, terminal events and existing messages; no new
+ledger, daemon, timer or approval is added. `squad dispatch retirement
+--reservation KEY --generation N --worker-session NATIVE` (MCP
+`squad_dispatch_retirement`) reads eligibility and each step without writing.
+
+A client is eligible only when the exact reservation/generation/native is
+`completed` or `cancelled` (or `failed` with a recorded partial-retirement handoff),
+no Worker claim or ENV remains, no owned operation or terminal event is unresolved,
+no active execution custody or native fence exists, and no human hold decision
+applies (a partial retirement's fencing hold is its audited handoff). An Issue
+being CLOSED, a Stop hook, an ACK, a quiet terminal or a failed heartbeat never
+qualify; an OPEN Issue with a verified partial handoff may still retire its client.
+
+`squad dispatch retire-client` (local MCP `squad_dispatch_retire_client`) may be
+run by the original Worker (its bound native) or the owning Dispatcher controller.
+It re-checks eligibility and the client's argv/kernel identity immediately before
+sending SIGTERM to the one process whose `--session-id`/`--resume` is that native,
+then waits for it and its own helpers (descendants, the native's
+`receiver-<native>` process, and the launcher supervisor). It never signals by name,
+port or PID range and never uses SIGKILL. Results: `exited`, `already-exited`,
+`exit-timeout` (client retained), `helpers-remain` (client left, named helper
+processes still run) or `failed`. An `intent` receipt precedes the signal; a live
+intent holds a two-minute lease, a crashed one is re-entered, and a successful
+step is never repeated. The Claude launcher supervisor calls it when lease renewal
+is rejected and keeps asking until the ledger permits; the Dispatcher calls it in
+its existing reconciliation for clients whose launcher predates this behavior.
+
+`squad dispatch retire-color` clears the explicit Worker workspace color through
+cmux (Dispatcher only; `--workspace UUID`, automation access required) after the
+same eligibility, with its own receipt. A color failure does not affect, repair or
+imitate client exit. Windows, history, worktrees and resume data stay.
+
 ## Owned command result delivery
 
 `squad operation run --request FILE` (local MCP `squad_operation_run`, `operation`)

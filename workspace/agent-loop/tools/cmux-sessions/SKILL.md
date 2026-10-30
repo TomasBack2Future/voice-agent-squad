@@ -136,6 +136,11 @@ recorded workspace. A stopped client with unresolved claims or rollout stays
 colored until recovery/handoff is reconciled. An Issue may remain open after a
 valid terminal handoff; color indicates this Worker's assignment, not Issue closure.
 
+When the installed executable has `squad dispatch retire-color`, use it instead of
+the raw action: it applies the terminal gate and records the result separately from
+client exit (`squad dispatch retirement` shows both). Never clear a color or exit a
+client from the raw cmux action to imitate a retirement result.
+
 Color failure must not block delivery, alter claims, resend assignments or inject
 terminal input. Record a bounded diagnostic and retry on the next existing cycle;
 a closed/missing workspace needs no recreation. Persist the desired/applied color
