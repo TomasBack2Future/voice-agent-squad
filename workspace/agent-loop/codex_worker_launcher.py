@@ -323,6 +323,8 @@ def argv(c, worktree, prompt):
     return [c['client_executable'], '--remote', c['endpoint'], '--model', c['model'],
             '-c', 'model_provider=' + json.dumps(c['provider']),
             '-c', 'model_reasoning_effort=' + json.dumps(c['effort']),
+            '-c', 'model_verbosity="low"',
+            '-c', 'hide_agent_reasoning=true',
             '-c', 'approvals_reviewer=' + json.dumps(c['approvals_reviewer']),
             '--sandbox', c['sandbox'], '--ask-for-approval', c['approval_policy'],
             '--cd', worktree, 'resume', c['native_session_id'], prompt]

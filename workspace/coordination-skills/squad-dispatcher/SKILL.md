@@ -5,6 +5,10 @@ description: "Run one bounded central-dispatch reconciliation cycle for Squad: o
 
 # Squad Dispatcher
 
+Read [role communication](../../agent-loop/communication.md) at startup and
+resume. Explain impact, supported cause or uncertainty, next action and owner;
+Worker brevity defaults must not replace a clear Dispatcher explanation.
+
 Apply [runtime-independent roles](../../agent-loop/runtime-compatibility.md).
 The Dispatcher and each assigned role may use Muse, Claude or Codex; require
 equivalent operation-specific capabilities and preserve current custody.

@@ -1,6 +1,6 @@
 ---
 name: squad-evidence-requirement
-description: Every "tests pass" / "build green" / "feature works" claim needs the actual command output pasted into the conversation. Bare assertions are worth zero.
+description: Support verification claims with durable command evidence and the relevant literal result line; keep full logs out of routine summaries.
 allowed-tools:
   - Bash
   - Read
@@ -10,6 +10,10 @@ disable-model-invocation: false
 # Evidence requirement
 
 A claim is not done because you are confident it is done. A claim is done when the verification artifact for that claim exists in the conversation, in machine-readable form, that anyone reading later could re-run themselves.
+
+Keep the full captured output in the existing evidence record or item thread;
+human summaries link to that record and quote only the relevant literal result
+when required. Do not repeat the same log in progress updates and the final reply.
 
 ## When to use this skill
 
@@ -50,7 +54,7 @@ The paste is also a forcing function on you. If you cannot paste a green line, y
 1. Run the verification through `squad attest <ITEM-ID> --kind <kind> --command "..."`. The binary executes the command and writes captured output into the durable ledger.
 2. Read the captured output. Find the line that summarizes the result.
 3. Paste that line, in a code block, into the conversation directly under the attest invocation that produced it.
-4. If the line is buried in noise, paste the noise too — others may need it for diagnosis.
+4. If the line is buried in noise, retain the full captured output in the attestation and link it; paste only the relevant result or bounded failure excerpt.
 5. If the command failed, paste the failure block verbatim and stop. Do not move on.
 
 ## Anti-patterns to avoid
