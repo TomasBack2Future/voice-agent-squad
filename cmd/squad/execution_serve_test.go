@@ -30,6 +30,9 @@ func (s *serveOutput) String() string { s.mu.Lock(); defer s.mu.Unlock(); return
 // no HOME, a PATH holding only a controllable gh stand-in.
 type serveFixture struct {
 	bin, repo, squadHome, token, ghDir string
+	// ghDirOnly drops the system directories so a gh installed there (as on CI
+	// runners) cannot be found.
+	ghDirOnly bool
 }
 
 func newServeFixture(t *testing.T, gh string) serveFixture {
@@ -54,7 +57,11 @@ func (f serveFixture) start(t *testing.T, listen string) (*exec.Cmd, *serveOutpu
 	t.Cleanup(cancel)
 	cmd := exec.CommandContext(ctx, f.bin, "execution", "serve", "--listen", listen, "--token-file", f.token)
 	cmd.Dir = f.repo
-	cmd.Env = []string{"PATH=" + f.ghDir + ":/usr/bin:/bin", "SQUAD_HOME=" + f.squadHome, "SQUAD_AGENT=svc", "SQUAD_SESSION_ID=svc", "SQUAD_NO_AUTO_DAEMON=1", "SQUAD_NO_HYGIENE=1"}
+	path := f.ghDir + ":/usr/bin:/bin"
+	if f.ghDirOnly {
+		path = f.ghDir
+	}
+	cmd.Env = []string{"PATH=" + path, "SQUAD_HOME=" + f.squadHome, "SQUAD_AGENT=svc", "SQUAD_SESSION_ID=svc", "SQUAD_NO_AUTO_DAEMON=1", "SQUAD_NO_HYGIENE=1"}
 	out := &serveOutput{}
 	cmd.Stderr, cmd.Stdout = out, out
 	if err := cmd.Start(); err != nil {
@@ -101,6 +108,7 @@ func TestServeRefusesToStartWithoutCredentials(t *testing.T) {
 func TestServeRefusesToStartWithoutGH(t *testing.T) {
 	f := newServeFixture(t, "exit 0")
 	_ = os.Remove(filepath.Join(f.ghDir, "gh"))
+	f.ghDirOnly = true
 	cmd, out := f.start(t, freeAddr(t))
 	if err := waitExit(t, cmd); err == nil || !strings.Contains(out.String(), "execution_startup_failed: tool_missing") {
 		t.Fatalf("err %v output %q", err, out.String())
