@@ -224,6 +224,26 @@ def heartbeat(assignment: dict, c: dict, env: dict, check: bool = False) -> None
                               + '): ' + diagnostic(result.stderr or result.stdout) + '; no claim reacquired')
 
 
+TICK_SECONDS = 30
+
+
+def retire_client(assignment: dict, c: dict, env: dict) -> str:
+    """Ask the ledger to end this launcher's own finished client; the ledger gates it.
+
+    Heartbeat rejection alone never authorizes an exit: the exact reservation,
+    native and generation must be terminal with custody released.
+    """
+    argv = [c['coordination_executable'], 'dispatch', 'retire-client', '--reservation', assignment['reservation']['key'],
+            '--generation', str(assignment['reservation']['generation']), '--worker-session', c['native_session_id']]
+    result = subprocess.run(argv, cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        return 'refused: ' + diagnostic(result.stderr or result.stdout)
+    try:
+        return json.loads(result.stdout).get('state', 'unknown')
+    except ValueError:
+        return 'unknown'
+
+
 def supervise(argv: list[str], assignment: dict, c: dict, env: dict) -> int:
     # The launcher remains the receiver owner. The native client inherits the
     # terminal/process group; no detached timer can outlive its parent Worker.
@@ -234,9 +254,12 @@ def supervise(argv: list[str], assignment: dict, c: dict, env: dict) -> int:
         previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
             renewing = True
+            retiring = False
+            attempts = 0
+            last = None
             while True:
                 try:
-                    return child.wait(timeout=30)
+                    return child.wait(timeout=TICK_SECONDS)
                 except subprocess.TimeoutExpired:
                     if renewing:
                         try:
@@ -247,6 +270,19 @@ def supervise(argv: list[str], assignment: dict, c: dict, env: dict) -> int:
                             print('Squad heartbeat stopped: runtime/fence failure. Claims were not released; '
                                   'reconcile this assignment before reuse. ' + diagnostic(str(error)), file=sys.stderr)
                             renewing = False
+                            retiring = True
+                    if retiring and attempts < 5:
+                        # A rejected renewal is only a prompt to ask; the ledger's
+                        # terminal gate decides, and retains the client otherwise.
+                        try:
+                            state = retire_client(assignment, c, env)
+                        except (OSError, subprocess.SubprocessError) as error:
+                            state = 'unavailable: ' + diagnostic(str(error))
+                        if state in ('exit-timeout', 'helpers-remain', 'failed', 'unknown'):
+                            attempts += 1
+                        if state != last:
+                            print('Squad client retirement: ' + state, file=sys.stderr)
+                            last = state
         finally:
             signal.signal(signal.SIGINT, previous)
 

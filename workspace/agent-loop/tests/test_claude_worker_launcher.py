@@ -253,11 +253,68 @@ class HeartbeatSupervisorTests(unittest.TestCase):
         from unittest.mock import MagicMock
         client = MagicMock()
         client.wait.side_effect = [subprocess.TimeoutExpired('client',30), subprocess.TimeoutExpired('client',30), 0]
-        with patch.object(launcher.subprocess, 'Popen') as spawn, patch.object(launcher, 'heartbeat', side_effect=[None, ValueError('stale')]) as beat:
+        with patch.object(launcher.subprocess, 'Popen') as spawn, patch.object(launcher, 'heartbeat', side_effect=[None, ValueError('stale')]) as beat, \
+                patch.object(launcher, 'retire_client', return_value='refused: claims-retained') as retire:
             spawn.return_value.__enter__.return_value = client
             self.assertEqual(launcher.supervise(['client'], {'worktree':'/tmp'}, {}, {}), 0)
             self.assertEqual(beat.call_count, 2)
             client.terminate.assert_not_called()
+            client.kill.assert_not_called()
+            self.assertEqual(retire.call_count, 2)
+
+    def test_healthy_heartbeat_never_asks_for_retirement(self):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.wait.side_effect = [subprocess.TimeoutExpired('client',30), 0]
+        with patch.object(launcher.subprocess, 'Popen') as spawn, patch.object(launcher, 'heartbeat'), \
+                patch.object(launcher, 'retire_client') as retire:
+            spawn.return_value.__enter__.return_value = client
+            launcher.supervise(['client'], {'worktree':'/tmp'}, {}, {})
+            retire.assert_not_called()
+
+    def test_retirement_request_is_bound_to_exact_assignment_and_never_signals_from_python(self):
+        assignment = {'reservation': {'key': 'DISPATCH-X-1', 'generation': 2}}
+        c = {'coordination_executable': '/squad', 'ledger_directory': '/ledger', 'native_session_id': 'native-1'}
+        done = subprocess.CompletedProcess([], 0, '{"state":"exited"}', '')
+        with patch.object(launcher.subprocess, 'run', return_value=done) as run:
+            self.assertEqual(launcher.retire_client(assignment, c, {}), 'exited')
+            self.assertEqual(run.call_args.args[0], ['/squad', 'dispatch', 'retire-client', '--reservation', 'DISPATCH-X-1',
+                                                    '--generation', '2', '--worker-session', 'native-1'])
+        refused = subprocess.CompletedProcess([], 1, '', 'retirement not permitted: claims-retained')
+        with patch.object(launcher.subprocess, 'run', return_value=refused):
+            self.assertTrue(launcher.retire_client(assignment, c, {}).startswith('refused'))
+
+    def test_retirement_keeps_asking_until_terminal_then_client_exit_ends_supervision(self):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.wait.side_effect = [subprocess.TimeoutExpired('client',30)] * 3 + [0]
+        with patch.object(launcher.subprocess, 'Popen') as spawn, patch.object(launcher, 'heartbeat', side_effect=[None, ValueError('stale')]), \
+                patch.object(launcher, 'retire_client', side_effect=['refused: reservation-not-terminal', 'exited', 'exited']) as retire:
+            spawn.return_value.__enter__.return_value = client
+            self.assertEqual(launcher.supervise(['client'], {'worktree':'/tmp'}, {}, {}), 0)
+            self.assertEqual(retire.call_count, 3)
+
+    def test_real_subprocess_leaves_when_ledger_authorizes_retirement(self):
+        import tempfile, os, stat
+        with tempfile.TemporaryDirectory() as d:
+            pidfile = Path(d) / 'pid'
+            fake = Path(d) / 'squad'
+            fake.write_text('#!/bin/sh\n'
+                            'if [ "$2" = retire-client ]; then kill -TERM "$(cat %s)"; echo \'{"state":"exited"}\'; exit 0; fi\n'
+                            'case "$*" in *--check*) exit 0;; esac\n'
+                            '[ "$1" = heartbeat ] && exit 1\nexit 0\n' % pidfile)
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            a = {'worktree': d, 'reservation': {'key': 'K', 'generation': 1}}
+            c = {'coordination_executable': str(fake), 'ledger_directory': d, 'native_session_id': 'n1'}
+            real_popen = subprocess.Popen
+            def spawn(argv, *args, **kw):
+                if argv != ['client']:
+                    return real_popen(argv, *args, **kw)
+                child = real_popen([sys.executable, '-c', 'import time,signal,sys\nsignal.signal(signal.SIGTERM, lambda *a: sys.exit(0))\ntime.sleep(60)'], **kw)
+                pidfile.write_text(str(child.pid))
+                return child
+            with patch.object(launcher.subprocess, 'Popen', side_effect=spawn), patch.object(launcher, 'TICK_SECONDS', 0.3):
+                self.assertEqual(launcher.supervise(['client'], a, c, dict(os.environ)), 0)
 
     def test_preflight_rejects_missing_heartbeat_capability(self):
         with patch.object(launcher.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'old CLI help','')):
