@@ -48,6 +48,10 @@ p=pathlib.Path.cwd()
 with (p/'calls').open('a') as f:f.write('read\\n')
 if sys.argv[1]=='heartbeat':
  print('--reservation --generation --worker-session --check');sys.exit(0)
+if sys.argv[1:] == ['dispatch','retire-client','--help']:
+ print('--worker-session');sys.exit(0)
+if sys.argv[1]=='version':
+ print('0.0.0-stub');sys.exit(0)
 assert sys.argv[1:] == ['dispatch','list','--json']
 assert os.environ['SQUAD_AGENT']=='worker-test'
 assert os.environ['SQUAD_SESSION_ID'].startswith('claude:00000000-0000-4000-8000-000000000123:')
@@ -99,7 +103,7 @@ assert 'CODEX_SESSION_ID' not in os.environ
         self.assertEqual(json.loads(result.stdout)['workspace_trust']['status'], 'will-establish')
         self.assertFalse((self.root / 'claude-config/.claude.json').exists())
         self.assertFalse(self.started.exists())
-        self.assertEqual((self.ledger/'calls').read_text(), 'read\nread\n')
+        self.assertEqual((self.ledger/'calls').read_text(), 'read\nread\nread\n')  # heartbeat probe, retire-client probe, binding read
 
     def test_compat_environment_is_derived_from_child(self):
         self.prepare('codex-wrapper-compat')

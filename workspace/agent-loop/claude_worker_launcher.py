@@ -214,7 +214,11 @@ def check_heartbeat_runtime(c: dict, env: dict) -> None:
 def runtime_identity(c: dict, env: dict) -> dict:
     """Binary version and hash that this launch will actually execute for coordination."""
     path = Path(c['coordination_executable']).resolve()
-    out = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'version': 'unknown'}
+    out = {'path': str(path), 'sha256': 'unavailable', 'version': 'unknown'}
+    try:
+        out['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        pass
     try:
         result = subprocess.run([str(path), 'version'], cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
