@@ -26,9 +26,13 @@ CONTRACT_SUITES = (
     'test_recovery_matrix', 'test_runtime_entry', 'test_timeout_continuation',
     'test_codex_writer_fence', 'test_codex_stdio', 'test_delivery_readiness',
     'test_terminal_receiver_ledger', 'test_outcome_submit_decision',
+    'test_deployer_assignment', 'test_deployer_rehearsal',
 )
 NATIVE_SUITES = {('muse', 'worker'): ('test_muse_native', 'test_muse_worker_native')}
 NATIVE_SCOPE = {('muse', 'worker'): 'source-worker-new-resume-hold'}
+# Contract-level evidence a cell has, stated without promoting it to native qualification.
+CONTRACT_NOTES = {('claude', 'deployer'): 'isolated launch/bind/claim/decision/wake rehearsal runs in contract mode with a '
+                                          'scripted client; no native Claude model session or live ENV is qualified'}
 
 
 def native_coverage():
@@ -37,7 +41,8 @@ def native_coverage():
                  native_qualified=False,
                  scope=NATIVE_SCOPE.get((runtime, role)),
                  reason='explicit native execution required' if (runtime, role) in NATIVE_SUITES
-                 else 'no complete native role recovery suite; contract tests are insufficient')
+                 else CONTRACT_NOTES.get((runtime, role),
+                                         'no complete native role recovery suite; contract tests are insufficient'))
             for runtime in RUNTIMES for role in ROLES]
 
 

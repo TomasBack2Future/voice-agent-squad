@@ -1,0 +1,40 @@
+{
+  "schema_version": "agent-loop.deployer-assignment.v1",
+  "assignment_id": "studio-release/example/1",
+  "item": "REL-001",
+  "reservation": {
+    "key": "DISPATCH-RELEASE-EXAMPLE",
+    "generation": 1
+  },
+  "release": {
+    "id": "studio-example",
+    "repositories": [
+      {
+        "repository": "TomasBack2Future/voice-agent-studio",
+        "sha": "a33ade6b757c46002b85fd11cf8f3b709f195e14"
+      }
+    ],
+    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "operation": "production-rollout",
+    "target": "ENV-002"
+  },
+  "repository": "TomasBack2Future/voice-agent-studio",
+  "worktree": "/workspace/.worktrees/release-example",
+  "branch": "release/example",
+  "base_sha": "a33ade6b757c46002b85fd11cf8f3b709f195e14",
+  "role": {
+    "id": "deployer",
+    "skill": "studio-deploy-production",
+    "version": 1
+  },
+  "project_profile": {
+    "id": "studio",
+    "version": 1,
+    "path": "workspace/agent-loop/projects/studio/profile.json"
+  },
+  "authorization": {
+    "production": true,
+    "production_reference": "human:example-release-authorization"
+  },
+  "evidence_required": ["test", "manual"]
+}

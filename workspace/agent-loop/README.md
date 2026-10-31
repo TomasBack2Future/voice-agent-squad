@@ -13,7 +13,8 @@ proposals beyond the implemented surfaces listed here.
 [Runtime-independent roles](runtime-compatibility.md) defines equal operational
 requirements for Muse, Claude and Codex across Dispatcher, Worker, Deployer,
 Reviewer and Investigator. It is a normative contract, not a claim that every
-adapter is implemented or qualified. The Worker schema below stays Worker-only.
+adapter is implemented or qualified. The Worker schema below stays Worker-only;
+the Claude [Deployer launch](#claude-deployer-launch-source-only) has its own envelope.
 Qualify executable/version, client surface, effective policy and each required
 operation separately; use existing repair owners for missing capabilities.
 
@@ -195,6 +196,32 @@ This reproduces the dialog without trust and verifies interactive startup with
 only the exact worktree trusted, while main-checkout trust stays false. Qualify
 the selected native version before installation: Claude's trust-path resolution
 can change between versions. See [Claude's trust contract](https://code.claude.com/docs/en/permissions#project-allow-rules-and-workspace-trust).
+
+### Claude Deployer launch (source only)
+
+A release owner is a separate role with its own contract; the Worker envelope,
+preflight and launcher behavior are unchanged and a Deployer is never relabelled
+as a Worker. The same `claude_worker_launcher.py` and `worker_preflight.py`
+choose the contract from the assignment's `schema_version`:
+
+| Item | Deployer contract |
+| --- | --- |
+| Envelope | [`deployer-assignment.schema.json`](schemas/deployer-assignment.schema.json), example [`assignment.studio-deployer.json`](examples/assignment.studio-deployer.json). Names a frozen **release** (`id`, repositories with 40-hex SHAs, manifest SHA-256, operation, `target` ENV) instead of a GitHub Issue; `role` is `deployer` / `studio-deploy-production`; `authorization.production` is `true` with a typed `production_reference`. `base_sha` must equal the release revision of the assignment's repository |
+| Preflight | The profile's `release_skill` (`name`, `path`) is pinned; the client-visible skill must be byte-identical to the file committed at `base_sha`, and the Worker skill is never accepted instead. Claude only: Codex and Muse have no Deployer adapter |
+| Launch check | The reservation source must be `release:<release.id>` (a `github:` source cannot bind a Deployer). The release `target` must equal the profile's production ENV and pass the read-only `resources check <ENV> --require-policy`; the launcher **never claims** it. `resource_overrides`, `delivery_readiness_file` and `human_authorization` are Worker inputs and are refused |
+| Receiver and fence | The receiver configuration carries `role: deployer`, the same asyncRewake hooks and native fence as a Worker. The wake text tells the Deployer to read `decision-get`, verify the execution binding (`squad execution show`) and the ENV holder, generation and scope before any mutation, and states that a delivery or decision is not production authority. A receiver with an unknown role fails closed instead of receiving Dispatcher instructions |
+| Claim order | After binding, the only pre-claim tools are read-only tools and exactly one `squad claim <canonical release item>`; `claim ENV-…` before that is blocked. Once the canonical claim is held the ordinary fence applies and the Deployer claims the ENV itself. The ledger's `claim_concurrency` must allow at least two held claims. Heartbeats renew every claim held since the reservation |
+
+Execution authority is unchanged: ENV claim, `squad execution authorize/show/reconcile`
+and the protected workflow's admission check. Stop, handoff and takeover remain
+Worker-only and fail closed for a Deployer. The
+[isolated rehearsal](tests/test_deployer_rehearsal.py) runs launch check, bind,
+launch, fence, claims, decision CAS, receiver wake and readback with a real built
+binary, a fixture ledger/ENV-002 and a scripted client; run it with
+`python3 -m unittest discover -s workspace/agent-loop/tests -p test_deployer_rehearsal.py`.
+It is contract evidence: no native Claude model session, installation or live
+environment is involved, and installing this capability or adopting it for a live
+release are separate owner-controlled phases.
 
 ### Claude Dispatcher receiver custody
 
@@ -484,8 +511,9 @@ stopping heartbeats does not prevent a native tool or descendant from continuing
 to write after losing ownership. Neither `turn/interrupt` nor
 `session/setApprovalMode` is a persistent Squad-generation execution fence.
 Managed starts through this lifecycle probe fail before spawning a server or receiver;
-Deployer, Reviewer and Investigator execution has no adapter here. This does not
+Deployer, Reviewer and Investigator execution has no Muse adapter here. This does not
 exclude Muse from interactive roles under their ordinary operation authority.
+The Claude Deployer launch is documented separately above.
 
 One user-approved exception (#84, option B) reuses this host:
 `muse_recovery_executor.py` may continue an existing interactive `--yolo` Worker
@@ -1036,8 +1064,9 @@ history. The final request and startup use the actual `recovery.handoff` while
 assignment authorization stays in the original preparation. The old native
 stays fenced throughout; changed claim ownership, live writers or source drift
 still require reconciliation before a replacement can start.
-Unsupported App/terminal stop adapters and ENV/Deployer execution remain
-separate capability gates. Source tests do not establish live adoption.
+Unsupported App/terminal stop adapters and Codex/Muse Deployer execution remain
+separate capability gates; the Claude Deployer launch is source-qualified separately
+(see "Claude Deployer launch"). Source tests do not establish live adoption.
 
 For an existing Claude native, hook adoption is a separate post-install phase
 owned by its current Dispatcher. At the original session's safe boundary, verify
