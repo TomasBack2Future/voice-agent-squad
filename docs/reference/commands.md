@@ -1198,11 +1198,15 @@ at issue time, not at merge time.
 Each hook observation also records the `binary` (`version`, resolved `path`, executable
 `sha256`) of the squad executable that served that tool call. `worker-native-hook-get
 NATIVE` therefore shows which installed version the real native's most recent tool call
-actually used; a PATH link, file hash or receipt read does not prove adoption. The Claude
+actually used; a PATH link, file hash or receipt read does not prove adoption. The evidence is
+self-reported by the hook-configured executable (not an attestation), covers only the latest
+call of Claude natives, and says nothing about other binaries a Worker invokes; nothing in
+the repository consumes it automatically. The Claude
 launcher's `--check` receipt carries `runtime_identity` (path, sha256, version) of the
 coordination executable it will run and refuses a runtime lacking `dispatch retire-client`.
 Worker preflight refuses a profile that lives in a different immutable generation than the
-running helper (a moved `current` link), and its receipt records `helper_generation`,
+running helper (a moved `current` link) unless that generation ships a byte-identical profile
+schema; helpers or profiles outside an installed generation (source checkouts) are not checked, and its receipt records `helper_generation`,
 `profile_generation` and the profile `schema_sha256`.
 
 The same hook also guards a newly launched Worker, which has neither a decision
