@@ -7,6 +7,10 @@ import subprocess
 import sys
 
 
+class MergeBlocked(ValueError):
+    """A merge-class command lacks its structured release; the reason is safe to show."""
+
+
 def check(config, native, config_path, tool_name='', tool_command=''):
     if native != config['native_session_id']:
         raise ValueError('native fence hook identity differs from its selected client')
@@ -21,6 +25,9 @@ def check(config, native, config_path, tool_name='', tool_command=''):
                              '--tool-name', tool_name, '--tool-command', tool_command], cwd=config['ledger_directory'], env=env,
                             capture_output=True, text=True, timeout=10)
     if result.returncode:
+        marker = 'merge-release-required:'
+        if marker in result.stderr:
+            raise MergeBlocked(result.stderr[result.stderr.index(marker):].splitlines()[0][:400])
         raise ValueError('old native is fenced or ledger verification unavailable; retain custody and reconcile with its controller')
     receipt = json.loads(result.stdout)
     if receipt != {'state': 'eligible', 'native_session': native}:
@@ -43,6 +50,9 @@ def main():
         check(config, event.get('session_id'), args.config, str(event.get('tool_name') or ''),
               command if isinstance(command, str) else '')
         return 0
+    except MergeBlocked as error:
+        print('Squad native fence blocked this merge: ' + str(error), file=sys.stderr)
+        return 2
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         print('Squad native fence blocked this tool. Verify the original session, custody and ledger before continuing.', file=sys.stderr)
         return 2

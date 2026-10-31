@@ -1178,6 +1178,24 @@ Remaining children must be the exact selected
 receiver or the reviewed binary's bounded listener, and all must later join.
 The source worktree has no general adapter for arbitrary detached writers.
 
+### Merge release
+
+`terminal-events decision-set` also accepts `--merge-policy standing|release-required`
+(empty keeps the current policy) and, with `--action proceed`, a structured release:
+`--merge-pr OWNER/REPO#N --merge-head SHA --merge-base SHA --merge-evidence MSG_ID
+--merge-ttl D` (at most 4h). The release is recorded only if the live pull request is
+OPEN, its head and its base branch tip equal the given SHAs and its checks passed, and the
+evidence message is on the canonical item thread; it is bound to the new decision revision
+and every later revision, hold or expiry revokes it. `decision-get` returns `merge_policy`
+and the current `merge_release`. For a `release-required` assignment the native fence
+(`worker-native-hook-check`) refuses merge-class tools - `gh pr merge`, `gh api` merge or
+GraphQL merge calls, `git push` to main/master, merge MCP tools, also inside shell strings -
+except exactly `gh pr merge N --repo OWNER/REPO --squash|--merge|--rebase
+--match-head-commit HEAD [--delete-branch]` for the released PR and head. Coverage: the
+Claude PreToolUse hook only; Muse/Codex Workers, sessions started without the hook, and
+merges built by scripts or interpreters are not intercepted, and review/CI are verified
+at issue time, not at merge time.
+
 The same hook also guards a newly launched Worker, which has neither a decision
 (a decision requires a claimant) nor a claim yet. The hook relays the real
 event's `--tool-name`/`--tool-command`. For a native whose reservation is

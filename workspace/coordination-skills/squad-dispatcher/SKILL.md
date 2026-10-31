@@ -122,6 +122,20 @@ justify serializing independent preparation. Never bypass current merge/ENV rule
 A prepared release is not a deployed release, and unfinished production acceptance
 must remain visibly pending even when earlier phases are complete.
 
+## Merge release (bounded merge order)
+
+When you record a bounded merge order or merge window for a repository, set
+`--merge-policy release-required` on each affected Worker's decision with
+`terminal-events decision-set`; the policy stays until you set `standing`. A merge
+position is then granted only by a release on the next decision revision:
+`decision-set ... --action proceed --merge-pr OWNER/REPO#N --merge-head SHA
+--merge-base BASE_TIP_SHA --merge-evidence MESSAGE_ID --merge-ttl 1h`. Squad reads the
+code host at issue time and refuses a closed PR, a changed head, an advanced base tip or
+failing required checks; the evidence message must be on the item's thread and records the
+independent review and exact-head CI you verified. Any later revision revokes the release.
+The Claude native fence enforces it at the tool boundary; Muse/Codex Workers and
+sessions without the hook are not covered, so do not rely on it for them.
+
 ## Autonomous closeout and current status
 
 Carry the user's existing delivery authority into assignments and effective

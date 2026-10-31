@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/zsiec/squad/internal/store"
 )
@@ -17,6 +18,10 @@ type Decision struct {
 	Action      string `json:"action"`
 	Condition   string `json:"condition"`
 	WorkerAgent string `json:"worker_agent"`
+	// MergePolicy is "standing" (default) or "release-required": the latter makes
+	// the native tool boundary refuse merge-class commands without MergeRelease.
+	MergePolicy  string        `json:"merge_policy"`
+	MergeRelease *MergeRelease `json:"merge_release,omitempty"`
 }
 
 type DecisionRequest struct {
@@ -27,6 +32,9 @@ type DecisionRequest struct {
 	OutcomeID        int64  `json:"outcome_id"`
 	Action           string `json:"action"`
 	Condition        string `json:"condition"`
+	// MergePolicy is optional; empty keeps the assignment's current policy.
+	MergePolicy  string        `json:"merge_policy,omitempty"`
+	MergeRelease *MergeRelease `json:"merge_release,omitempty"`
 }
 
 var ErrStaleDecision = errors.New("decision changed or missing: read terminal-events decision-get before proceeding")
@@ -106,6 +114,7 @@ func (s Store) diagnoseLookup(ctx context.Context, key string, generation int64)
 // continuations. Revision zero means this assignment has not adopted decisions.
 func (s Store) CurrentDecision(ctx context.Context, key string, generation int64, session string) (Decision, error) {
 	var d Decision
+	var item string
 	switch {
 	case key == "":
 		return d, &DecisionLookupError{"missing-reservation", "--reservation is required"}
@@ -114,11 +123,14 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 	case session == "":
 		return d, &DecisionLookupError{"missing-worker-session", "--worker-session is required: decision-get never resolves a session implicitly"}
 	}
-	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,'')
+	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,'')
  FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation AND d.item_id=r.canonical_item_id
- WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent)
+ WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, s.diagnoseLookup(ctx, key, generation)
+	}
+	if err == nil && d.Revision > 0 && d.Action == "proceed" {
+		d.MergeRelease, err = currentRelease(ctx, s.DB, s.Repo, key, generation, item, d.Revision, time.Now().Unix())
 	}
 	return d, err
 }
@@ -128,6 +140,20 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 // replace a newer decision even when their message was posted later.
 func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Decision, error) {
 	var d Decision
+	if q.MergePolicy != "" && q.MergePolicy != "standing" && q.MergePolicy != "release-required" {
+		return d, ErrInvalidEvent
+	}
+	if q.MergeRelease != nil {
+		if q.Action != "proceed" {
+			return d, &Rejection{Condition: "invalid-merge-release", Repair: "a merge release can only accompany a proceed decision"}
+		}
+		if err := q.MergeRelease.validate(time.Now()); err != nil {
+			return d, err
+		}
+		if err := q.MergeRelease.verify(ctx, s.PRFacts); err != nil {
+			return d, err
+		}
+	}
 	if q.ExpectedRevision < 0 || (q.Action != "proceed" && q.Action != "hold") || len(q.Condition) > 500 || (q.Action == "hold" && strings.TrimSpace(q.Condition) == "") {
 		return d, ErrInvalidEvent
 	}
@@ -146,22 +172,56 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 			return err
 		}
 		var old Decision
-		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent)
+		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if old.Revision > 0 && old.OutcomeID == q.OutcomeID && old.Action == q.Action && old.Condition == q.Condition && old.WorkerAgent == worker && old.Revision == q.ExpectedRevision+1 {
+		policy := q.MergePolicy
+		if policy == "" {
+			policy = old.MergePolicy
+		}
+		if policy == "" {
+			policy = "standing"
+		}
+		if old.Revision > 0 && old.OutcomeID == q.OutcomeID && old.Action == q.Action && old.Condition == q.Condition && old.WorkerAgent == worker && old.Revision == q.ExpectedRevision+1 && old.MergePolicy == policy {
 			d = old
+			if q.MergeRelease != nil {
+				rel, e := currentRelease(ctx, tx, s.Repo, q.Reservation, q.Generation, item, old.Revision, time.Now().Unix())
+				if e != nil {
+					return e
+				}
+				if rel == nil || rel.PRRepo != q.MergeRelease.PRRepo || rel.PRNumber != q.MergeRelease.PRNumber || rel.HeadSHA != q.MergeRelease.HeadSHA || rel.BaseSHA != q.MergeRelease.BaseSHA {
+					return ErrStaleDecision
+				}
+			}
 			return nil
 		}
 		if old.Revision != q.ExpectedRevision || q.OutcomeID <= old.OutcomeID {
 			return ErrStaleDecision
 		}
-		d = Decision{old.Revision + 1, q.OutcomeID, q.Action, q.Condition, worker}
-		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES(?,?,?,?,?,?,?,?,?)
- ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker)
+		d = Decision{Revision: old.Revision + 1, OutcomeID: q.OutcomeID, Action: q.Action, Condition: q.Condition, WorkerAgent: worker, MergePolicy: policy}
+		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,merge_policy) VALUES(?,?,?,?,?,?,?,?,?,?)
+ ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent,merge_policy=excluded.merge_policy`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker, policy)
 		if err != nil {
 			return err
+		}
+		// Any new revision revokes earlier releases; only this request's release survives.
+		if _, err = tx.ExecContext(ctx, `DELETE FROM dispatch_merge_releases WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item); err != nil {
+			return err
+		}
+		if q.MergeRelease != nil {
+			var evidence int
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE repo_id=? AND id=? AND thread=?`, s.Repo, q.MergeRelease.EvidenceOutcome, item).Scan(&evidence); err != nil {
+				return err
+			}
+			if evidence != 1 {
+				return &Rejection{Condition: "invalid-merge-release", Repair: "evidence_outcome must be an existing message on the canonical item thread"}
+			}
+			r := q.MergeRelease
+			if _, err = tx.ExecContext(ctx, `INSERT INTO dispatch_merge_releases(repo_id,reservation_key,generation,item_id,decision_revision,pr_repo,pr_number,head_sha,base_sha,evidence_outcome,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, s.Repo, q.Reservation, q.Generation, item, d.Revision, r.PRRepo, r.PRNumber, r.HeadSHA, r.BaseSHA, r.EvidenceOutcome, r.ExpiresAt); err != nil {
+				return err
+			}
+			d.MergeRelease = &MergeRelease{PRRepo: r.PRRepo, PRNumber: r.PRNumber, HeadSHA: r.HeadSHA, BaseSHA: r.BaseSHA, EvidenceOutcome: r.EvidenceOutcome, ExpiresAt: r.ExpiresAt, DecisionRevision: d.Revision}
 		}
 		publisher := s
 		publisher.Recipient = ""

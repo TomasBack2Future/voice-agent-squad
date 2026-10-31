@@ -376,6 +376,16 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		}
 		legacy = append(legacy, legacyRow{24, "receiver_readiness"})
 	}
+	var mergeObjects, mergePolicy int
+	if err := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dispatch_merge_releases'), (SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name='merge_policy')`).Scan(&mergeObjects, &mergePolicy); err != nil {
+		return err
+	}
+	if mergeObjects+mergePolicy > 0 {
+		if mergeObjects != 1 || mergePolicy != 1 {
+			return fmt.Errorf("incomplete merge release schema; refusing legacy bootstrap")
+		}
+		legacy = append(legacy, legacyRow{27, "dispatch_merge_release"})
+	}
 
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {

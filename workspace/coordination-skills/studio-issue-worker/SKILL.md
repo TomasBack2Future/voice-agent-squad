@@ -207,7 +207,12 @@ and do not claim the environment.
   model polling. Join CI and the phase-aware Grok result before merge readiness;
   rebase if the target advances and do not reuse stale review evidence.
 - Merge without requesting separate human confirmation once the exact head is
-  current, mergeable, policy-compliant, and green.
+  current, mergeable, policy-compliant, and green. When `terminal-events decision-get`
+  reports `merge_policy: release-required` (a bounded merge order), a source `proceed`
+  is never merge permission: merge only with the decision's `merge_release` for this
+  exact PR and head, using `gh pr merge N --repo OWNER/REPO --squash --match-head-commit
+  HEAD` (the native fence refuses any other merge route). Without a current release
+  report merge-ready and continue independent work.
 - Select the assigned delivery contract in [staging candidates](references/staging-candidates.md).
   With verified `staging-candidate-v1` capability and explicit assignment, finish
   main CI/images/prefetch outside ENV and claim immediately before deployment.
