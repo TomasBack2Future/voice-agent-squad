@@ -12,8 +12,42 @@ import (
 
 // mergeLike recognises merge-class commands wherever they appear in a Bash
 // command, including inside shell -c or interpreter strings. Recognition only
-// decides that authority is required; it never grants any.
-var mergeLike = regexp.MustCompile(`(?i)\bgh\s+pr\s+merge\b|\bgh\s+api\b[^\n]*(?:/merge\b|mergePullRequest|auto_merge|enableAutoMerge)|mergePullRequest|enablePullRequestAutoMerge|\bgit\s+push\b[^\n]*(?:\bmain\b|\bmaster\b)`)
+// decides that authority is required; it never grants any. The posture is deny by
+// default for code-host write routes: any `gh api`/curl/wget call that touches a
+// merge, merges or ref-update endpoint, a quoted or option-separated `gh pr merge`,
+// the argv-list spelling used by interpreters, and `gh alias`.
+var mergeLike = regexp.MustCompile(`(?i)\bgh\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?pr['"]?\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?merge\b|gh['"]?\s*,\s*['"]?pr['"]?\s*,\s*['"]?merge|\bgh\s+alias\b|\b(?:gh\s+api|curl|wget|http|https)\b[^\n]*(?:/merges?\b|/git/refs\b|mergePullRequest|auto_merge|enableAutoMerge)|mergePullRequest|enablePullRequestAutoMerge`)
+
+// gitPushSegment finds `git push` segments; the target is judged by tokens, not substrings.
+var gitPushSegment = regexp.MustCompile(`(?i)\bgit\s+(?:-[^\s]+\s+)*push\b([^;&|\n]*)`)
+
+// pushesDefaultBranch reports a push that could update a default branch: a bare
+// push, HEAD, or an explicit main/master/trunk/develop destination.
+func pushesDefaultBranch(command string) bool {
+	for _, m := range gitPushSegment.FindAllStringSubmatch(command, -1) {
+		var positional []string
+		for _, w := range strings.Fields(m[1]) {
+			if !strings.HasPrefix(w, "-") {
+				positional = append(positional, w)
+			}
+		}
+		if len(positional) < 2 { // bare push or remote only: destination is implicit
+			return true
+		}
+		for _, ref := range positional[1:] {
+			ref = strings.TrimPrefix(ref, "+")
+			if i := strings.LastIndex(ref, ":"); i >= 0 {
+				ref = ref[i+1:]
+			}
+			ref = strings.TrimPrefix(ref, "refs/heads/")
+			switch strings.ToLower(ref) {
+			case "main", "master", "trunk", "develop", "head", "":
+				return true
+			}
+		}
+	}
+	return false
+}
 
 const mergePlainRejects = ";&|<>$`()\n\r\\\"'*?{}!#~="
 
@@ -26,7 +60,11 @@ func isMergeClass(tool NativeHookTool) bool {
 	if strings.HasPrefix(tool.Name, "mcp__") && strings.Contains(strings.ToLower(tool.Name), "merge") {
 		return true
 	}
-	return tool.Name == "Bash" && mergeLike.MatchString(tool.Command)
+	if tool.Name != "Bash" {
+		return false
+	}
+	command := strings.ReplaceAll(tool.Command, "\\\n", " ")
+	return mergeLike.MatchString(command) || pushesDefaultBranch(command)
 }
 
 // plainMerge parses the single supported form
@@ -36,7 +74,7 @@ func plainMerge(command string) (repo string, number string, head string, ok boo
 		return
 	}
 	w := strings.Fields(command)
-	if len(w) < 8 || filepath.Base(w[0]) != "gh" || w[1] != "pr" || w[2] != "merge" {
+	if len(w) < 8 || (w[0] != "gh" && !(filepath.IsAbs(w[0]) && filepath.Base(w[0]) == "gh")) || w[1] != "pr" || w[2] != "merge" {
 		return
 	}
 	number = w[3]
@@ -89,7 +127,7 @@ func mergeAuthorization(ctx context.Context, tx *sql.Tx, repoID, key string, gen
 		number     int64
 		expires    int64
 	}
-	err := tx.QueryRowContext(ctx, `SELECT pr_repo,pr_number,head_sha,expires_at FROM dispatch_merge_releases WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=? AND decision_revision=? AND expires_at>? AND pr_repo=?`, repoID, key, generation, item, revision, now, repo).Scan(&r.repo, &r.number, &r.head, &r.expires)
+	err := tx.QueryRowContext(ctx, `SELECT pr_repo,pr_number,head_sha,expires_at FROM dispatch_merge_releases WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=? AND decision_revision=? AND expires_at>? AND pr_repo=? COLLATE NOCASE`, repoID, key, generation, item, revision, now, repo).Scan(&r.repo, &r.number, &r.head, &r.expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return deny("no current release for this repository under the effective decision revision")
 	}

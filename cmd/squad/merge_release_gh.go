@@ -39,12 +39,34 @@ func ghPRFacts(ctx context.Context, repo string, number int64) (terminalevents.P
 		return f, err
 	}
 	f.State, f.HeadSHA, f.BaseTipSHA = v.State, v.HeadRefOid, strings.TrimSpace(string(tip))
-	f.ChecksPassed = len(v.StatusRollup) > 0
-	for _, c := range v.StatusRollup {
-		ok := c.Conclusion == "SUCCESS" || c.Conclusion == "SKIPPED" || c.Conclusion == "NEUTRAL" || c.State == "SUCCESS"
-		if !ok {
-			f.ChecksPassed = false
+	checks := make([]checkResult, len(v.StatusRollup))
+	for i, c := range v.StatusRollup {
+		checks[i] = checkResult(c)
+	}
+	f.ChecksPassed = checksPassed(checks)
+	return f, nil
+}
+
+// checkResult is one CheckRun (status/conclusion) or StatusContext (state).
+type checkResult struct {
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}
+
+// checksPassed is true only when at least one check exists and every one has
+// completed successfully (skipped/neutral allowed). Pending or failing blocks.
+func checksPassed(checks []checkResult) bool {
+	if len(checks) == 0 {
+		return false
+	}
+	for _, c := range checks {
+		switch {
+		case c.State == "SUCCESS":
+		case c.Status == "COMPLETED" && (c.Conclusion == "SUCCESS" || c.Conclusion == "SKIPPED" || c.Conclusion == "NEUTRAL"):
+		default:
+			return false
 		}
 	}
-	return f, nil
+	return true
 }

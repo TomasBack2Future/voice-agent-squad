@@ -211,11 +211,11 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 		}
 		if q.MergeRelease != nil {
 			var evidence int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE repo_id=? AND id=? AND thread=?`, s.Repo, q.MergeRelease.EvidenceOutcome, item).Scan(&evidence); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages m WHERE m.repo_id=? AND m.id=? AND m.thread=? AND m.agent_id=? AND m.ts>=(SELECT reserved_at FROM dispatch_reservations WHERE repo_id=? AND item_id=? AND generation=?)`, s.Repo, q.MergeRelease.EvidenceOutcome, item, actor, s.Repo, q.Reservation, q.Generation).Scan(&evidence); err != nil {
 				return err
 			}
 			if evidence != 1 {
-				return &Rejection{Condition: "invalid-merge-release", Repair: "evidence_outcome must be an existing message on the canonical item thread"}
+				return &Rejection{Condition: "invalid-merge-release", Repair: "evidence_outcome must be your own message on the canonical item thread, posted after this assignment started"}
 			}
 			r := q.MergeRelease
 			if _, err = tx.ExecContext(ctx, `INSERT INTO dispatch_merge_releases(repo_id,reservation_key,generation,item_id,decision_revision,pr_repo,pr_number,head_sha,base_sha,evidence_outcome,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, s.Repo, q.Reservation, q.Generation, item, d.Revision, r.PRRepo, r.PRNumber, r.HeadSHA, r.BaseSHA, r.EvidenceOutcome, r.ExpiresAt); err != nil {

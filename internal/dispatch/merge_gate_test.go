@@ -79,6 +79,20 @@ func TestReleaseRequiredAssignmentsCannotMergeWithoutAnExactCurrentRelease(t *te
 		{"graphql merge", "release-required", "proceed", []string{good}, bash("gh api graphql -f query='mutation{mergePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}'"), false},
 		{"push to main", "release-required", "proceed", []string{good}, bash("git push origin HEAD:main"), false},
 		{"merge mcp tool", "release-required", "proceed", []string{good}, NativeHookTool{Name: "mcp__github__merge_pull_request"}, false},
+		{"branch merges endpoint", "release-required", "proceed", []string{good}, bash("gh api -X POST repos/o/r/merges -f base=main -f head=x"), false},
+		{"ref update", "release-required", "proceed", []string{good}, bash("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=x"), false},
+		{"curl merge", "release-required", "proceed", []string{good}, bash("curl -X PUT https://api.github.com/repos/o/r/pulls/7/merge"), false},
+		{"interpreter argv list", "release-required", "proceed", []string{good}, bash(`python3 -c "import subprocess; subprocess.run(['gh','pr','merge','7'])"`), false},
+		{"quoted subcommand", "release-required", "proceed", []string{good}, bash("gh pr 'merge' 7 --squash"), false},
+		{"repo flag before subcommand", "release-required", "proceed", []string{good}, bash("gh pr -R o/r merge 7 --squash"), false},
+		{"alias route", "release-required", "proceed", []string{good}, bash("gh alias set m 'pr merge'"), false},
+		{"continued api line", "release-required", "proceed", []string{good}, bash("gh api \\\n repos/o/r/pulls/7/merge -X PUT"), false},
+		{"bare push", "release-required", "proceed", []string{good}, bash("git push"), false},
+		{"push HEAD", "release-required", "proceed", []string{good}, bash("git push -u origin HEAD"), false},
+		{"push to develop", "release-required", "proceed", []string{good}, bash("git push origin HEAD:refs/heads/develop"), false},
+		{"force push main", "release-required", "proceed", []string{good}, bash("git push --force origin +feature:main"), false},
+		{"branch containing main", "release-required", "proceed", nil, bash("git push -u origin squad/main-gate"), true},
+		{"repo name case differs", "release-required", "proceed", []string{good}, bash(strings.Replace(plain, "o/r", "O/R", 1)), true},
 		{"unrelated bash", "release-required", "proceed", nil, bash("go test ./..."), true},
 		{"pr view is not a merge", "release-required", "proceed", nil, bash("gh pr view 7 --json state"), true},
 		{"push feature branch", "release-required", "proceed", nil, bash("git push origin claude/fix-7"), true},
@@ -102,5 +116,25 @@ func TestMergeGateDoesNotAffectABootstrappingOrForeignNative(t *testing.T) {
 	s := gateLedger(t, "release-required", "proceed", release(3, gateHead, 20000))
 	if err := record(s, "worker", "other-native", bash(plain)); err == nil {
 		t.Fatal("a native bound to no assignment merged")
+	}
+}
+
+func TestPolicyCarriesToTheNextGenerationOfTheSameAssignment(t *testing.T) {
+	s := gateLedger(t, "release-required", "proceed", release(3, gateHead, 20000))
+	// A replacement Worker at generation 2 has no decision row yet.
+	for _, q := range []string{
+		`UPDATE dispatch_reservations SET generation=2,worker_thread_id='next-native'`,
+		`DELETE FROM claims`,
+		`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,state,generation) VALUES('repo-test','T','worker2',3,3,'held',2)`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := record(s, "worker2", "next-native", bash(plain)); err == nil || !strings.Contains(err.Error(), "merge-release-required") {
+		t.Fatalf("policy lost across generations: %v", err)
+	}
+	if err := record(s, "worker2", "next-native", bash("go test ./...")); err != nil {
+		t.Fatal(err)
 	}
 }
