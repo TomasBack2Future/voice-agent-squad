@@ -27,7 +27,7 @@ SKILL_TEXT = b'---\nname: studio-deploy-production\ndescription: fixture release
 
 CLIENT = '''#!{python}
 """Scripted client: fires the generated hooks the way Claude would, then reads back its decision."""
-import json, os, pathlib, shlex, subprocess, sys
+import json, os, pathlib, shlex, subprocess, sys, traceback
 
 state = pathlib.Path({state!r})
 squad = {squad!r}
@@ -37,65 +37,73 @@ settings = json.loads(pathlib.Path(args[args.index('--settings') + 1]).read_text
 (state / 'argv.json').write_text(json.dumps(args[:-1]))
 
 
-def argv(hook):
-    return [hook['command'], *hook['args']] if 'args' in hook else shlex.split(hook['command'])
+def main():
+    def argv(hook):
+        return [hook['command'], *hook['args']] if 'args' in hook else shlex.split(hook['command'])
 
 
-def start(event, payload):
-    return [(h, subprocess.Popen(argv(h), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
-            for group in settings['hooks'].get(event, []) for h in group['hooks']]
+    def start(event, payload):
+        return [(h, subprocess.Popen(argv(h), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+                for group in settings['hooks'].get(event, []) for h in group['hooks']]
 
 
-def feed(proc, payload):
-    proc.stdin.write(json.dumps(payload)); proc.stdin.close()
+    def feed(proc, payload):
+        proc.stdin.write(json.dumps(payload)); proc.stdin.close(); proc.stdin = None
 
 
-def pre_tool(tool, command=''):
-    proc = start('PreToolUse', None)
-    codes = []
-    for hook, p in proc:
-        feed(p, dict(session_id=native, hook_event_name='PreToolUse', tool_name=tool, tool_input=dict(command=command)))
-        p.communicate(timeout=30)
-        codes.append(p.returncode)
-    return max(codes)
+    def pre_tool(tool, command=''):
+        proc = start('PreToolUse', None)
+        codes = []
+        for hook, p in proc:
+            feed(p, dict(session_id=native, hook_event_name='PreToolUse', tool_name=tool, tool_input=dict(command=command)))
+            p.communicate(timeout=30)
+            codes.append(p.returncode)
+        return max(codes)
 
 
-# SessionStart arms the asyncRewake receiver; it exits 2 with the wake text when an event is delivered.
-receivers = [p for hook, p in start('SessionStart', None) if hook.get('asyncRewake')]
-for p in receivers:
-    feed(p, dict(session_id=native, hook_event_name='SessionStart'))
+    # SessionStart arms the asyncRewake receiver; it exits 2 with the wake text when an event is delivered.
+    receivers = [p for hook, p in start('SessionStart', None) if hook.get('asyncRewake')]
+    for p in receivers:
+        feed(p, dict(session_id=native, hook_event_name='SessionStart'))
 
-result = dict(roles_seen=sorted(settings['hooks']))
-result['edit_before_claim'] = pre_tool('Edit')
-result['env_claim_before_item'] = pre_tool('Bash', squad + ' claim ENV-002 --intent release')
-result['item_claim_fence'] = pre_tool('Bash', squad + ' claim REL-001 --intent release')
-claim = subprocess.run([squad, 'claim', 'REL-001', '--intent', 'release'], capture_output=True, text=True, cwd={ledger!r})
-result['item_claim'] = claim.returncode
-result['item_claim_detail'] = claim.stderr[-300:]
-result['env_claim_fence'] = pre_tool('Bash', squad + ' claim ENV-002 --intent release')
-claim = subprocess.run([squad, 'claim', 'ENV-002', '--intent', 'release'], capture_output=True, text=True, cwd={ledger!r})
-result['env_claim'] = claim.returncode
-result['env_claim_detail'] = claim.stderr[-300:]
-(state / 'claimed.json').write_text(json.dumps(result))
+    result = dict(roles_seen=sorted(settings['hooks']))
+    result['edit_before_claim'] = pre_tool('Edit')
+    result['env_claim_before_item'] = pre_tool('Bash', squad + ' claim ENV-002 --intent release')
+    result['item_claim_fence'] = pre_tool('Bash', squad + ' claim REL-001 --intent release')
+    claim = subprocess.run([squad, 'claim', 'REL-001', '--intent', 'release'], capture_output=True, text=True, cwd={ledger!r})
+    result['item_claim'] = claim.returncode
+    result['item_claim_detail'] = claim.stderr[-300:]
+    result['env_claim_fence'] = pre_tool('Bash', squad + ' claim ENV-002 --intent release')
+    claim = subprocess.run([squad, 'claim', 'ENV-002', '--intent', 'release'], capture_output=True, text=True, cwd={ledger!r})
+    result['env_claim'] = claim.returncode
+    result['env_claim_detail'] = claim.stderr[-300:]
+    (state / 'claimed.json').write_text(json.dumps(result))
 
-wake = receivers[0]
+    wake = receivers[0]
+    try:
+        _, stderr = wake.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        wake.kill()
+        _, stderr = wake.communicate()
+    result['wake_exit'] = wake.returncode
+    result['wake_text'] = stderr
+    event = json.loads(stderr.splitlines()[1])['events'][0]['event_id'] if wake.returncode == 2 else None
+    decision = subprocess.run([squad, 'terminal-events', 'decision-get', '--reservation', {reservation!r}, '--generation', '1',
+                               '--worker-session', native], capture_output=True, text=True, cwd={ledger!r})
+    result['decision'] = json.loads(decision.stdout) if decision.returncode == 0 else None
+    if event:
+        ack = subprocess.run([squad, 'terminal-events', 'ack', event, '--native-session', native, '--note', 'rehearsal readback'],
+                             capture_output=True, text=True, cwd={ledger!r})
+        result['ack_exit'] = ack.returncode
+    result['event_id'] = event
+    (state / 'result.json').write_text(json.dumps(result))
+
+
 try:
-    _, stderr = wake.communicate(timeout=60)
-except subprocess.TimeoutExpired:
-    wake.kill()
-    _, stderr = wake.communicate()
-result['wake_exit'] = wake.returncode
-result['wake_text'] = stderr
-event = json.loads(stderr.splitlines()[1])['events'][0]['event_id'] if wake.returncode == 2 else None
-decision = subprocess.run([squad, 'terminal-events', 'decision-get', '--reservation', {reservation!r}, '--generation', '1',
-                           '--worker-session', native], capture_output=True, text=True, cwd={ledger!r})
-result['decision'] = json.loads(decision.stdout) if decision.returncode == 0 else None
-if event:
-    ack = subprocess.run([squad, 'terminal-events', 'ack', event, '--native-session', native, '--note', 'rehearsal readback'],
-                         capture_output=True, text=True, cwd={ledger!r})
-    result['ack_exit'] = ack.returncode
-result['event_id'] = event
-(state / 'result.json').write_text(json.dumps(result))
+    main()
+except BaseException:
+    (state / 'error.txt').write_text(traceback.format_exc())
+    raise
 '''
 
 
@@ -204,7 +212,8 @@ class DeployerRehearsalTests(unittest.TestCase):
             if process.poll() is not None and not (self.state / name).exists():
                 break
             time.sleep(.1)
-        self.fail(f'{name} not produced; launcher exit={process.poll()}')
+        crash = (self.state / 'error.txt').read_text() if (self.state / 'error.txt').exists() else 'no stand-in traceback'
+        self.fail(f'{name} not produced; launcher exit={process.poll()}; {crash[-1500:]}')
 
     def test_launch_bind_claim_decision_wake_readback_as_deployer(self):
         # Launch preflight before binding: pending, ENV read-only and ready, no client, no claim.
