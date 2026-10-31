@@ -263,15 +263,16 @@ func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, act
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM worker_native_fences WHERE repo_id=? AND native_session=?`, s.repoID, native).Scan(&count); err != nil || count != 0 {
 		return errors.New("original native is fenced; tool execution blocked")
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(m.body,''),COALESCE(m.agent_id,''),r.reserved_by FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation LEFT JOIN messages m ON m.repo_id=d.repo_id AND m.id=d.outcome_id WHERE r.repo_id=? AND r.worker_thread_id=? AND (d.worker_agent=? OR (d.worker_agent IS NULL AND EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=? AND c.state='held')))`, s.repoID, native, actor, actor)
+	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(m.body,''),COALESCE(m.agent_id,''),r.reserved_by,r.item_id,r.generation,r.canonical_item_id,COALESCE(d.action,''),COALESCE(d.merge_policy,(SELECT p.merge_policy FROM dispatch_decisions p WHERE p.repo_id=r.repo_id AND p.reservation_key=r.item_id AND p.item_id=r.canonical_item_id ORDER BY p.generation DESC LIMIT 1),'standing') FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation LEFT JOIN messages m ON m.repo_id=d.repo_id AND m.id=d.outcome_id WHERE r.repo_id=? AND r.worker_thread_id=? AND (d.worker_agent=? OR (d.worker_agent IS NULL AND EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.agent_id=? AND c.state='held')))`, s.repoID, native, actor, actor)
 	if err != nil {
 		return err
 	}
-	var body, author, controller string
+	var body, author, controller, key, item, action, policy string
+	var generation int64
 	count = 0
 	for rows.Next() {
 		count++
-		if err := rows.Scan(&observation.DecisionRevision, &observation.DecisionOutcomeID, &body, &author, &controller); err != nil {
+		if err := rows.Scan(&observation.DecisionRevision, &observation.DecisionOutcomeID, &body, &author, &controller, &key, &generation, &item, &action, &policy); err != nil {
 			rows.Close()
 			return err
 		}
@@ -296,6 +297,11 @@ func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, act
 		observation.Bootstrap = true
 	} else if count != 1 {
 		return errors.New("native hook current original Worker binding unavailable")
+	}
+	if count == 1 {
+		if err := mergeAuthorization(ctx, tx, s.repoID, key, generation, item, policy, action, observation.DecisionRevision, s.now().Unix(), tool); err != nil {
+			return err
+		}
 	}
 	var admission LegacyNativeAdmission
 	observation.RequestSHA256 = ""

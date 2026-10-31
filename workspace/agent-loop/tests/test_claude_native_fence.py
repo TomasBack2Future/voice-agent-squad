@@ -73,3 +73,21 @@ class NativeFenceEventRelayTests(unittest.TestCase):
                     patch('claude_native_fence.subprocess.run', return_value=result) as run:
                 self.assertEqual(fence.main(), 0)
             self.assertEqual(run.call_args[0][0][-4:], ['--tool-name', 'Bash', '--tool-command', 'squad claim T'])
+
+
+class MergeReasonTests(unittest.TestCase):
+    def test_merge_denial_reason_reaches_the_worker_other_failures_stay_generic(self):
+        config = dict(native_session_id='n', agent_id='a', ledger_directory='/f', squad_executable='/f/squad')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+            path.write_text(json.dumps(config))
+            event = json.dumps(dict(hook_event_name='PreToolUse', session_id='n', tool_name='Bash', tool_input=dict(command='gh pr merge 1')))
+            for stderr, visible in [('Error: merge-release-required: no current release for this repository', True),
+                                    ('sql: database is locked', False)]:
+                result = subprocess.CompletedProcess([], 1, '', stderr)
+                err = __import__('io').StringIO()
+                with patch('sys.argv', ['claude_native_fence.py', '--config', str(path)]), patch('sys.stdin', __import__('io').StringIO(event)), \
+                        patch('sys.stderr', err), patch('claude_native_fence.subprocess.run', return_value=result):
+                    self.assertEqual(fence.main(), 2)
+                self.assertEqual('merge-release-required' in err.getvalue(), visible)
+                self.assertNotIn('database is locked', err.getvalue())

@@ -35,7 +35,7 @@ func TestControllerBoundWorkerHandoffCLI(t *testing.T) {
 INSERT INTO dispatch_reservations(repo_id,item_id,canonical_item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note) VALUES(?,'D','T','github:o/r#1',?,1,1,0,'dispatched',1,'old-native','');
 INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,state,generation) VALUES(?,'T','old-worker',2,3,'held',1);
 INSERT INTO agents(id,repo_id,display_name,started_at,last_tick_at,status) VALUES('new-worker',?,'new',1,1,'active');
-INSERT INTO dispatch_decisions VALUES(?,'D',1,'T',2,4,'hold','acceptance held','old-worker')`, env.RepoID, env.AgentID, "controller-native", env.RepoID, env.AgentID, env.RepoID, env.RepoID, env.RepoID); err != nil {
+INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES(?,'D',1,'T',2,4,'hold','acceptance held','old-worker')`, env.RepoID, env.AgentID, "controller-native", env.RepoID, env.AgentID, env.RepoID, env.RepoID, env.RepoID); err != nil {
 		t.Fatal(err)
 	}
 	row, err := dispatch.New(env.DB, env.RepoID, nil).Get(context.Background(), "D")

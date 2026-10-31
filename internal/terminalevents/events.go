@@ -32,6 +32,8 @@ type Store struct {
 	DB                  *sql.DB
 	Repo, NativeSession string
 	Recipient           string
+	// PRFacts reads live pull request state when a merge release is issued.
+	PRFacts PRReader
 }
 
 // PublishRequest carries pointers, never a command or authority from the sender.
