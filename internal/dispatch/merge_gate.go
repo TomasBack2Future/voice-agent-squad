@@ -18,15 +18,30 @@ import (
 // the argv-list spelling used by interpreters, and `gh alias`.
 var mergeLike = regexp.MustCompile(`(?i)\bgh\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?pr['"]?\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?merge\b|gh['"]?\s*,\s*['"]?pr['"]?\s*,\s*['"]?merge|\bgh\s+alias\b|\b(?:gh\s+api|curl|wget|http|https)\b[^\n]*(?:/merges?\b|/git/refs\b|mergePullRequest|auto_merge|enableAutoMerge)|mergePullRequest|enablePullRequestAutoMerge`)
 
-// gitPushSegment finds `git push` segments; the target is judged by tokens, not substrings.
-var gitPushSegment = regexp.MustCompile(`(?i)\bgit\b[^;&|\n]*?\bpush\b([^;&|\n]*)`)
+// gitSegment finds a `git` word and the rest of its shell segment.
+var gitSegment = regexp.MustCompile(`(?i)(?:^|[\s;&|(])git\b([^;&|\n]*)`)
 
-// pushesDefaultBranch reports a push that could update a default branch: a bare
-// push, HEAD, or an explicit main/master/trunk/develop destination.
+// gitGlobalWithValue are git global options that take a separate value.
+var gitGlobalWithValue = map[string]bool{"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true, "--super-prefix": true, "--config-env": true}
+
+// pushesDefaultBranch reports a `git push` (after any global options) that could
+// update a default branch: a bare push, HEAD, or an explicit main/master/trunk/
+// develop destination. Other git subcommands whose text mentions push are ignored.
 func pushesDefaultBranch(command string) bool {
-	for _, m := range gitPushSegment.FindAllStringSubmatch(command, -1) {
+	for _, m := range gitSegment.FindAllStringSubmatch(command, -1) {
+		words := strings.Fields(m[1])
+		i := 0
+		for i < len(words) && strings.HasPrefix(words[i], "-") {
+			if gitGlobalWithValue[words[i]] {
+				i++
+			}
+			i++
+		}
+		if i >= len(words) || words[i] != "push" {
+			continue
+		}
 		var positional []string
-		for _, w := range strings.Fields(m[1]) {
+		for _, w := range words[i+1:] {
 			w = strings.NewReplacer("'", "", "\"", "").Replace(w)
 			if !strings.HasPrefix(w, "-") {
 				positional = append(positional, w)
@@ -37,8 +52,8 @@ func pushesDefaultBranch(command string) bool {
 		}
 		for _, ref := range positional[1:] {
 			ref = strings.TrimPrefix(ref, "+")
-			if i := strings.LastIndex(ref, ":"); i >= 0 {
-				ref = ref[i+1:]
+			if j := strings.LastIndex(ref, ":"); j >= 0 {
+				ref = ref[j+1:]
 			}
 			ref = strings.TrimPrefix(ref, "refs/heads/")
 			switch strings.ToLower(ref) {
