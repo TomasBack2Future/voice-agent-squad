@@ -14,10 +14,22 @@ import sys
 import time
 
 
+ROLES = ('dispatcher', 'worker', 'deployer')
+
+
+def role_of(config: dict) -> str:
+    """The receiver's role; an unknown one is refused rather than treated as a Dispatcher."""
+    role = config.get('role', 'dispatcher')
+    if role not in ROLES:
+        raise ValueError('unsupported receiver role')
+    return role
+
+
 def settings(config_path: Path) -> dict:
     config = json.loads(config_path.read_text())
     if config.get('runtime', 'claude') != 'claude':
         raise ValueError('Claude only: Codex requires its structured queue adapter')
+    role_of(config)
     entry = {'type': 'command', 'command': sys.executable,
              'args': [str(Path(__file__).resolve()), '--config', str(config_path.resolve())],
              'asyncRewake': True, 'timeout': 86400}
@@ -133,6 +145,7 @@ def run(config_path: Path, event: dict) -> int:
     config = json.loads(config_path.read_text())
     if config.get('runtime', 'claude') != 'claude':
         raise ValueError('Claude only: Codex requires its structured queue adapter')
+    role = role_of(config)
     if event.get('session_id') != config['native_session_id']:
         return 0
     state = Path(config['state_directory'])
@@ -184,8 +197,13 @@ def run(config_path: Path, event: dict) -> int:
             receipt = json.loads(stdout)
             if receipt.get('type') != 'worker-terminal-delivery-v1' or not receipt.get('events'):
                 raise ValueError('invalid delivery receipt')
-            role = config.get('role', 'dispatcher')
-            if role == 'worker':
+            if role == 'deployer':
+                action = ('Read terminal-events decision-get for the latest adopted revision for this release assignment, then verify the exact reservation '
+                          'generation before resuming. Before any production mutation, verify the execution binding (squad execution show) and the ENV holder, '
+                          'generation and scope for this native. A decision, a delivered event or an acknowledgement is not production authority and changes no ownership. '
+                          'For operation-exit, read the owned operation result, reconcile the actual next phase or blocker in the existing checkpoint, then acknowledge; '
+                          'exit is not release completion. Do not dispatch another session.')
+            elif role == 'worker':
                 action = ('Read terminal-events decision-get for the latest adopted revision (or the canonical Issue for an unmigrated assignment), then verify the existing assignment '
                           'generation before resuming that same task. A decision changes neither authority '
                           'nor ownership. For operation-exit, read the owned operation result, reconcile the actual next phase or blocker in the existing checkpoint, then acknowledge; exit is not Issue completion. Do not dispatch another Worker.')

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://voice-agent.local/schemas/agent-loop/deployer-assignment.v1.json",
+  "title": "Agent Loop Deployer assignment envelope",
+  "description": "Release owner assignment. It names a frozen release, not a GitHub Issue, and grants no authority beyond the reservation, ENV claim and execution authorization it is checked against.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "assignment_id",
+    "item",
+    "reservation",
+    "release",
+    "repository",
+    "worktree",
+    "branch",
+    "base_sha",
+    "role",
+    "project_profile",
+    "authorization",
+    "evidence_required"
+  ],
+  "properties": {
+    "schema_version": {"const": "agent-loop.deployer-assignment.v1"},
+    "assignment_id": {"type": "string", "pattern": "^[A-Za-z0-9._/-]{1,160}$"},
+    "item": {"type": "string", "pattern": "^[A-Z][A-Z0-9_-]*-[0-9]+$"},
+    "reservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "generation"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "repositories", "manifest_sha256", "operation", "target"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,120}$"},
+        "repositories": {
+          "type": "array",
+          "description": "Every repository revision frozen into the release; at least one, no duplicate repository.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["repository", "sha"],
+            "properties": {
+              "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+              "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+            }
+          }
+        },
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "operation": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+        "target": {"type": "string", "pattern": "^ENV-[0-9]+$"}
+      }
+    },
+    "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "clone_layout": {"enum": ["plain", "bitbucket-server"]},
+    "repository_host": {"type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"},
+    "worktree": {"type": "string", "pattern": "^/"},
+    "branch": {"type": "string", "minLength": 1},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "skill", "version"],
+      "properties": {
+        "id": {"const": "deployer"},
+        "skill": {"const": "studio-deploy-production"},
+        "version": {"const": 1}
+      }
+    },
+    "project_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "path"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "version": {"type": "integer", "minimum": 1},
+        "path": {"type": "string", "minLength": 1}
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["production", "production_reference"],
+      "properties": {
+        "production": {"const": true},
+        "production_reference": {"type": "string", "pattern": "^[A-Za-z0-9:/#_.-]{1,200}$"}
+      }
+    },
+    "evidence_required": {
+      "type": "array",
+      "items": {"enum": ["test", "lint", "typecheck", "build", "review", "manual"]}
+    }
+  }
+}

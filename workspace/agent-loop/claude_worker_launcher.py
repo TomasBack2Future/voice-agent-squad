@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check or launch one assigned Claude Worker; never claim, bind or install."""
+"""Check or launch one assigned Claude Worker or release Deployer; never claim, bind or install."""
 from __future__ import annotations
 
 import argparse
@@ -35,7 +35,7 @@ def check_receipt_authorization(c, assignment, current_revision=0, requested=Non
     return dict(base, effective_grant=grant)
 
 from validate_context_package import ROOT, ValidationError, validate_file
-from worker_preflight import check_profile, check_worktree
+from worker_preflight import check_profile, check_worktree, is_deployer, load_assignment, source_reference
 
 IDENTITY_ENV = ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'SQUAD_SESSION_ID',
                 'SQUAD_AGENT', 'CLAUDE_SESSION_ID', 'MUSE_SESSION_ID', 'SQUAD_NATIVE_SESSION_ID')
@@ -109,7 +109,7 @@ def binding(assignment: dict, c: dict, env: dict) -> str:
         raise ValidationError('expected exactly one existing reservation')
     r = found[0]
     if (r.get('generation') != assignment['reservation']['generation']
-            or r.get('source_ref') != 'github:' + assignment['issue']
+            or r.get('source_ref') != source_reference(assignment)
             or r.get('canonical_item_id') != assignment['item']
             or r.get('reserved_by') != c['dispatcher_agent_id']
             or r.get('state') not in ('reserved', 'dispatched')):
@@ -122,7 +122,43 @@ def binding(assignment: dict, c: dict, env: dict) -> str:
     raise ValidationError('reservation is inconsistent or bound to another session')
 
 
+def check_deployer_launch_inputs(assignment: dict, c: dict) -> None:
+    """A Deployer's authority and target come only from its envelope."""
+    for key in ('resource_overrides', 'delivery_readiness_file', 'human_authorization'):
+        if c.get(key):
+            raise ValidationError(f'{key} is a Worker launch input and is not accepted for a Deployer')
+
+
+def check_release_target(assignment: dict, c: dict, env: dict) -> list[dict]:
+    """Read-only admission of the release's ENV; the Deployer claims it itself, later."""
+    item = assignment['release']['target']
+    path = Path(assignment['project_profile']['path'])
+    if not path.is_absolute():
+        path = Path(assignment['worktree']) / path
+    profile = validate_file(path, ROOT / 'schemas/project-profile.schema.json')
+    if item != profile['resources'].get('production'):
+        raise ValidationError('release target differs from the profile production environment')
+    argv = [c['coordination_executable'], 'resources', 'check', item]
+    if profile['resources'].get('policy'):
+        argv.append('--require-policy')
+    result = subprocess.run(argv, cwd=c['ledger_directory'], env=env,
+                            capture_output=True, text=True, timeout=10, check=False)
+    if result.returncode:
+        raise ValidationError(f'production resource {item} is unavailable: ' + diagnostic(result.stderr))
+    try:
+        receipt = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValidationError('resource admission returned invalid JSON') from error
+    if not isinstance(receipt, dict) or receipt.get('item') != item or receipt.get('status') != 'ready':
+        raise ValidationError('resource admission identity/status mismatch')
+    return [dict(phase='production', declared_item=profile['resources'].get('production'), **receipt,
+                 admission_reference=assignment['authorization']['production_reference'])]
+
+
 def check_resources(assignment: dict, c: dict, env: dict) -> list[dict]:
+    if is_deployer(assignment):
+        check_deployer_launch_inputs(assignment, c)
+        return check_release_target(assignment, c, env)
     phases = [p for p in ('staging', 'production') if assignment['authorization'].get(p)]
     if c.get('delivery_readiness_file'):
         from delivery_readiness import selected_readiness, verify_admission
@@ -173,13 +209,15 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
     check_profile(assignment)
     check_worktree(assignment)
     c = config_file(config_path)
+    if is_deployer(assignment):
+        check_deployer_launch_inputs(assignment, c)
     authorization(c, assignment)
     selection_arguments(c)
     env = child_environment(c)
     state = binding(assignment, c, env)
     resources = check_resources(assignment, c, env)
     check_heartbeat_runtime(c, env)
-    return {'status': 'launch-checked', 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
+    return {'status': 'launch-checked', 'role': assignment['role']['id'], 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed',
@@ -197,14 +235,14 @@ def wait_for_binding(assignment: dict, c: dict, env: dict, budget: float) -> Non
         time.sleep(min(1, max(0, deadline - time.monotonic())))
 
 
-def receiver_arguments(c: dict, config_path: Path) -> list[str]:
+def receiver_arguments(c: dict, config_path: Path, role: str = 'worker') -> list[str]:
     if not c.get('event_executable'):
         return []
     state = config_path.resolve().parent / ('receiver-' + c['native_session_id'])
     state.mkdir(mode=0o700, exist_ok=True)
     config = state / 'config.json'
     config.write_text(json.dumps(dict(native_session_id=c['native_session_id'], agent_id=c['agent_id'],
-                     role='worker', state_directory=str(state), ledger_directory=c['ledger_directory'],
+                     role=role, state_directory=str(state), ledger_directory=c['ledger_directory'],
                      squad_executable=c['event_executable'], incarnation=str(uuid.uuid4()),
                      owner_pid=os.getpid(), runtime='claude', legacy_native_fence=True), indent=2) + '\n')
     setting = state / 'settings.json'
@@ -324,13 +362,15 @@ def main() -> int:
     try:
         if not 0 <= args.wait_seconds <= 60:
             raise ValidationError('wait budget must be between 0 and 60 seconds')
-        a = validate_file(args.assignment, ROOT / 'schemas/assignment-envelope.schema.json')
+        a = load_assignment(args.assignment)
         if args.check:
             print(json.dumps(check_launch(a, args.config), sort_keys=True))
             return 0
         check_profile(a)
         check_worktree(a)
         c = config_file(args.config)
+        if is_deployer(a):
+            check_deployer_launch_inputs(a, c)
         authorization(c, a)
         env = child_environment(c)
         check_resources(a, c, env)
@@ -344,7 +384,7 @@ def main() -> int:
         prompt = Path(c['prompt_file']).read_text()
         if c.get('human_authorization'):
             prompt += prompt_context(c, a)
-        receiver_args = receiver_arguments(c, args.config)
+        receiver_args = receiver_arguments(c, args.config, a['role']['id'])
         os.chdir(a['worktree'])
         return supervise([c['client_executable'], '--session-id',
                   c['native_session_id'], '--permission-mode', c['permission_mode'],

@@ -73,6 +73,17 @@ class SmokeRunnerTests(unittest.TestCase):
         self.assertTrue(all(c['status'] in ('not_run', 'unavailable') for c in cells))
         self.assertTrue(all(c['native_qualified'] is False for c in cells))
 
+    def test_claude_deployer_rehearsal_is_contract_evidence_not_native_qualification(self):
+        cell = next(c for c in smoke.native_coverage() if (c['runtime'], c['role']) == ('claude', 'deployer'))
+        self.assertEqual((cell['status'], cell['native_qualified']), ('unavailable', False))
+        self.assertIn('scripted client', cell['reason'])
+        self.assertIn('test_deployer_rehearsal', smoke.CONTRACT_SUITES)
+        with patch.object(smoke, 'run_suites') as run:
+            report = smoke.qualify('claude', 'deployer')
+        run.assert_not_called()
+        self.assertEqual(report['status'], 'blocked')
+        self.assertFalse(report['native_qualified'])
+
     def test_missing_role_executor_blocks_before_test_execution(self):
         with patch.object(smoke, 'run_suites') as run:
             report = smoke.qualify('codex', 'deployer')

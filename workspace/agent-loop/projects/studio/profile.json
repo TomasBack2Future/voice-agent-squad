@@ -3,6 +3,10 @@
   "id": "studio",
   "version": 1,
   "repository": "TomasBack2Future/voice-agent-studio",
+  "release_skill": {
+    "name": "studio-deploy-production",
+    "path": ".agents/skills/studio-deploy-production/SKILL.md"
+  },
   "context_by_phase": {
     "implementation": [
       "AGENTS.md",

@@ -28,8 +28,10 @@ executable presence, skill discovery and a static receipt do not prove execution
 
 Do not run `squad go`, pick another item, or acquire a primary claim merely
 because a generic loop skill was loaded. A dedicated role follows its own
-assignment. The Worker assignment schema and launcher remain Worker-only; do not
-relabel a Deployer or Investigator to fit that schema. Use the role's actual
+assignment. The Worker assignment schema and launcher behavior remain Worker-only; do not
+relabel a Deployer or Investigator to fit that schema. The Claude Deployer has its own
+envelope, preflight, receiver role and fence admission ([README](README.md#claude-deployer-launch-source-only));
+no other runtime has a Deployer adapter. Use the role's actual
 contract and supported executor. An absent adapter is an implementation gap with
 a concrete owner and acceptance criteria, not a permanent provider exclusion.
 

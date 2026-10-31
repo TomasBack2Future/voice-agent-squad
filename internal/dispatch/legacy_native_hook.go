@@ -148,14 +148,8 @@ func legacyHookFiles(settingsPath, actor, native, module, config, python string)
 	if err != nil {
 		return out, err
 	}
-	var cfg struct {
-		Actor   string `json:"agent_id"`
-		Native  string `json:"native_session_id"`
-		Runtime string `json:"runtime"`
-		Role    string `json:"role"`
-		Fence   bool   `json:"legacy_native_fence"`
-	}
-	if json.Unmarshal(configuration, &cfg) != nil || cfg.Actor != actor || cfg.Native != native || cfg.Runtime != "claude" || cfg.Role != "worker" || !cfg.Fence {
+	var cfg legacyHookConfig
+	if json.Unmarshal(configuration, &cfg) != nil || !cfg.matches(actor, native) {
 		return out, errors.New("native hook configuration differs from original Worker")
 	}
 	code, err := readLegacyFile(module, 65536)
@@ -218,6 +212,22 @@ func observeLegacyHook(ctx context.Context, actor, native, config string) (nativ
 	}
 	hook.PythonExecutable, hook.PythonSHA256 = python.Executable, python.SHA256
 	return nativeHookObservation{Client: identity, Hook: hook}, nil
+}
+
+// legacyHookConfig is the receiver configuration the installed hook carries.
+// Only the Worker and the release Deployer own a bound native session whose
+// claims this fence admits; any other role is refused.
+type legacyHookConfig struct {
+	Actor   string `json:"agent_id"`
+	Native  string `json:"native_session_id"`
+	Runtime string `json:"runtime"`
+	Role    string `json:"role"`
+	Fence   bool   `json:"legacy_native_fence"`
+}
+
+func (c legacyHookConfig) matches(actor, native string) bool {
+	return c.Actor == actor && c.Native == native && c.Runtime == "claude" && c.Fence &&
+		(c.Role == "worker" || c.Role == "deployer")
 }
 
 // NativeHookTool is the tool of the real PreToolUse event, as relayed by the

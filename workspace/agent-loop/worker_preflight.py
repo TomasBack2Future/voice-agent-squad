@@ -54,6 +54,51 @@ def repository_name(remote: str, expected_host: str = "github.com", clone_layout
     return path
 
 
+WORKER_SCHEMA = "agent-loop.assignment.v1"
+DEPLOYER_SCHEMA = "agent-loop.deployer-assignment.v1"
+ASSIGNMENT_SCHEMAS = {WORKER_SCHEMA: "schemas/assignment-envelope.schema.json",
+                      DEPLOYER_SCHEMA: "schemas/deployer-assignment.schema.json"}
+
+
+def load_assignment(path: Path) -> dict:
+    """Validate an assignment against the schema its own version selects.
+
+    The Worker and Deployer envelopes are separate contracts: neither is
+    relabelled to fit the other, and an unknown version is rejected.
+    """
+    with path.open(encoding="utf-8") as handle:
+        version = json.load(handle).get("schema_version")
+    if version not in ASSIGNMENT_SCHEMAS:
+        raise ValidationError("unsupported assignment schema version")
+    assignment = validate_file(path, ROOT / ASSIGNMENT_SCHEMAS[version])
+    if version == DEPLOYER_SCHEMA:
+        check_release(assignment)
+    return assignment
+
+
+def is_deployer(assignment: dict) -> bool:
+    return assignment.get("schema_version") == DEPLOYER_SCHEMA
+
+
+def source_reference(assignment: dict) -> str:
+    """The reservation source a bound assignment must carry."""
+    if is_deployer(assignment):
+        return "release:" + assignment["release"]["id"]
+    return "github:" + assignment["issue"]
+
+
+def check_release(assignment: dict) -> None:
+    repositories = assignment["release"]["repositories"]
+    if not repositories:
+        raise ValidationError("release repositories must name at least one frozen revision")
+    names = [entry["repository"] for entry in repositories]
+    if len(set(names)) != len(names):
+        raise ValidationError("duplicate repository in release")
+    frozen = {entry["repository"]: entry["sha"] for entry in repositories}
+    if frozen.get(assignment["repository"]) != assignment["base_sha"]:
+        raise ValidationError("assignment base_sha must equal the release revision of its repository")
+
+
 def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
     selected = assignment["project_profile"]
     declared = Path(selected["path"])
@@ -66,7 +111,9 @@ def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
         profile["id"], profile["version"], profile["repository"], profile.get("repository_host", "github.com"), profile.get("clone_layout", "plain")
     ):
         raise ValidationError("assignment/profile identity mismatch")
-    if profile.get("delivery_mode") == "human-pr" and any(assignment["authorization"][key] for key in ("pull_request", "merge", "staging", "production", "issue_close")):
+    if is_deployer(assignment) and "release_skill" not in profile:
+        raise ValidationError("project profile lacks a release_skill pin for a Deployer")
+    if profile.get("delivery_mode") == "human-pr" and any(assignment["authorization"].get(key) for key in ("pull_request", "merge", "staging", "production", "issue_close")):
         raise ValidationError("human-PR profile allows source/test/local-review handoff only")
     return profile
 
@@ -87,28 +134,32 @@ def check_worktree(assignment: dict) -> None:
         raise ValidationError("repository AGENTS.md is missing")
 
 
-def check(assignment_path: Path, profile_path: Path, runtime: str,
-          skills: list[Path], tools: list[str], launch_config: Path | None = None,
-          *, context_only: bool = False) -> dict:
-    if runtime not in ('claude', 'codex', 'muse'):
-        raise ValidationError('unsupported runtime')
-    if context_only and launch_config is not None:
-        raise ValidationError('context-only cannot be combined with a launch config')
-    if not context_only:
-        if launch_config is None:
-            raise ValidationError(f'{runtime.capitalize()} launch config required; executable presence is not readiness')
-    assignment = validate_file(
-        assignment_path, ROOT / "schemas/assignment-envelope.schema.json"
-    )
-    profile = check_profile(assignment, profile_path)
-    if len(json.dumps(assignment, separators=(",", ":")).encode()) > 2048:
-        raise ValidationError("assignment exceeds 2048-byte cold-start budget")
-    if runtime != 'codex' or launch_config is None:
-        check_worktree(assignment)
+def check_release_skill(assignment: dict, profile: dict, skills: list[Path], client_directory: str) -> dict:
+    """Verify the client-visible release skill equals the one committed at the assignment revision."""
+    pinned = profile["release_skill"]
+    if pinned["name"] != assignment["role"]["skill"] or ".." in pinned["path"].split("/"):
+        raise ValidationError("profile release_skill differs from the assigned release skill")
+    entries = [path for path in skills if path.parent.name == pinned["name"]]
+    if len(entries) != 1:
+        raise ValidationError("exactly one client-visible release skill is required")
+    path = entries[0]
+    if not path.is_absolute() or client_directory not in path.parts or path.name != "SKILL.md" or not path.is_file():
+        raise ValidationError("release skill entry must be an absolute client-visible file")
+    content = path.read_bytes()
+    if f"name: {pinned['name']}\n".encode() not in content:
+        raise ValidationError("release skill identity mismatch")
+    worktree = Path(assignment["worktree"]).resolve(strict=True)
+    shown = subprocess.run(["git", "-C", str(worktree), "show", assignment["base_sha"] + ":" + pinned["path"]],
+                           capture_output=True, timeout=15, check=False)
+    if shown.returncode:
+        raise ValidationError("release skill is absent at the selected revision")
+    if shown.stdout != content:
+        raise ValidationError("client release skill differs from the skill committed at the selected revision")
+    return {"skill": pinned["name"], "sha256": hashlib.sha256(content).hexdigest(),
+            "source_revision": assignment["base_sha"]}
 
-    # The launcher supplies the actual client-visible entries, not just canonical
-    # source paths. Resolving a source file alone does not prove client discovery.
-    client_directory = ".claude" if runtime == "claude" else ".agents"
+
+def check_worker_skills(assignment: dict, skills: list[Path], client_directory: str) -> list[dict]:
     receipts = []
     has_worker = False
     for path in skills:
@@ -127,6 +178,35 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
                          "sha256": hashlib.sha256(content).hexdigest()})
     if not has_worker:
         raise ValidationError("client-visible Worker skill is required")
+    return receipts
+
+
+def check(assignment_path: Path, profile_path: Path, runtime: str,
+          skills: list[Path], tools: list[str], launch_config: Path | None = None,
+          *, context_only: bool = False) -> dict:
+    if runtime not in ('claude', 'codex', 'muse'):
+        raise ValidationError('unsupported runtime')
+    if context_only and launch_config is not None:
+        raise ValidationError('context-only cannot be combined with a launch config')
+    if not context_only:
+        if launch_config is None:
+            raise ValidationError(f'{runtime.capitalize()} launch config required; executable presence is not readiness')
+    assignment = load_assignment(assignment_path)
+    if is_deployer(assignment) and runtime != 'claude':
+        raise ValidationError('Deployer launch is qualified for Claude only; no Codex or Muse adapter')
+    profile = check_profile(assignment, profile_path)
+    if len(json.dumps(assignment, separators=(",", ":")).encode()) > 2048:
+        raise ValidationError("assignment exceeds 2048-byte cold-start budget")
+    if runtime != 'codex' or launch_config is None:
+        check_worktree(assignment)
+
+    # The launcher supplies the actual client-visible entries, not just canonical
+    # source paths. Resolving a source file alone does not prove client discovery.
+    client_directory = ".claude" if runtime == "claude" else ".agents"
+    if is_deployer(assignment):
+        receipts = [check_release_skill(assignment, profile, skills, client_directory)]
+    else:
+        receipts = check_worker_skills(assignment, skills, client_directory)
     available = []
     for tool in sorted(set([runtime, "git", "gh", *tools])):
         if not shutil.which(tool):
@@ -146,7 +226,7 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         "status": "context-checked" if context_only else "launch-checked",
         "native_qualified": False,
         "checked_at": datetime.now(timezone.utc).isoformat(),
-        "assignment_id": assignment["assignment_id"],
+        "assignment_id": assignment["assignment_id"], "role": assignment["role"]["id"],
         "assignment_sha256": hashlib.sha256(assignment_path.read_bytes()).hexdigest(),
         "base_sha": assignment["base_sha"], "runtime": runtime,
         "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
