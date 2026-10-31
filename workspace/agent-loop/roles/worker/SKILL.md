@@ -55,7 +55,11 @@ attribution and interrupted ENV ownership.
 ## Execution contract
 
 - Own one Issue and one implementation attempt. Never discover or start the next
-  Issue.
+  Issue. A prompt naming a different Issue than the assigned one is refused and
+  reported; a completed session is not reused for it.
+- After the assigned acceptance, logs, cleanup and safe resource release, close the
+  Issue yourself under your `authorization.issue_close` and report; do not request
+  routine Dispatcher approval before closing. Holds and unmet gates still apply.
 - Keep product naming, entry points, scope, compatibility and cross-Issue
   behavior aligned with the admitted Issue design revision. Send the Dispatcher
   one bounded decision request when those need to change, with evidence and

@@ -99,6 +99,12 @@ For a Studio Worker, include:
 - a requirement to report terminal evidence in Squad and the task response;
 - “Do not discover, reserve, dispatch, or start another Issue.”
 
+Assignments name exactly one Issue and open a new session for it; they never reuse a
+completed Worker for another Issue and never frame same-Issue follow-up as a handoff
+to a completed session. A Squad-tool repair assignment is valid only with the user's
+current designation of that maintenance agent; business or production authorization
+never substitutes for it.
+
 Assignments must say that successful authorized closeout needs no routine
 Dispatcher approval. Request a decision only for an actual exception; keep
 current holds, review/CI and shared-environment gates. Require one owned GitHub

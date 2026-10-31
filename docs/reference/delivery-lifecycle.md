@@ -82,8 +82,9 @@ retire it. Both paths require matching native/generation/actor, blocked canonica
 item, handled original outcome, no retained Worker claims/active execution pins
 and no other claimant of the canonical item. Audit and the exact one-row
 reservation update commit together; an unapplied update rolls back the audit. It does not close the Issue or invent a done
-item. A new authorized continuation can use existing reserve/attach/bind with
-next generation and the same canonical item. A process exit or Issue observation
+item. A new authorized continuation of the same Issue can use existing reserve/attach/bind with
+next generation and the same canonical item, under the reservation owner; it never reuses a retired session for a different
+Issue. A process exit or Issue observation
 alone never qualifies retirement. Unmanaged external operation custody still
 requires the original owner's verification; absence from this ledger is not
 proof that those operations stopped. Remote mutation remains disabled.
