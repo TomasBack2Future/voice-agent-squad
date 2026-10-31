@@ -42,7 +42,7 @@ func pushesDefaultBranch(command string) bool {
 		}
 		var positional []string
 		for _, w := range words[i+1:] {
-			w = strings.NewReplacer("'", "", "\"", "").Replace(w)
+			w = strings.NewReplacer("'", "", "\"", "", "`", "", ")", "", "}", "").Replace(w)
 			if !strings.HasPrefix(w, "-") {
 				positional = append(positional, w)
 			}
