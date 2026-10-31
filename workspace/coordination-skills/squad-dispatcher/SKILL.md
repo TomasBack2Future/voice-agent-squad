@@ -139,7 +139,8 @@ next owner/action and evidence; mark older summaries superseded. A stale summary
 is not a reason to restart a Worker. Reconcile closed Issues with remaining
 reservations only after verifying operations and custody, using owner-supported
 transitions. For partial delivery keep the Issue open and the unfinished item
-blocked, with its supported continuation route (same Issue, same reservation owner); do not close an Issue Worker
+blocked, with its supported continuation route (same Issue; a donor-to-recipient
+integration handoff is the only exception and must be explicit); do not close an Issue Worker
 reservation as completed while its Issue remains open. If the installed tool
 cannot represent safe partial retirement/continuation, record that capability
 gap and retained ownership rather than inventing a state, force-releasing WIP,
@@ -184,8 +185,8 @@ Then use `dispatch continue KEY --from-item OLD --item NEW --worker-session UUID
 --generation N` as the reservation owner. The operation verifies released original,
 same-actor custody and exact reservation identity atomically; it also changes the
 canonical notification route. Verify the returned item before allowing writes.
-Same-Issue phases stay with their original owner; this is not a handoff to a
-completed session. Do not replace this transition with a note, relax event custody,
+Same-Issue phases continue in the original owner's reservation and native session;
+they are not a handoff to a retired session. Do not replace this transition with a note, relax event custody,
 or create another Worker. An unsupported runtime is a capability gap, not permission to improvise.
 
 Each existing bounded reconciliation cycle also examines addressed blocking asks
@@ -221,7 +222,7 @@ can start a new turn or steer an active Worker.
 - Treat idle, `notLoaded`, quiet, listening, and claim-waiting Workers as
   non-terminal while their reservation, claim, or external operation is live.
 - If a verified dependency transition enables new work on the SAME Issue for an idle
-  or `notLoaded` Worker that has not completed, inspect recent task prompts and the reservation
+  or `notLoaded` Worker whose session has not been retired, inspect recent task prompts and the reservation
   generation, then send at most one narrowly scoped wake-up for that exact
   transition. Never send it after the task has become active, and never repeat
   it on later heartbeat cycles.
@@ -340,7 +341,7 @@ Never wait for Worker termination to answer its blocking design question.
    current designation, record the gap and leave the Issue unassigned. A designation
    covers the stated round only and is not a standing delegation.
    Before launching, render the prompt and run
-   `python3 workspace/agent-loop/assignment_contract.py PROMPT_FILE` from the installed
+   `PYTHONDONTWRITEBYTECODE=1 python3 workspace/agent-loop/assignment_contract.py PROMPT_FILE` from the installed
    generation; a nonzero result (a required approval before the Worker closes, a session
    carried over from another Issue, or a Squad-tool assignment without a designation) blocks the launch. Do not copy a
    previous batch's launch script or prompt forward without re-checking it.

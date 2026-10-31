@@ -8,10 +8,10 @@ import re
 NEGATION = re.compile(r"(?i)(?:\bno\b|\bnot\b|\bnever\b|\bwithout\b|\bdon't\b|\bnone\b|不要|无|不得|禁止|不再|不加|不设|取消|没有)[^。.]{0,70}$")
 
 FORBIDDEN = [
-    ('pre-close-approval', re.compile(r"(?i)ready[- ]to[- ]close|预关单|pre[- ]close\s+(?:approval|gate|review)|先不要关单|等待\s*Dispatcher[^。\n]{0,20}批准")),
-    ('completed-session-reuse', re.compile(r"(?i)(?:reuse|复用|重用|re-?assign)[^。.\n]{0,40}(?:completed|finished|已完成|结束)[^。.\n]{0,20}(?:worker|session|native|会话)")),
-    ('handoff-to-completed', re.compile(r"(?i)hand\s*off[^。.\n]{0,60}(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)")),
-    ('squad-repair-to-business-worker', re.compile(r"(?i)(?:(?:dispatch|assign|派给|交给|分配)[^。.\n]{0,60}(?:squad|coordination)[^。.\n]{0,30}(?:tool|工具)[^。.\n]{0,30}(?:repair|fix|修复)[^。.\n]{0,60}worker|(?:squad|coordination)[^。.\n]{0,30}(?:tool|工具)[^。.\n]{0,30}(?:repair|fix|修复)[^。.\n]{0,60}(?:dispatch|assign|派给|交给|分配)[^。.\n]{0,60}worker)")),
+    ('pre-close-approval', re.compile(r"(?i)ready[- ]to[- ]close|预关单|pre[- ]close\s+(?:approval|gate|review)|先不要关单|等待\s*Dispatcher[^。\n]{0,20}批准|(?:wait|await)(?:ing)?\s+(?:for\s+)?(?:the\s+)?(?:Dispatcher|dispatcher)[^.\n]{0,30}(?:approv|release|go-ahead|permission)|(?:Dispatcher|dispatcher)[^.\n]{0,30}approv[^.\n]{0,30}(?:before|prior to)[^.\n]{0,20}clos")),
+    ('completed-session-reuse', re.compile(r"(?i)(?:reuse|re-?use|resume|wake|re-?activate|re-?assign|复用|重用|唤醒|续用)[^。.\n]{0,40}(?:completed|finished|retired|已完成|已结束|结束)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)[^。.\n]{0,40}(?:for|承接|接手)[^。.\n]{0,30}(?:another|next|different|其他|另一|下一)[^。.\n]{0,10}Issue")),
+    ('handoff-to-completed', re.compile(r"(?i)hand\s*off[^。.\n]{0,60}(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:交接|移交)[^。.\n]{0,30}(?:已完成|已结束)[^。.\n]{0,10}(?:worker|会话)")),
+    ('squad-repair-to-business-worker', re.compile(r"(?i)(?:(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}worker|(?:squad|coordination)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}worker|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,20}(?:repair|fix|修复)[^。.\n]{0,40}(?:squad|coordination|协作))")),
 ]
 
 
@@ -21,7 +21,9 @@ def findings(text):
     flat = re.sub(r"\s+", " ", text)
     for rule, pattern in FORBIDDEN:
         for m in pattern.finditer(flat):
-            if NEGATION.search(flat[max(0, m.start() - 70):m.start()]):
+            before = re.split(r"[;；]", flat[max(0, m.start() - 70):m.start()])[-1]
+            after = flat[m.end():m.end() + 24]
+            if NEGATION.search(before) or (rule != 'pre-close-approval' and re.search(r"(?i)\b(?:never|not)\b|不得|不要|禁止", m.group(0))) or re.match(r"[^。.;；]{0,12}(?:已取消|不再|无需|取消|is cancelled|no longer)", after):
                 continue
             out.append((rule, flat[max(0, m.start() - 20):m.end() + 40].strip()))
     return out
@@ -39,13 +41,14 @@ def missing(text):
 
 
 SQUAD_TARGET = re.compile(r"voice-agent-squad|github:[^\s]*squad#\d+|Squad (?:tool|工具|Issue)", re.I)
-DESIGNATION = re.compile(r"(?i)maintenance[- ]agent|维护 ?agent|用户[^。\n]{0,12}指定[^。\n]{0,20}(?:agent|维护)")
+DESIGNATION = re.compile(r"(?i)(?:user[- ]designat\w*|designated by the user|用户[^。\n]{0,12}指定)[^。\n]{0,40}(?:maintenance[- ]agent|维护 ?agent|agent)|(?:maintenance[- ]agent|维护 ?agent)[^。\n]{0,30}(?:designated|指定)")
 
 
 def assignment_findings(text):
     """Findings for one generated Worker assignment, including repair ownership."""
     out = findings(text)
-    if SQUAD_TARGET.search(text) and not DESIGNATION.search(text):
+    designated = any(not NEGATION.search(re.sub(r"\s+", " ", text)[max(0, m.start() - 40):m.start()]) for m in DESIGNATION.finditer(text))
+    if SQUAD_TARGET.search(text) and not designated:
         out.append(('squad-repair-without-designation', 'Squad-tool assignment names no user-designated maintenance agent'))
     return out
 

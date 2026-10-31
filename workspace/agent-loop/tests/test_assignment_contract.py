@@ -25,6 +25,15 @@ class ScannerTests(unittest.TestCase):
             'handoff-to-completed': 'Hand off the follow-up repair to the completed Worker session.',
             'squad-repair-to-business-worker': 'Dispatch the Squad tool repair to a Worker.',
         }
+        more = [('pre-close-approval', 'Wait for Dispatcher approval before closing the Issue.'),
+                ('pre-close-approval', 'no routine approval; however submit ready-to-close and wait'),
+                ('completed-session-reuse', 'Resume the completed Worker session for Issue #5.'),
+                ('completed-session-reuse', '唤醒已完成的 Worker 会话处理下一个 Issue'),
+                ('squad-repair-to-business-worker', 'Dispatch the Squad repair to a business Worker.'),
+                ('squad-repair-to-business-worker', '派给 Worker 修复 Squad 工具问题')]
+        for rule, text in more:
+            self.assertIn(rule, [r for r, _ in contract.findings(text)], text)
+        self.assertEqual(contract.findings('预关单审批已取消，不再需要'), [])
         for rule, text in bad.items():
             self.assertIn(rule, [r for r, _ in contract.findings(text)], text)
         for ok in ['Do not request ready-to-close approval.', '不要提交例行 ready-to-close 请求',
@@ -41,6 +50,7 @@ class AssignmentScenarioTests(unittest.TestCase):
         self.assertEqual(contract.assignment_findings(studio), [])
         squad = 'Issue github:TomasBack2Future/voice-agent-squad#149，用户 2026-10-29 授权。' + self.CLOSEOUT
         self.assertIn('squad-repair-without-designation', [r for r, _ in contract.assignment_findings(squad)])
+        self.assertIn('squad-repair-without-designation', [r for r, _ in contract.assignment_findings(squad + ' no maintenance agent designated.')])
         designated = squad + ' 用户本轮指定维护 agent 修复。'
         self.assertEqual(contract.assignment_findings(designated), [])
 
@@ -58,7 +68,7 @@ class NormativeSourceTests(unittest.TestCase):
         text = '\n'.join(p.read_text() for p in NORMATIVE)
         self.assertEqual(contract.missing(text), [])
         dispatcher = (WORKSPACE / 'coordination-skills/squad-dispatcher/SKILL.md').read_text()
-        self.assertIn('Never derive that\n   assignment from business, staging or production authorization', dispatcher)
+        self.assertRegex(dispatcher, r'Never derive that\s+assignment from business, staging or production authorization')
         self.assertNotRegex(dispatcher, r'#14[345]')
 
     def test_worker_skill_closes_itself_and_refuses_other_issues(self):
