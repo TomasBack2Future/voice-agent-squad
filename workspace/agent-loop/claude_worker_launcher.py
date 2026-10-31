@@ -203,6 +203,25 @@ def check_heartbeat_runtime(c: dict, env: dict) -> None:
                             cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
     if result.returncode or any(flag not in result.stdout for flag in ('--reservation', '--generation', '--worker-session', '--check')):
         raise ValidationError('coordination runtime lacks fenced heartbeat; update runtime before launch')
+    # The supervisor calls retire-client after a rejected renewal; a runtime without
+    # it would pass preflight and then never retire a finished client.
+    retire = subprocess.run([c['coordination_executable'], 'dispatch', 'retire-client', '--help'],
+                            cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+    if retire.returncode or '--worker-session' not in retire.stdout:
+        raise ValidationError('coordination runtime lacks dispatch retire-client; update runtime before launch')
+
+
+def runtime_identity(c: dict, env: dict) -> dict:
+    """Binary version and hash that this launch will actually execute for coordination."""
+    path = Path(c['coordination_executable']).resolve()
+    out = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'version': 'unknown'}
+    try:
+        result = subprocess.run([str(path), 'version'], cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            out['version'] = result.stdout.strip()[:80]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return out
 
 
 def check_launch(assignment: dict, config_path: Path) -> dict:

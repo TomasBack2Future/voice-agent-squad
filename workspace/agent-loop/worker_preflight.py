@@ -99,6 +99,15 @@ def check_release(assignment: dict) -> None:
         raise ValidationError("assignment base_sha must equal the release revision of its repository")
 
 
+_GENERATION = re.compile(r"(?:^|/)generations/([0-9a-f]{40})(?:/|$)")
+
+
+def generation_of(path: Path) -> str | None:
+    """The immutable skill-sync generation a resolved path lives in, if any."""
+    found = _GENERATION.search(str(path.resolve()))
+    return found.group(1) if found else None
+
+
 def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
     selected = assignment["project_profile"]
     declared = Path(selected["path"])
@@ -106,6 +115,13 @@ def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
         declared = Path(assignment["worktree"]) / declared
     if profile_path is not None and declared.resolve() != profile_path.resolve():
         raise ValidationError("profile path differs from the assignment")
+    helper_generation, profile_generation = generation_of(Path(__file__)), generation_of(declared)
+    if helper_generation and profile_generation and helper_generation != profile_generation:
+        # A floating `current` link can move under a running session. Say so before the
+        # helper's older schema rejects the newer profile for an unrelated-looking reason.
+        raise ValidationError(
+            f"profile generation {profile_generation[:8]} differs from this helper generation {helper_generation[:8]}; "
+            "resume or relaunch with the helper from the profile's generation, or pin the assignment profile path to this generation")
     profile = validate_file(declared, ROOT / "schemas/project-profile.schema.json")
     if (selected["id"], selected["version"], assignment["repository"], assignment.get("repository_host", "github.com"), assignment.get("clone_layout", "plain")) != (
         profile["id"], profile["version"], profile["repository"], profile.get("repository_host", "github.com"), profile.get("clone_layout", "plain")
@@ -230,6 +246,9 @@ def check(assignment_path: Path, profile_path: Path, runtime: str,
         "assignment_sha256": hashlib.sha256(assignment_path.read_bytes()).hexdigest(),
         "base_sha": assignment["base_sha"], "runtime": runtime,
         "profile_sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+        "helper_generation": generation_of(Path(__file__)) or "source",
+        "profile_generation": generation_of(profile_path) or "source",
+        "schema_sha256": hashlib.sha256((ROOT / "schemas/project-profile.schema.json").read_bytes()).hexdigest(),
         "skills": receipts, "executables": available,
         "ownership": launch_receipt.get("primary_ownership", "not_checked"), "repository_api_access": "not_checked",
         "runtime_approval": launch_receipt.get("runtime_approval", "not_checked"),

@@ -132,7 +132,9 @@ func legacyWorkerStopCommands() []*cobra.Command {
 			return err
 		}
 		defer bc.Close()
-		if err := dispatch.New(bc.db, bc.repoID, nil).CheckWorkerNativeHook(cmd.Context(), bc.agentID, hookNative, hookConfig, dispatch.NativeHookTool{Name: hookTool, Command: hookCommand}); err != nil {
+		store := dispatch.New(bc.db, bc.repoID, nil)
+		store.SetBinaryIdentity(versionString)
+		if err := store.CheckWorkerNativeHook(cmd.Context(), bc.agentID, hookNative, hookConfig, dispatch.NativeHookTool{Name: hookTool, Command: hookCommand}); err != nil {
 			return err
 		}
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"state": "eligible", "native_session": hookNative})
