@@ -19,7 +19,7 @@ import (
 var mergeLike = regexp.MustCompile(`(?i)\bgh\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?pr['"]?\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?merge\b|gh['"]?\s*,\s*['"]?pr['"]?\s*,\s*['"]?merge|\bgh\s+alias\b|\b(?:gh\s+api|curl|wget|http|https)\b[^\n]*(?:/merges?\b|/git/refs\b|mergePullRequest|auto_merge|enableAutoMerge)|mergePullRequest|enablePullRequestAutoMerge`)
 
 // gitSegment finds a `git` word and the rest of its shell segment.
-var gitSegment = regexp.MustCompile(`(?i)(?:^|[\s;&|(])git\b([^;&|\n]*)`)
+var gitSegment = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_.-])git\b([^;&|\n]*)`)
 
 // gitGlobalWithValue are git global options that take a separate value.
 var gitGlobalWithValue = map[string]bool{"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true, "--super-prefix": true, "--config-env": true}
