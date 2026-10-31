@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zsiec/squad/internal/dispatch"
 	"github.com/zsiec/squad/internal/store"
 	"github.com/zsiec/squad/internal/terminalevents"
 )
@@ -26,6 +27,10 @@ type Request struct {
 	ExpectedDecision int64  `json:"expected_decision"`
 	RequestKey       string `json:"request_key"`
 	Body             string `json:"body"`
+	// Coverage (optional) records how much of the original goal the owner asserts
+	// is met: source-complete, diagnostic-archived, limited-sample or full.
+	Coverage    string `json:"coverage,omitempty"`
+	CoverageRef string `json:"coverage_ref,omitempty"`
 }
 
 type Backend interface {
@@ -57,6 +62,9 @@ var issuePattern = regexp.MustCompile(`^github:([A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za
 func (e Engine) binding(ctx context.Context, q Request) (item, source string, err error) {
 	if e.Repo == "" || e.Actor == "" || !tokenPattern.MatchString(q.Reservation) || !tokenPattern.MatchString(q.RequestKey) || q.Generation < 1 || !tokenPattern.MatchString(q.WorkerSession) || strings.TrimSpace(q.Body) == "" || len(q.Body) > 16384 {
 		return "", "", fmt.Errorf("explicit assignment identity, request key and bounded acceptance summary required")
+	}
+	if q.Coverage != "" && (!dispatch.AcceptanceCoverages[q.Coverage] || len(q.CoverageRef) > 300) {
+		return "", "", fmt.Errorf("coverage must be source-complete, diagnostic-archived, limited-sample or full with a bounded reference")
 	}
 	var started int64
 	var state string
@@ -253,7 +261,28 @@ func (e Engine) Run(ctx context.Context, q Request) (Result, error) {
 		}
 		result.Steps = append(result.Steps, step)
 	}
+	if q.Coverage != "" {
+		if err = e.recordCoverage(ctx, item, q); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
+}
+
+// recordCoverage appends the owner's coverage assertion once per request.
+func (e Engine) recordCoverage(ctx context.Context, item string, q Request) error {
+	body, err := json.Marshal(map[string]any{"reservation": q.Reservation, "generation": q.Generation, "coverage": q.Coverage, "ref": q.CoverageRef, "request_key": q.RequestKey})
+	if err != nil {
+		return err
+	}
+	return store.WithTxRetry(ctx, e.DB, func(tx *sql.Tx) error {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE repo_id=? AND agent_id=? AND thread=? AND kind='acceptance-coverage' AND body=?`, e.Repo, e.Actor, item, string(body)).Scan(&n); err != nil || n > 0 {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?,'acceptance-coverage',?,'[]','normal')`, e.Repo, time.Now().Unix(), e.Actor, item, string(body))
+		return err
+	})
 }
 
 // ParseSource accepts canonical GitHub sources only, preventing URL/flag injection.

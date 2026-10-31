@@ -42,10 +42,23 @@ var ErrStaleDecision = errors.New("decision changed or missing: read terminal-ev
 // workerRecipient deliberately rejects ambiguous custody rather than guessing a
 // session identity. Released claims can receive decisions, never write authority.
 func workerRecipient(ctx context.Context, tx *sql.Tx, repo, key string, generation int64) (string, error) {
+	return workerRecipientIn(ctx, tx, repo, key, generation, "dispatched")
+}
+
+// workerRecipientIn resolves the sole claimant of an assignment in one of the
+// named reservation states; a late operation exit may still reach its original
+// Worker after the reservation completed.
+func workerRecipientIn(ctx context.Context, tx *sql.Tx, repo, key string, generation int64, states ...string) (string, error) {
+	marks := make([]string, len(states))
+	args := []any{repo, key, generation}
+	for i, st := range states {
+		marks[i] = "?"
+		args = append(args, st)
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT c.agent_id FROM dispatch_reservations r JOIN
  (SELECT repo_id,item_id,agent_id,claimed_at FROM claims UNION ALL SELECT repo_id,item_id,agent_id,claimed_at FROM claim_history) c
  ON c.repo_id=r.repo_id AND c.item_id=r.canonical_item_id AND c.claimed_at>=r.reserved_at
- WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.state='dispatched'`, repo, key, generation)
+ WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.state IN (`+strings.Join(marks, ",")+`)`, args...)
 	if err != nil {
 		return "", err
 	}

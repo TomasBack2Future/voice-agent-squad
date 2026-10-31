@@ -22,6 +22,26 @@ It is caller-supplied evidence, not acceptance or closure authority. A missing
 or older-than-five-minute observation is `unknown`; mismatched source or a
 future timestamp is rejected. Ledger item IDs are scoped by repository identity.
 
+The projection also derives, without any editable record: `worker_phase` (`live`,
+`ended`, `unknown`), `continuation` (`none` once the Issue is observed closed,
+`in-progress`, `awaiting-owner` for an ended phase on an open Issue,
+`partial-retired`), `custody` (claims on the item and elsewhere, active execution
+pins, unresolved operations, unhandled events, native fence, and the client-retirement
+gate with its recorded exit/color steps) and `acceptance`. A Worker phase that ended
+while the reservation stays `dispatched` (item done or blocked, claims released, and the
+Worker's own handoff-complete/blocked/issue-closed outcome handled) is `worker-phase-ended-reservation-active`; a blocked item with a `completed`
+reservation is `blocked-item-completed-reservation`. Neither is Issue completion, and
+the finished Worker is no longer shown as the next owner. `acceptance.coverage` is
+`unrecorded` unless the owner recorded `source-complete`, `diagnostic-archived`,
+`limited-sample` or `full` through `closeout` (`coverage`, `coverage_ref`) or
+`retire-partial`; `goal_reached` is true only for `full` coverage on an observed CLOSED
+Issue, so source work, an archived diagnosis or a limited sample is not shown as the
+original goal being met. Coverage is the owner's assertion (author-checked, not
+independently verified). `operation_handled_at/note` project the acknowledgement note of
+the latest operation exit; the start-time `phase`/`next_action` are provenance, so read
+the note for the Worker's recorded next step. An exit with no routed receipt is
+`operation-exit-unrouted`.
+
 Stable drift codes distinguish an open Issue with a completed reservation,
 a closed Issue with active reservation, a terminal reservation retaining claims,
 and pending delivery on a blocked item. The latest attestation is a command

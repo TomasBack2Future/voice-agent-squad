@@ -283,3 +283,44 @@ func TestLiveDescendantWaitDelayRetainsUnresolvedCustody(t *testing.T) {
 		t.Fatalf("ACK removed unknown descendant custody fence: %v %v", unresolved, err)
 	}
 }
+
+// An exit that arrives after the reservation completed is still routed to its
+// original Worker; it is neither dropped nor left without a receipt.
+func TestExitArrivingAfterCompletionStillReachesTheOriginalWorker(t *testing.T) {
+	s := fixture(t)
+	if _, err := s.DB.Exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch) VALUES('repo','TASK','worker',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	q := OperationRequest{Reservation: "DISPATCH-1", Generation: 1, WorkerSession: "worker-session", RequestKey: "late"}
+	done := make(chan struct{})
+	var r OperationResult
+	var runErr error
+	go func() {
+		defer close(done)
+		r, runErr = s.RunOperation(context.Background(), "worker", q, attest.RunOpts{ItemID: "TASK", AgentID: "worker", Kind: attest.KindTest, Command: "sleep 1; exit 0", RepoRoot: t.TempDir(), AttDir: t.TempDir()})
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var started int
+		if err := s.DB.QueryRow(`SELECT count(*) FROM messages WHERE kind='owned-operation'`).Scan(&started); err != nil {
+			t.Fatal(err)
+		}
+		if started > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("operation never started")
+		}
+	}
+	if _, err := s.DB.Exec(`UPDATE dispatch_reservations SET state='completed'; INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','TASK','worker',1,2,'done');DELETE FROM claims`); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if runErr != nil || r.EventID == "" {
+		t.Fatalf("late exit not routed: %+v %v", r, runErr)
+	}
+	worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker"}
+	events, err := worker.Pending(context.Background(), "inc", 0)
+	if err != nil || len(events) != 1 || events[0].Kind != "operation-exit" {
+		t.Fatalf("%+v %v", events, err)
+	}
+}
