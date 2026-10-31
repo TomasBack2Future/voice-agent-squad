@@ -26,8 +26,8 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 	if actor == "" || q.Expected.ReservedBy != actor || q.Expected.RepoID != s.repoID || q.Expected.Generation < 1 || q.Expected.WorkerThreadID == "" || q.BlockedOutcome < 1 {
 		return nil, fmt.Errorf("exact owner, bound reservation and blocked outcome required")
 	}
-	if q.Coverage != "" && (!AcceptanceCoverages[q.Coverage] || len(q.CoverageRef) > 300) {
-		return nil, fmt.Errorf("coverage must be source-complete, diagnostic-archived, limited-sample or full with a bounded reference")
+	if q.Coverage != "" && (!AcceptanceCoverages[q.Coverage] || q.Coverage == "full" || len(q.CoverageRef) > 300) {
+		return nil, fmt.Errorf("a partial retirement may record source-complete, diagnostic-archived or limited-sample coverage with a bounded reference, never full")
 	}
 	now := s.now().Unix()
 	if q.Issue.Source != q.Expected.SourceRef || q.Issue.State != "OPEN" || q.Issue.VerifiedAt <= 0 || q.Issue.VerifiedAt > now {

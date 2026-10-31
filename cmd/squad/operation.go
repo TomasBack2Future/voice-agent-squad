@@ -47,7 +47,23 @@ func runOwnedOperation(ctx context.Context, bc *claimContext, root string, input
 // process group is killed and the failed result and operation-exit are still
 // recorded, instead of the wrapper dying with an unresolved start.
 func operationSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	// A wrapper deliberately detached (nohup, background job) ignores hangup/interrupt;
+	// keep honoring that. A second signal after the first restores default handling.
+	var signals []os.Signal
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP} {
+		if !signal.Ignored(sig) {
+			signals = append(signals, sig)
+		}
+	}
+	if len(signals) == 0 {
+		return parent, func() {}
+	}
+	ctx, stop := signal.NotifyContext(parent, signals...)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
 }
 
 func newOperationCmd() *cobra.Command {

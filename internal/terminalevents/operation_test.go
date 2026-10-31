@@ -299,7 +299,18 @@ func TestExitArrivingAfterCompletionStillReachesTheOriginalWorker(t *testing.T) 
 		defer close(done)
 		r, runErr = s.RunOperation(context.Background(), "worker", q, attest.RunOpts{ItemID: "TASK", AgentID: "worker", Kind: attest.KindTest, Command: "sleep 1; exit 0", RepoRoot: t.TempDir(), AttDir: t.TempDir()})
 	}()
-	time.Sleep(300 * time.Millisecond)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var started int
+		if err := s.DB.QueryRow(`SELECT count(*) FROM messages WHERE kind='owned-operation'`).Scan(&started); err != nil {
+			t.Fatal(err)
+		}
+		if started > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("operation never started")
+		}
+	}
 	if _, err := s.DB.Exec(`UPDATE dispatch_reservations SET state='completed'; INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','TASK','worker',1,2,'done');DELETE FROM claims`); err != nil {
 		t.Fatal(err)
 	}

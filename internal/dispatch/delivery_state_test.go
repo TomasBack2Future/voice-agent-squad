@@ -36,6 +36,7 @@ func hasDrift(d *DeliveryStatus, code string) bool {
 func TestDeliveryDistinguishesEndedExecutionFromACompletedIssue(t *testing.T) {
 	open := IssueObservation{Source: "github:o/r#1", State: "OPEN", VerifiedAt: 1000}
 	closed := IssueObservation{Source: "github:o/r#1", State: "CLOSED", VerifiedAt: 1000}
+	handled := []string{`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,processed_at) VALUES('repo-test','owner','h','D',1,'native','T','handoff-complete',1,1,50)`}
 	cases := []struct {
 		name, res, item string
 		extra           []string
@@ -44,9 +45,10 @@ func TestDeliveryDistinguishesEndedExecutionFromACompletedIssue(t *testing.T) {
 		drift           string
 		owner           string
 	}{
-		{"importer phase delivered: item done, claims released, reservation still dispatched", "dispatched", "done", nil, open, "ended", "awaiting-owner", "worker-phase-ended-reservation-active", "owner"},
-		{"blocked after a limited phase, reservation still dispatched", "dispatched", "blocked", nil, open, "ended", "awaiting-owner", "worker-phase-ended-reservation-active", "owner"},
+		{"importer phase delivered: item done, claims released, handled outcome, reservation still dispatched", "dispatched", "done", handled, open, "ended", "awaiting-owner", "worker-phase-ended-reservation-active", "owner"},
+		{"blocked after a limited phase, handled outcome, reservation still dispatched", "dispatched", "blocked", handled, open, "ended", "awaiting-owner", "worker-phase-ended-reservation-active", "owner"},
 		{"blocked item with a completed reservation (partial delivery mislabelled)", "completed", "blocked", nil, open, "ended", "awaiting-owner", "blocked-item-completed-reservation", "owner"},
+		{"pre-closeout window: item done, claim released, no handled outcome", "dispatched", "done", nil, open, "live", "in-progress", "", "worker"},
 		{"live Worker still holds its claim", "dispatched", "in_progress", []string{`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,state,generation) VALUES('repo-test','T','worker',2,2,'held',1)`}, open, "live", "in-progress", "", "worker"},
 		{"issue closed", "completed", "done", nil, closed, "ended", "none", "", "owner"},
 	}
@@ -117,6 +119,11 @@ func TestPartialRetirementRecordsCoverageAndRejectsUnknownValues(t *testing.T) {
 		t.Fatal("unknown coverage accepted")
 	}
 	q.Coverage, q.CoverageRef = "diagnostic-archived", "evidence-1717.json"
+	full := q
+	full.Coverage = "full"
+	if _, err := s.RetirePartial(context.Background(), q.Expected.ReservedBy, full); err == nil {
+		t.Fatal("partial retirement recorded full coverage")
+	}
 	if _, err := s.RetirePartial(context.Background(), q.Expected.ReservedBy, q); err != nil {
 		t.Fatal(err)
 	}

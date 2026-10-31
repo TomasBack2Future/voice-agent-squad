@@ -203,7 +203,9 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 			out.NextOwner = r.ReservedBy
 		}
 	}
-	s.projectState(ctx, key, r, out)
+	if err = s.projectState(ctx, key, r, out); err != nil {
+		return nil, err
+	}
 	if out.IssueState == "open" && r.State == "completed" {
 		out.Drift = append(out.Drift, "open-issue-completed-reservation")
 	}
@@ -227,7 +229,7 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 
 // projectState derives phase, continuation, custody and acceptance coverage from
 // existing records. It writes nothing.
-func (s *Store) projectState(ctx context.Context, key string, r *Reservation, out *DeliveryStatus) {
+func (s *Store) projectState(ctx context.Context, key string, r *Reservation, out *DeliveryStatus) error {
 	out.Custody = Custody{OtherClaims: []string{}}
 	for _, item := range out.Claims {
 		if item == r.CanonicalItemID {
@@ -237,12 +239,23 @@ func (s *Store) projectState(ctx context.Context, key string, r *Reservation, ou
 		}
 	}
 	out.Custody.UnresolvedOperations = len(out.UnresolvedOperations)
-	out.Custody.PendingEvents = 0
-	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND worker_session=? AND processed_at=0`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&out.Custody.PendingEvents)
-	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM execution_authorizations WHERE repo_id=? AND state='active' AND holder IN (SELECT agent_id FROM claims WHERE repo_id=? AND item_id=? UNION SELECT agent_id FROM claim_history WHERE repo_id=? AND item_id=? AND claimed_at>=?)`, s.repoID, s.repoID, r.CanonicalItemID, s.repoID, r.CanonicalItemID, r.ReservedAt).Scan(&out.Custody.ExecutionPins)
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND worker_session=? AND processed_at=0`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&out.Custody.PendingEvents); err != nil {
+		return err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM execution_authorizations WHERE repo_id=? AND state='active' AND (item_id=? OR (json_valid(binding) AND json_extract(binding,'$.reservation')=?))`, s.repoID, r.CanonicalItemID, key).Scan(&out.Custody.ExecutionPins); err != nil {
+		return err
+	}
 	var fenced int
-	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM worker_native_fences WHERE repo_id=? AND native_session=?`, s.repoID, r.WorkerThreadID).Scan(&fenced)
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM worker_native_fences WHERE repo_id=? AND native_session=?`, s.repoID, r.WorkerThreadID).Scan(&fenced); err != nil {
+		return err
+	}
 	out.Custody.NativeFenced = fenced > 0
+	// A phase has ended only when the Worker's own terminal outcome was handled; a
+	// released claim on a done or blocked item alone may be the pre-closeout window.
+	var handledOutcome int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND worker_session=? AND kind IN ('handoff-complete','blocked','issue-closed') AND processed_at>0`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&handledOutcome); err != nil {
+		return err
+	}
 	if r.WorkerThreadID != "" {
 		if st, err := s.Retirement(ctx, RetirementRequest{Reservation: key, Generation: r.Generation, WorkerSession: r.WorkerThreadID}); err == nil {
 			out.Custody.ClientRetirement = st
@@ -254,7 +267,7 @@ func (s *Store) projectState(ctx context.Context, key string, r *Reservation, ou
 		out.WorkerPhase = "ended"
 	case "dispatched":
 		out.WorkerPhase = "live"
-		if out.Custody.ClaimsOnItem == 0 && (out.ItemState == "done" || out.ItemState == "blocked") && out.Custody.PendingEvents == 0 && out.Custody.UnresolvedOperations == 0 {
+		if out.Custody.ClaimsOnItem == 0 && (out.ItemState == "done" || out.ItemState == "blocked") && handledOutcome > 0 && out.Custody.PendingEvents == 0 && out.Custody.UnresolvedOperations == 0 {
 			out.WorkerPhase = "ended"
 		}
 	default:
@@ -279,7 +292,10 @@ func (s *Store) projectState(ctx context.Context, key string, r *Reservation, ou
 
 	out.Acceptance = Acceptance{Coverage: "unrecorded"}
 	var coverage, ref string
-	err := s.db.QueryRowContext(ctx, `SELECT json_extract(body,'$.coverage'),COALESCE(json_extract(body,'$.ref'),'') FROM messages WHERE repo_id=? AND thread=? AND kind='acceptance-coverage' AND json_valid(body) AND json_extract(body,'$.reservation')=? AND json_extract(body,'$.generation')=? ORDER BY id DESC LIMIT 1`, s.repoID, r.CanonicalItemID, key, r.Generation).Scan(&coverage, &ref)
+	err := s.db.QueryRowContext(ctx, `SELECT json_extract(body,'$.coverage'),COALESCE(json_extract(body,'$.ref'),'') FROM messages WHERE repo_id=? AND thread=? AND kind='acceptance-coverage' AND (agent_id=? OR agent_id IN (SELECT agent_id FROM claim_history WHERE repo_id=? AND item_id=? AND claimed_at>=?)) AND json_valid(body) AND json_extract(body,'$.reservation')=? AND json_extract(body,'$.generation')=? ORDER BY id DESC LIMIT 1`, s.repoID, r.CanonicalItemID, r.ReservedBy, s.repoID, r.CanonicalItemID, r.ReservedAt, key, r.Generation).Scan(&coverage, &ref)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
 	if err == nil && AcceptanceCoverages[coverage] {
 		out.Acceptance.Coverage, out.Acceptance.Ref = coverage, ref
 	}
@@ -288,12 +304,19 @@ func (s *Store) projectState(ctx context.Context, key string, r *Reservation, ou
 	var handledAt int64
 	var note string
 	err = s.db.QueryRowContext(ctx, `SELECT e.processed_at,e.processed_note FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.kind='operation-exit' ORDER BY e.source_message_id DESC LIMIT 1`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&handledAt, &note)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
 	if err == nil && handledAt > 0 {
 		out.OperationHandledAt, out.OperationHandledNote = handledAt, note
 	}
 	// A recorded exit with no routed receipt is drift, not a pending Worker action.
 	var unrouted int
-	if s.db.QueryRowContext(ctx, `SELECT count(*) FROM messages m WHERE m.repo_id=? AND m.kind='owned-operation' AND json_valid(m.body) AND json_extract(m.body,'$.request.reservation')=? AND json_extract(m.body,'$.request.generation')=? AND json_extract(m.body,'$.request.worker_session')=? AND json_extract(m.body,'$.state') IN ('exited','exited-without-evidence') AND NOT EXISTS(SELECT 1 FROM terminal_event_receipts e WHERE e.repo_id=m.repo_id AND e.kind='operation-exit' AND e.source_message_id=m.id)`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&unrouted) == nil && unrouted > 0 {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM messages m WHERE m.repo_id=? AND m.kind='owned-operation' AND json_valid(m.body) AND json_extract(m.body,'$.request.reservation')=? AND json_extract(m.body,'$.request.generation')=? AND json_extract(m.body,'$.request.worker_session')=? AND json_extract(m.body,'$.state') IN ('exited','exited-without-evidence') AND NOT EXISTS(SELECT 1 FROM terminal_event_receipts e WHERE e.repo_id=m.repo_id AND e.kind='operation-exit' AND e.source_message_id=m.id)`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&unrouted); err != nil {
+		return err
+	}
+	if unrouted > 0 {
 		out.Drift = append(out.Drift, "operation-exit-unrouted")
 	}
+	return nil
 }
