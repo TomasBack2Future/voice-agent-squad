@@ -20,7 +20,7 @@ type Decision struct {
 	WorkerAgent string `json:"worker_agent"`
 	// MergePolicy is "standing" (default) or "release-required": the latter makes
 	// the native tool boundary refuse merge-class commands without MergeRelease.
-	MergePolicy  string        `json:"merge_policy"`
+	MergePolicy  string        `json:"merge_policy,omitempty"`
 	MergeRelease *MergeRelease `json:"merge_release,omitempty"`
 }
 
@@ -128,6 +128,10 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
  WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, s.diagnoseLookup(ctx, key, generation)
+	}
+	if err == nil && d.Revision == 0 {
+		// An unadopted assignment keeps the original zero-value decision shape.
+		d.MergePolicy = ""
 	}
 	if err == nil && d.Revision > 0 && d.Action == "proceed" {
 		d.MergeRelease, err = currentRelease(ctx, s.DB, s.Repo, key, generation, item, d.Revision, time.Now().Unix())
