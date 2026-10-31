@@ -71,7 +71,7 @@ type Acceptance struct {
 	GoalReached bool   `json:"goal_reached"`
 }
 
-// Coverage values an owner may record with closeout or partial retirement.
+// AcceptanceCoverages are the values an owner may record with closeout or partial retirement.
 var AcceptanceCoverages = map[string]bool{"source-complete": true, "diagnostic-archived": true, "limited-sample": true, "full": true}
 
 // Delivery reads one explicit reservation in this ledger. It does not mirror
@@ -249,10 +249,10 @@ func (s *Store) projectState(ctx context.Context, key string, r *Reservation, ou
 		}
 	}
 
-	switch {
-	case r.State == "completed" || r.State == "failed" || r.State == "cancelled":
+	switch r.State {
+	case "completed", "failed", "cancelled":
 		out.WorkerPhase = "ended"
-	case r.State == "dispatched":
+	case "dispatched":
 		out.WorkerPhase = "live"
 		if out.Custody.ClaimsOnItem == 0 && (out.ItemState == "done" || out.ItemState == "blocked") && out.Custody.PendingEvents == 0 && out.Custody.UnresolvedOperations == 0 {
 			out.WorkerPhase = "ended"
