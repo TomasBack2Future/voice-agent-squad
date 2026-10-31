@@ -57,6 +57,30 @@ type nativeHookObservation struct {
 	DecisionOutcomeID int64              `json:"decision_outcome_id"`
 	RequestSHA256     string             `json:"request_sha256,omitempty"`
 	Bootstrap         bool               `json:"bootstrap,omitempty"`
+	// Binary identifies the squad executable that actually served this tool call, so
+	// adoption of an installed version is read from the real native's next call.
+	Binary BinaryIdentity `json:"binary,omitempty"`
+}
+
+// BinaryIdentity is the running coordination executable's version, path and hash.
+type BinaryIdentity struct {
+	Version string `json:"version,omitempty"`
+	Path    string `json:"path,omitempty"`
+	SHA256  string `json:"sha256,omitempty"`
+}
+
+// SetBinaryIdentity records which executable serves hook checks.
+func (s *Store) SetBinaryIdentity(version string) {
+	s.binary = BinaryIdentity{Version: version}
+	if path, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = resolved
+		}
+		s.binary.Path = path
+		if raw, err := os.ReadFile(path); err == nil {
+			s.binary.SHA256 = legacyBytesHash(raw)
+		}
+	}
 }
 
 func readLegacyFile(path string, limit int64) ([]byte, error) {
@@ -267,6 +291,7 @@ func (s *Store) recordNativeHookEligibility(ctx context.Context, tx *sql.Tx, act
 	if err != nil {
 		return err
 	}
+	observation.Binary = s.binary
 	var body, author, controller, key, item, action, policy string
 	var generation int64
 	count = 0

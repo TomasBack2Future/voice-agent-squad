@@ -216,6 +216,10 @@ class LauncherFixture(DeployerFixture):
 pathlib.Path({str(self.calls)!r}).open('a').write(json.dumps(sys.argv[1:]) + '\\n')
 if sys.argv[1] == 'heartbeat':
     print('--reservation --generation --worker-session --check'); sys.exit(0)
+if sys.argv[1:] == ['dispatch', 'retire-client', '--help']:
+    print('--worker-session'); sys.exit(0)
+if sys.argv[1] == 'version':
+    print('0.0.0-stub'); sys.exit(0)
 if sys.argv[1:4] == ['resources', 'check', 'ENV-002']:
     print(json.dumps({{'item': 'ENV-002', 'status': 'ready'}})); sys.exit(0)
 assert sys.argv[1:] == ['dispatch', 'list', '--json'], sys.argv

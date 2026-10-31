@@ -47,6 +47,7 @@ type Store struct {
 	legacyOwnerProbe     func(context.Context, string, int) ([]LegacyProcess, error)
 	legacyWorkspaceProbe func(context.Context, string) (string, error)
 	retireWait           time.Duration
+	binary               BinaryIdentity
 }
 
 func New(db *sql.DB, repoID string, now func() time.Time) *Store {
