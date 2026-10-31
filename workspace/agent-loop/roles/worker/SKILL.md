@@ -158,7 +158,12 @@ reconciliation; never target an implicit current workspace.
 For an assignment migrated to versioned decisions, read
 [current decisions and recovery](references/decision-recovery.md).
 
-If installed `operation run/status` is available, use its owned-command contract
+If installed `operation run/status` is available, use it as the default for any long
+command (CI wait, deployment, cleanup) whose result must resume this native session;
+wait only for a run you have enumerated for the exact head, and report a run that does not
+exist as "not created" instead of waiting for it. When the `operation-exit` arrives, record
+the next phase or blocker in your checkpoint and acknowledge with that reference— the
+acknowledgement note is what `dispatch delivery` shows as handled. Use its owned-command contract
 for a long command whose result must resume this native session; see
 [delivery lifecycle](../../../../docs/reference/delivery-lifecycle.md).
 Read `operation-exit` as an observation: reconcile the actual result/next phase

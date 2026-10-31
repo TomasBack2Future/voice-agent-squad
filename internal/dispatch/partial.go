@@ -14,6 +14,9 @@ type PartialRetirement struct {
 	Expected       Reservation      `json:"expected"`
 	Issue          IssueObservation `json:"issue"`
 	BlockedOutcome int64            `json:"blocked_outcome"`
+	// Coverage (optional) is the owner's assertion of how much of the goal is met.
+	Coverage    string `json:"coverage,omitempty"`
+	CoverageRef string `json:"coverage_ref,omitempty"`
 }
 
 // RetirePartial preserves an OPEN Issue and its blocked item while retiring
@@ -22,6 +25,9 @@ type PartialRetirement struct {
 func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetirement) (*Reservation, error) {
 	if actor == "" || q.Expected.ReservedBy != actor || q.Expected.RepoID != s.repoID || q.Expected.Generation < 1 || q.Expected.WorkerThreadID == "" || q.BlockedOutcome < 1 {
 		return nil, fmt.Errorf("exact owner, bound reservation and blocked outcome required")
+	}
+	if q.Coverage != "" && (!AcceptanceCoverages[q.Coverage] || len(q.CoverageRef) > 300) {
+		return nil, fmt.Errorf("coverage must be source-complete, diagnostic-archived, limited-sample or full with a bounded reference")
 	}
 	now := s.now().Unix()
 	if q.Issue.Source != q.Expected.SourceRef || q.Issue.State != "OPEN" || q.Issue.VerifiedAt <= 0 || q.Issue.VerifiedAt > now {
@@ -78,6 +84,12 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 		}
 		if _, e = tx.ExecContext(ctx, `INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?,'partial-retirement',?,'[]','normal')`, s.repoID, now, actor, current.CanonicalItemID, string(body)); e != nil {
 			return e
+		}
+		if q.Coverage != "" {
+			cov, _ := json.Marshal(map[string]any{"reservation": current.ItemID, "generation": current.Generation, "coverage": q.Coverage, "ref": q.CoverageRef})
+			if _, e = tx.ExecContext(ctx, `INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?,'acceptance-coverage',?,'[]','normal')`, s.repoID, now, actor, current.CanonicalItemID, string(cov)); e != nil {
+				return e
+			}
 		}
 		result, e := tx.ExecContext(ctx, `UPDATE dispatch_reservations SET state='failed',note=?,updated_at=?,expires_at=0 WHERE repo_id=? AND item_id=? AND reserved_by=? AND generation=? AND state=? AND worker_thread_id=? AND canonical_item_id=?`, "Partial delivery; Issue OPEN; see partial-retirement audit outcome", now, s.repoID, current.ItemID, actor, current.Generation, current.State, current.WorkerThreadID, current.CanonicalItemID)
 		if e != nil {

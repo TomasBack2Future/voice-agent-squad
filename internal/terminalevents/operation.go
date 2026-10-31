@@ -156,14 +156,14 @@ func (s Store) RunOperation(ctx context.Context, actor string, q OperationReques
 		// Only the original native/custody may receive the exit; no successor is
 		// guessed. The durable result remains available if routing became stale.
 		var n int
-		err = tx.QueryRowContext(saveCtx, `SELECT count(*) FROM dispatch_reservations WHERE repo_id=? AND item_id=? AND generation=? AND worker_thread_id=? AND state='dispatched'`, s.Repo, q.Reservation, q.Generation, q.WorkerSession).Scan(&n)
+		err = tx.QueryRowContext(saveCtx, `SELECT count(*) FROM dispatch_reservations WHERE repo_id=? AND item_id=? AND generation=? AND worker_thread_id=? AND state IN ('dispatched','completed')`, s.Repo, q.Reservation, q.Generation, q.WorkerSession).Scan(&n)
 		if err != nil {
 			return err
 		}
 		if n != 1 {
 			return nil
 		}
-		recipient, err := workerRecipient(saveCtx, tx, s.Repo, q.Reservation, q.Generation)
+		recipient, err := workerRecipientIn(saveCtx, tx, s.Repo, q.Reservation, q.Generation, "dispatched", "completed")
 		if err != nil || recipient != actor {
 			return nil
 		}

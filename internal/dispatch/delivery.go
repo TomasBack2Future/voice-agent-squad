@@ -42,7 +42,37 @@ type DeliveryStatus struct {
 	LastResultAt          int64       `json:"last_result_at,omitempty"`
 	VerifiedAt            int64       `json:"verified_at"`
 	Drift                 []string    `json:"drift"`
+
+	// Derived, never edited: the facts the single reservation state cannot express.
+	WorkerPhase          string     `json:"worker_phase"`
+	Continuation         string     `json:"continuation"`
+	Custody              Custody    `json:"custody"`
+	Acceptance           Acceptance `json:"acceptance"`
+	OperationHandledAt   int64      `json:"operation_handled_at,omitempty"`
+	OperationHandledNote string     `json:"operation_handled_note,omitempty"`
 }
+
+// Custody lists what still binds this assignment, separately from its state.
+type Custody struct {
+	ClaimsOnItem         int               `json:"claims_on_item"`
+	OtherClaims          []string          `json:"other_claims"`
+	ExecutionPins        int               `json:"execution_pins"`
+	UnresolvedOperations int               `json:"unresolved_operations"`
+	PendingEvents        int               `json:"pending_events"`
+	NativeFenced         bool              `json:"native_fenced"`
+	ClientRetirement     *RetirementStatus `json:"client_retirement,omitempty"`
+}
+
+// Acceptance states how much of the original goal an owner recorded as met. It is
+// an assertion, never closure authority; unrecorded is the default.
+type Acceptance struct {
+	Coverage    string `json:"coverage"`
+	Ref         string `json:"ref,omitempty"`
+	GoalReached bool   `json:"goal_reached"`
+}
+
+// Coverage values an owner may record with closeout or partial retirement.
+var AcceptanceCoverages = map[string]bool{"source-complete": true, "diagnostic-archived": true, "limited-sample": true, "full": true}
 
 // Delivery reads one explicit reservation in this ledger. It does not mirror
 // item files, update observation timestamps or infer native process liveness.
@@ -173,6 +203,7 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 			out.NextOwner = r.ReservedBy
 		}
 	}
+	s.projectState(ctx, key, r, out)
 	if out.IssueState == "open" && r.State == "completed" {
 		out.Drift = append(out.Drift, "open-issue-completed-reservation")
 	}
@@ -185,5 +216,84 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 	if out.ItemState == "blocked" && out.IssueState != "closed" {
 		out.Drift = append(out.Drift, "issue-delivery-pending")
 	}
+	if r.State == "dispatched" && out.WorkerPhase == "ended" {
+		out.Drift = append(out.Drift, "worker-phase-ended-reservation-active")
+	}
+	if r.State == "completed" && out.ItemState == "blocked" {
+		out.Drift = append(out.Drift, "blocked-item-completed-reservation")
+	}
 	return out, nil
+}
+
+// projectState derives phase, continuation, custody and acceptance coverage from
+// existing records. It writes nothing.
+func (s *Store) projectState(ctx context.Context, key string, r *Reservation, out *DeliveryStatus) {
+	out.Custody = Custody{OtherClaims: []string{}}
+	for _, item := range out.Claims {
+		if item == r.CanonicalItemID {
+			out.Custody.ClaimsOnItem++
+		} else {
+			out.Custody.OtherClaims = append(out.Custody.OtherClaims, item)
+		}
+	}
+	out.Custody.UnresolvedOperations = len(out.UnresolvedOperations)
+	out.Custody.PendingEvents = 0
+	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND worker_session=? AND processed_at=0`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&out.Custody.PendingEvents)
+	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM execution_authorizations WHERE repo_id=? AND state='active' AND holder IN (SELECT agent_id FROM claims WHERE repo_id=? AND item_id=? UNION SELECT agent_id FROM claim_history WHERE repo_id=? AND item_id=? AND claimed_at>=?)`, s.repoID, s.repoID, r.CanonicalItemID, s.repoID, r.CanonicalItemID, r.ReservedAt).Scan(&out.Custody.ExecutionPins)
+	var fenced int
+	_ = s.db.QueryRowContext(ctx, `SELECT count(*) FROM worker_native_fences WHERE repo_id=? AND native_session=?`, s.repoID, r.WorkerThreadID).Scan(&fenced)
+	out.Custody.NativeFenced = fenced > 0
+	if r.WorkerThreadID != "" {
+		if st, err := s.Retirement(ctx, RetirementRequest{Reservation: key, Generation: r.Generation, WorkerSession: r.WorkerThreadID}); err == nil {
+			out.Custody.ClientRetirement = st
+		}
+	}
+
+	switch {
+	case r.State == "completed" || r.State == "failed" || r.State == "cancelled":
+		out.WorkerPhase = "ended"
+	case r.State == "dispatched":
+		out.WorkerPhase = "live"
+		if out.Custody.ClaimsOnItem == 0 && (out.ItemState == "done" || out.ItemState == "blocked") && out.Custody.PendingEvents == 0 && out.Custody.UnresolvedOperations == 0 {
+			out.WorkerPhase = "ended"
+		}
+	default:
+		out.WorkerPhase = "unknown"
+	}
+	switch {
+	case out.IssueState == "closed":
+		out.Continuation = "none"
+	case out.ExecutionDisposition == "partial":
+		out.Continuation = "partial-retired"
+	case out.WorkerPhase == "live":
+		out.Continuation = "in-progress"
+	case out.WorkerPhase == "ended":
+		out.Continuation = "awaiting-owner"
+	default:
+		out.Continuation = "unknown"
+	}
+	if out.WorkerPhase == "ended" {
+		// The finished Worker no longer owns the next step.
+		out.NextOwner = r.ReservedBy
+	}
+
+	out.Acceptance = Acceptance{Coverage: "unrecorded"}
+	var coverage, ref string
+	err := s.db.QueryRowContext(ctx, `SELECT json_extract(body,'$.coverage'),COALESCE(json_extract(body,'$.ref'),'') FROM messages WHERE repo_id=? AND thread=? AND kind='acceptance-coverage' AND json_valid(body) AND json_extract(body,'$.reservation')=? AND json_extract(body,'$.generation')=? ORDER BY id DESC LIMIT 1`, s.repoID, r.CanonicalItemID, key, r.Generation).Scan(&coverage, &ref)
+	if err == nil && AcceptanceCoverages[coverage] {
+		out.Acceptance.Coverage, out.Acceptance.Ref = coverage, ref
+	}
+	out.Acceptance.GoalReached = out.Acceptance.Coverage == "full" && out.IssueState == "closed"
+
+	var handledAt int64
+	var note string
+	err = s.db.QueryRowContext(ctx, `SELECT e.processed_at,e.processed_note FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.kind='operation-exit' ORDER BY e.source_message_id DESC LIMIT 1`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&handledAt, &note)
+	if err == nil && handledAt > 0 {
+		out.OperationHandledAt, out.OperationHandledNote = handledAt, note
+	}
+	// A recorded exit with no routed receipt is drift, not a pending Worker action.
+	var unrouted int
+	if s.db.QueryRowContext(ctx, `SELECT count(*) FROM messages m WHERE m.repo_id=? AND m.kind='owned-operation' AND json_valid(m.body) AND json_extract(m.body,'$.request.reservation')=? AND json_extract(m.body,'$.request.generation')=? AND json_extract(m.body,'$.request.worker_session')=? AND json_extract(m.body,'$.state') IN ('exited','exited-without-evidence') AND NOT EXISTS(SELECT 1 FROM terminal_event_receipts e WHERE e.repo_id=m.repo_id AND e.kind='operation-exit' AND e.source_message_id=m.id)`, s.repoID, key, r.Generation, r.WorkerThreadID).Scan(&unrouted) == nil && unrouted > 0 {
+		out.Drift = append(out.Drift, "operation-exit-unrouted")
+	}
 }

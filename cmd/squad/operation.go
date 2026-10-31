@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -38,6 +41,15 @@ func runOwnedOperation(ctx context.Context, bc *claimContext, root string, input
 	}
 	return (terminalevents.Store{DB: bc.db, Repo: bc.repoID}).RunOperation(opCtx, bc.agentID, input.Identity, attest.RunOpts{ItemID: item, AgentID: bc.agentID, Kind: input.Kind, Command: input.Command, Argv: input.Argv, WorkDir: input.WorkDir, RepoRoot: root, AttDir: filepath.Join(root, ".squad", "attestations")})
 }
+
+// operationSignalContext turns a catchable external cancellation (a client
+// stopping its tracked task) into the existing cancellation path: the command's
+// process group is killed and the failed result and operation-exit are still
+// recorded, instead of the wrapper dying with an unresolved start.
+func operationSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+}
+
 func newOperationCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "operation", Short: "Track an owned command's start, exit and original Worker delivery"}
 	var runFile, statusFile string
@@ -55,7 +67,9 @@ func newOperationCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		result, err := runOwnedOperation(cmd.Context(), bc, root, q)
+		ctx, stop := operationSignalContext(cmd.Context())
+		defer stop()
+		result, err := runOwnedOperation(ctx, bc, root, q)
 		_ = json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 		return err
 	}}
