@@ -74,7 +74,7 @@ func plainMerge(command string) (repo string, number string, head string, ok boo
 		return
 	}
 	w := strings.Fields(command)
-	if len(w) < 8 || (w[0] != "gh" && !(filepath.IsAbs(w[0]) && filepath.Base(w[0]) == "gh")) || w[1] != "pr" || w[2] != "merge" {
+	if len(w) < 8 || (w[0] != "gh" && (!filepath.IsAbs(w[0]) || filepath.Base(w[0]) != "gh")) || w[1] != "pr" || w[2] != "merge" {
 		return
 	}
 	number = w[3]
