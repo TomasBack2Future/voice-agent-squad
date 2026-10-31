@@ -42,6 +42,28 @@ class GenerationBindingTests(unittest.TestCase):
                     preflight.check_profile(assignment(p))
 
 
+class SchemaCompatibleGenerationTests(unittest.TestCase):
+    def test_other_generation_with_identical_schema_is_not_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            other = root / 'generations' / NEW / 'workspace/agent-loop'
+            (other / 'schemas').mkdir(parents=True)
+            (other / 'projects/p').mkdir(parents=True)
+            schema = (Path(preflight.__file__).resolve().parent / 'schemas/project-profile.schema.json').read_bytes()
+            (other / 'schemas/project-profile.schema.json').write_bytes(schema)
+            profile = other / 'projects/p/profile.json'
+            profile.write_text('{}')
+            helper = f'/x/generations/{OLD}/workspace/agent-loop/worker_preflight.py'
+            with patch.object(preflight, '__file__', helper), patch.object(preflight, 'validate_file', side_effect=ValidationError('schema reached')):
+                with self.assertRaisesRegex(ValidationError, 'schema reached'):
+                    preflight.check_profile(assignment(profile))
+            (other / 'schemas/project-profile.schema.json').write_bytes(schema + b' ')
+            with patch.object(preflight, '__file__', helper), patch.object(preflight, 'validate_file') as validate:
+                with self.assertRaisesRegex(ValidationError, 'differs from this helper generation'):
+                    preflight.check_profile(assignment(profile))
+                validate.assert_not_called()
+
+
 class CapabilityTests(unittest.TestCase):
     def fake(self, directory, retire):
         path = Path(directory) / 'squad'
@@ -60,6 +82,21 @@ class CapabilityTests(unittest.TestCase):
                 launcher.check_heartbeat_runtime(c, dict(os.environ))
             c['coordination_executable'] = self.fake(d, True)
             launcher.check_heartbeat_runtime(c, dict(os.environ))
+
+    def test_check_launch_receipt_carries_runtime_identity(self):
+        with tempfile.TemporaryDirectory() as d:
+            exe = self.fake(d, True)
+            c = {'coordination_executable': exe, 'ledger_directory': d}
+            self.assertEqual(launcher.runtime_identity(c, dict(os.environ))['version'], '0.0.0-squad.test')
+        import inspect
+        self.assertIn("'runtime_identity': runtime_identity(c, env)", inspect.getsource(launcher.check_launch))
+        # And the stubbed full preflight receipt carries it (see test_claude_worker_launcher).
+
+    def test_probe_timeout_is_a_validation_error(self):
+        import subprocess as sp
+        with patch.object(launcher.subprocess, 'run', side_effect=sp.TimeoutExpired('x', 10)):
+            with self.assertRaisesRegex(ValidationError, 'timed out'):
+                launcher.check_heartbeat_runtime({'coordination_executable': '/x', 'ledger_directory': '/tmp'}, {})
 
     def test_launch_receipt_names_the_binary_that_will_execute(self):
         with tempfile.TemporaryDirectory() as d:

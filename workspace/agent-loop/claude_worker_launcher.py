@@ -199,14 +199,20 @@ def check_resources(assignment: dict, c: dict, env: dict) -> list[dict]:
 
 
 def check_heartbeat_runtime(c: dict, env: dict) -> None:
-    result = subprocess.run([c['coordination_executable'], 'heartbeat', '--help'],
-                            cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+    try:
+        result = subprocess.run([c['coordination_executable'], 'heartbeat', '--help'],
+                                cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired as error:
+        raise ValidationError('coordination runtime probe timed out; diagnose before launch') from error
     if result.returncode or any(flag not in result.stdout for flag in ('--reservation', '--generation', '--worker-session', '--check')):
         raise ValidationError('coordination runtime lacks fenced heartbeat; update runtime before launch')
     # The supervisor calls retire-client after a rejected renewal; a runtime without
     # it would pass preflight and then never retire a finished client.
-    retire = subprocess.run([c['coordination_executable'], 'dispatch', 'retire-client', '--help'],
-                            cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+    try:
+        retire = subprocess.run([c['coordination_executable'], 'dispatch', 'retire-client', '--help'],
+                                cwd=c['ledger_directory'], env=env, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired as error:
+        raise ValidationError('coordination runtime probe timed out; diagnose before launch') from error
     if retire.returncode or '--worker-session' not in retire.stdout:
         raise ValidationError('coordination runtime lacks dispatch retire-client; update runtime before launch')
 
@@ -240,7 +246,7 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
     state = binding(assignment, c, env)
     resources = check_resources(assignment, c, env)
     check_heartbeat_runtime(c, env)
-    return {'status': 'launch-checked', 'role': assignment['role']['id'], 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
+    return {'status': 'launch-checked', 'role': assignment['role']['id'], 'runtime_identity': runtime_identity(c, env), 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed',

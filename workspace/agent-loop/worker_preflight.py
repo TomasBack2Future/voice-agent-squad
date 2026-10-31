@@ -108,6 +108,17 @@ def generation_of(path: Path) -> str | None:
     return found.group(1) if found else None
 
 
+def _schema_compatible(helper_generation: str, profile_generation: str, profile: Path) -> bool:
+    """Different generations are fine when the profile's own generation ships the same schema."""
+    try:
+        marker = f"generations/{profile_generation}"
+        text = str(profile.resolve())
+        other = Path(text[: text.index(marker) + len(marker)]) / "workspace/agent-loop/schemas/project-profile.schema.json"
+        return other.read_bytes() == (ROOT / "schemas/project-profile.schema.json").read_bytes()
+    except (ValueError, OSError):
+        return False
+
+
 def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
     selected = assignment["project_profile"]
     declared = Path(selected["path"])
@@ -116,7 +127,7 @@ def check_profile(assignment: dict, profile_path: Path | None = None) -> dict:
     if profile_path is not None and declared.resolve() != profile_path.resolve():
         raise ValidationError("profile path differs from the assignment")
     helper_generation, profile_generation = generation_of(Path(__file__)), generation_of(declared)
-    if helper_generation and profile_generation and helper_generation != profile_generation:
+    if helper_generation and profile_generation and helper_generation != profile_generation and not _schema_compatible(helper_generation, profile_generation, declared):
         # A floating `current` link can move under a running session. Say so before the
         # helper's older schema rejects the newer profile for an unrelated-looking reason.
         raise ValidationError(
