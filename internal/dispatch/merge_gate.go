@@ -19,7 +19,7 @@ import (
 var mergeLike = regexp.MustCompile(`(?i)\bgh\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?pr['"]?\s+(?:-{1,2}[A-Za-z-]+(?:[ =]\S+)?\s+)*['"]?merge\b|gh['"]?\s*,\s*['"]?pr['"]?\s*,\s*['"]?merge|\bgh\s+alias\b|\b(?:gh\s+api|curl|wget|http|https)\b[^\n]*(?:/merges?\b|/git/refs\b|mergePullRequest|auto_merge|enableAutoMerge)|mergePullRequest|enablePullRequestAutoMerge`)
 
 // gitPushSegment finds `git push` segments; the target is judged by tokens, not substrings.
-var gitPushSegment = regexp.MustCompile(`(?i)\bgit\s+(?:-[^\s]+\s+)*push\b([^;&|\n]*)`)
+var gitPushSegment = regexp.MustCompile(`(?i)\bgit\b[^;&|\n]*?\bpush\b([^;&|\n]*)`)
 
 // pushesDefaultBranch reports a push that could update a default branch: a bare
 // push, HEAD, or an explicit main/master/trunk/develop destination.
@@ -27,6 +27,7 @@ func pushesDefaultBranch(command string) bool {
 	for _, m := range gitPushSegment.FindAllStringSubmatch(command, -1) {
 		var positional []string
 		for _, w := range strings.Fields(m[1]) {
+			w = strings.NewReplacer("'", "", "\"", "").Replace(w)
 			if !strings.HasPrefix(w, "-") {
 				positional = append(positional, w)
 			}

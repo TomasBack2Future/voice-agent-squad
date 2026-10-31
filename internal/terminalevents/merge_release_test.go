@@ -103,3 +103,20 @@ func TestInvalidMergePolicyIsRejected(t *testing.T) {
 		t.Fatal("policy accepted", err)
 	}
 }
+
+func TestFirstDecisionOfANewGenerationKeepsTheAssignmentPolicy(t *testing.T) {
+	ok := PRFacts{State: "OPEN", HeadSHA: headA, BaseTipSHA: baseA, ChecksPassed: true}
+	s, q := mergeReleaseFixture(t, liveFacts(ok, nil))
+	if _, err := s.Decide(context.Background(), "dispatcher", q); err != nil {
+		t.Fatal(err)
+	}
+	// A replacement Worker at generation 2 of the same assignment.
+	if _, err := s.DB.Exec(`UPDATE dispatch_reservations SET generation=2`); err != nil {
+		t.Fatal(err)
+	}
+	next := DecisionRequest{Reservation: "DISPATCH-1", Generation: 2, WorkerSession: "worker-session", OutcomeID: decisionMessage(t, s), Action: "proceed", Condition: "resume"}
+	d, err := s.Decide(context.Background(), "dispatcher", next)
+	if err != nil || d.MergePolicy != "release-required" || d.MergeRelease != nil {
+		t.Fatal(d, err)
+	}
+}

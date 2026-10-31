@@ -181,6 +181,12 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 			policy = old.MergePolicy
 		}
 		if policy == "" {
+			// The first decision of a new generation keeps the assignment's policy.
+			if e := tx.QueryRowContext(ctx, `SELECT merge_policy FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND item_id=? ORDER BY generation DESC LIMIT 1`, s.Repo, q.Reservation, item).Scan(&policy); e != nil && !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+		}
+		if policy == "" {
 			policy = "standing"
 		}
 		if old.Revision > 0 && old.OutcomeID == q.OutcomeID && old.Action == q.Action && old.Condition == q.Condition && old.WorkerAgent == worker && old.Revision == q.ExpectedRevision+1 && old.MergePolicy == policy {
