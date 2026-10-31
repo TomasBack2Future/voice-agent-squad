@@ -28,7 +28,9 @@ The owning role defines its checkpoint format; the ledger owns actual custody.
 | Existing monitor | Read-only observation and deduplicated meaningful notifications; no routine progress messages to the executor |
 
 A discovered source defect needs an explicit repair owner and integration owner.
-Do not launch another Worker unless dispatch authority covers it. The Deployer
+Do not launch another Worker unless dispatch authority covers it. Squad-tool repair
+authority comes only from the user's current designation of a maintenance agent, never
+from business, staging or production authorization. The Deployer
 may perform an in-scope repair when authorized; record that phase without silently
 changing its role or dropping its release responsibility. A PR merge is not
 production acceptance. No extra permanent role or timer is required.

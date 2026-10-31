@@ -22,7 +22,8 @@ handoff and release ownership, record waiting checkpoints and yield when no
 actionable work remains; an idle turn does not release the primary claim.
 
 Own exactly the Issue and canonical Squad item named by the task prompt. If
-either is missing or ambiguous, stop and request correction. Never discover,
+either is missing or ambiguous, or the prompt names a different Issue than this
+session was assigned, stop and request correction; never take a second Issue. Never discover,
 reserve, dispatch, or start another Issue.
 
 Read workspace `AGENTS.md`, repository instructions, the live GitHub Issue, and
