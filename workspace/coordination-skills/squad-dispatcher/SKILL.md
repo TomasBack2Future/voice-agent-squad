@@ -341,8 +341,8 @@ Never wait for Worker termination to answer its blocking design question.
    covers the stated round only and is not a standing delegation.
    Before launching, render the prompt and run
    `python3 workspace/agent-loop/assignment_contract.py PROMPT_FILE` from the installed
-   generation; a nonzero result (a required approval before the Worker closes, a reused
-   completed session, or a Squad-tool assignment without a designation) blocks the launch. Do not copy a
+   generation; a nonzero result (a required approval before the Worker closes, a session
+   carried over from another Issue, or a Squad-tool assignment without a designation) blocks the launch. Do not copy a
    previous batch's launch script or prompt forward without re-checking it.
 9. Immediately bind the created task id with the same generation:
 
