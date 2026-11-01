@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zsiec/squad/internal/dispatch"
+	"github.com/zsiec/squad/internal/releaseevidence"
 	"github.com/zsiec/squad/internal/store"
 	"github.com/zsiec/squad/internal/terminalevents"
 )
@@ -75,8 +76,8 @@ func (e Engine) binding(ctx context.Context, q Request) (item, source string, er
 	if state != "dispatched" && state != "completed" {
 		return "", "", fmt.Errorf("assignment is not eligible for closeout")
 	}
-	if !issuePattern.MatchString(source) {
-		return "", "", fmt.Errorf("closeout requires a canonical GitHub Issue")
+	if _, release := releaseevidence.RefFromSource(source); !release && !issuePattern.MatchString(source) {
+		return "", "", fmt.Errorf("closeout requires a canonical GitHub Issue or release ref")
 	}
 	var n int
 	err = e.DB.QueryRowContext(ctx, `SELECT count(*) FROM (SELECT agent_id,claimed_at FROM claims WHERE repo_id=? AND item_id=? UNION ALL SELECT agent_id,claimed_at FROM claim_history WHERE repo_id=? AND item_id=?) WHERE agent_id=? AND claimed_at>=?`, e.Repo, item, e.Repo, item, e.Actor, started).Scan(&n)
@@ -217,9 +218,21 @@ func (e Engine) Run(ctx context.Context, q Request) (Result, error) {
 	if e.Backend == nil {
 		return result, fmt.Errorf("closeout backend required")
 	}
+	steps := []string{"item-done", "github-comment", "github-close", "outcome"}
+	outcomeKind := "issue-closed"
+	if ref, release := releaseevidence.RefFromSource(source); release {
+		// A release has no GitHub Issue to close. Its closeout is the item's
+		// evidence-gated done plus the owner's terminal outcome, and only a
+		// complete verified release verdict may proceed. Earlier steps already
+		// receipted are adopted, so a retry resumes after a crash.
+		if err = e.releaseGate(ctx, item, ref); err != nil {
+			return result, err
+		}
+		steps, outcomeKind = []string{"item-done", "outcome"}, "handoff-complete"
+	}
 	// Done runs the existing verification/evidence gates. No GitHub closure is
 	// attempted until they pass. A local done item alone is never Issue delivery.
-	for _, step := range []string{"item-done", "github-comment", "github-close", "outcome"} {
+	for _, step := range steps {
 		if _, _, err = e.binding(ctx, q); err != nil {
 			return result, err
 		}
@@ -239,7 +252,7 @@ func (e Engine) Run(ctx context.Context, q Request) (Result, error) {
 				err = e.Backend.Close(opCtx, source)
 			case "outcome":
 				var out terminalevents.SubmitResult
-				out, err = (terminalevents.Store{DB: e.DB, Repo: e.Repo}).Submit(opCtx, e.Actor, terminalevents.SubmitRequest{Reservation: q.Reservation, Generation: q.Generation, WorkerSession: q.WorkerSession, Kind: "issue-closed", Body: q.Body, ExpectedDecision: q.ExpectedDecision, RequestKey: "closeout-" + q.RequestKey})
+				out, err = (terminalevents.Store{DB: e.DB, Repo: e.Repo}).Submit(opCtx, e.Actor, terminalevents.SubmitRequest{Reservation: q.Reservation, Generation: q.Generation, WorkerSession: q.WorkerSession, Kind: outcomeKind, Body: q.Body, ExpectedDecision: q.ExpectedDecision, RequestKey: "closeout-" + q.RequestKey})
 				if err == nil {
 					result.Outcome = &out
 				}
@@ -267,6 +280,26 @@ func (e Engine) Run(ctx context.Context, q Request) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+// releaseGate refuses closeout unless the newest recorded release verdict is
+// complete for this item's release ref. The refusal names the state and unmet
+// conditions without writing anything, so the owner resumes from that position.
+func (e Engine) releaseGate(ctx context.Context, item, ref string) error {
+	latest, err := releaseevidence.ReadLatest(ctx, e.DB, e.Repo, item)
+	if err != nil {
+		return err
+	}
+	if latest == nil {
+		return fmt.Errorf("release evidence not recorded for %s: attest kind=release with squad.release-evidence.v1 first", ref)
+	}
+	if latest.Verdict.ReleaseRef != ref {
+		return fmt.Errorf("release evidence is for %q, not %q", latest.Verdict.ReleaseRef, ref)
+	}
+	if !latest.Verdict.Satisfied {
+		return fmt.Errorf("release %s is %s, not complete (attestation %d): %s", ref, latest.Verdict.State, latest.AttestationID, strings.Join(latest.Verdict.Unmet, "; "))
+	}
+	return nil
 }
 
 // recordCoverage appends the owner's coverage assertion once per request.

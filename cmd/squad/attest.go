@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zsiec/squad/internal/attest"
+	"github.com/zsiec/squad/internal/items"
+	"github.com/zsiec/squad/internal/releaseevidence"
 )
 
 // ErrInvalidKind signals that AttestArgs.Kind is not one of the
@@ -33,6 +36,7 @@ type AttestArgs struct {
 	Argv          []string `json:"argv,omitempty"`
 	FindingsFile  string   `json:"findings_file,omitempty"`
 	ReviewerAgent string   `json:"reviewer_agent,omitempty"`
+	EvidenceFile  string   `json:"evidence_file,omitempty"`
 
 	AttDir   string `json:"att_dir,omitempty"`
 	RepoRoot string `json:"repo_root,omitempty"`
@@ -50,6 +54,8 @@ type AttestResult struct {
 	OutputHash string `json:"output_hash"`
 	OutputPath string `json:"output_path"`
 	AgentID    string `json:"agent_id"`
+	// Release is the evaluated verdict for kind=release, including every unmet condition.
+	Release *releaseevidence.Verdict `json:"release,omitempty"`
 }
 
 func Attest(ctx context.Context, args AttestArgs) (*AttestResult, error) {
@@ -58,10 +64,20 @@ func Attest(ctx context.Context, args AttestArgs) (*AttestResult, error) {
 	}
 	k := attest.Kind(args.Kind)
 	if !k.Valid() {
-		return nil, fmt.Errorf("%w %q (want test|lint|typecheck|build|review|manual)", ErrInvalidKind, args.Kind)
+		return nil, fmt.Errorf("%w %q (want test|lint|typecheck|build|review|manual|release)", ErrInvalidKind, args.Kind)
 	}
 
 	L := attest.New(args.DB, args.RepoID, args.Now)
+
+	if k == attest.KindRelease {
+		if args.WorkDir != "" || len(args.Argv) > 0 || args.Command != "" || args.FindingsFile != "" || args.ReviewerAgent != "" {
+			return nil, fmt.Errorf("kind=release takes only evidence_file")
+		}
+		return attestRelease(ctx, L, args)
+	}
+	if args.EvidenceFile != "" {
+		return nil, fmt.Errorf("evidence_file is only supported for kind=release")
+	}
 
 	if k == attest.KindReview {
 		if args.WorkDir != "" || len(args.Argv) > 0 || args.Command != "" {
@@ -109,6 +125,75 @@ func Attest(ctx context.Context, args AttestArgs) (*AttestResult, error) {
 	return recordToResult(rec), nil
 }
 
+// attestRelease evaluates a release-evidence document against the item's own
+// release ref and records the verdict. Only a complete verdict records exit 0;
+// an incomplete one is recorded non-satisfying with its unmet conditions so the
+// owner can resume from the recorded position. Re-recording identical content
+// converges on the existing row.
+func attestRelease(ctx context.Context, L *attest.Ledger, args AttestArgs) (*AttestResult, error) {
+	if args.EvidenceFile == "" {
+		return nil, fmt.Errorf("evidence_file is required for kind=release")
+	}
+	w, err := items.Walk(filepath.Join(args.RepoRoot, ".squad"))
+	if err != nil {
+		return nil, err
+	}
+	var title string
+	found := false
+	for _, it := range append(append([]items.Item{}, w.Active...), w.Done...) {
+		if it.ID == args.ItemID {
+			title, found = it.Title, true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: %s", ErrItemNotFound, args.ItemID)
+	}
+	want, ok := releaseevidence.RefFromTitle(title)
+	if !ok {
+		return nil, fmt.Errorf("%s is not a release item (title must start with [release:<ref>])", args.ItemID)
+	}
+	f, err := os.Open(args.EvidenceFile)
+	if err != nil {
+		return nil, fmt.Errorf("read release evidence: %w", err)
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, releaseevidence.MaxBytes+1))
+	f.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read release evidence: %w", err)
+	}
+	doc, err := releaseevidence.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	verdict := releaseevidence.Evaluate(doc, want)
+	body, err := json.Marshal(releaseevidence.Artifact{Document: doc, Verdict: verdict})
+	if err != nil {
+		return nil, err
+	}
+	hash := L.Hash(body)
+	if err := os.MkdirAll(args.AttDir, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir attestations dir: %w", err)
+	}
+	out := filepath.Join(args.AttDir, hash+".txt")
+	if err := os.WriteFile(out, body, 0o644); err != nil {
+		return nil, fmt.Errorf("write attestation file: %w", err)
+	}
+	exit := 1
+	if verdict.Satisfied {
+		exit = 0
+	}
+	rec := attest.Record{ItemID: args.ItemID, Kind: attest.KindRelease, Command: "release-evidence " + want + " state=" + verdict.State, ExitCode: exit, OutputHash: hash, OutputPath: out, AgentID: args.AgentID}
+	id, err := L.Insert(ctx, rec)
+	if err != nil {
+		return nil, err
+	}
+	rec.ID, rec.RepoID = id, args.RepoID
+	res := recordToResult(rec)
+	res.Release = &verdict
+	return res, nil
+}
+
 func recordToResult(r attest.Record) *AttestResult {
 	return &AttestResult{
 		ID:         r.ID,
@@ -123,7 +208,7 @@ func recordToResult(r attest.Record) *AttestResult {
 }
 
 func newAttestCmd() *cobra.Command {
-	var item, kind, command, findingsFile, reviewerAgent, workDir, argvJSON string
+	var item, kind, command, evidenceFile, findingsFile, reviewerAgent, workDir, argvJSON string
 	cmd := &cobra.Command{
 		Use:   "attest [<item-id>]",
 		Short: "Record a verification artifact (test/lint/build/typecheck/manual) into the evidence ledger",
@@ -167,6 +252,7 @@ func newAttestCmd() *cobra.Command {
 				Command:       command,
 				Argv:          argv,
 				FindingsFile:  findingsFile,
+				EvidenceFile:  evidenceFile,
 				ReviewerAgent: reviewerAgent,
 				AttDir:        attDir,
 				RepoRoot:      repoRoot,
@@ -174,11 +260,20 @@ func newAttestCmd() *cobra.Command {
 			})
 			if err != nil {
 				if errors.Is(err, ErrInvalidKind) {
-					return fmt.Errorf("invalid kind %q (want test|lint|typecheck|build|review|manual)", kind)
+					return fmt.Errorf("invalid kind %q (want test|lint|typecheck|build|review|manual|release)", kind)
 				}
 				return err
 			}
 
+			if res.Release != nil {
+				b, _ := json.Marshal(res)
+				fmt.Fprintln(cmd.OutOrStdout(), string(b))
+				if res.ExitCode != 0 {
+					bc.Close()
+					os.Exit(res.ExitCode)
+				}
+				return nil
+			}
 			if attest.Kind(res.Kind) == attest.KindReview {
 				fmt.Fprintf(cmd.OutOrStdout(), "attest review %s exit=%d hash=%s\n", res.ItemID, res.ExitCode, res.OutputHash)
 				return nil
@@ -192,11 +287,12 @@ func newAttestCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&item, "item", "", "item id (or pass as the positional argument)")
-	cmd.Flags().StringVar(&kind, "kind", "", "test|lint|typecheck|build|review|manual")
+	cmd.Flags().StringVar(&kind, "kind", "", "test|lint|typecheck|build|review|manual|release")
 	cmd.AddCommand(newAttestRevokeCmd(), newAttestListCmd())
 	cmd.Flags().StringVar(&argvJSON, "argv", "", "JSON argument array executed directly, mutually exclusive with --command")
 	cmd.Flags().StringVar(&command, "command", "", "shell command to run and capture")
 	cmd.Flags().StringVar(&workDir, "work-dir", "", "absolute execution directory (default: selected Squad repository)")
+	cmd.Flags().StringVar(&evidenceFile, "evidence-file", "", "squad.release-evidence.v1 JSON (kind=release only)")
 	cmd.Flags().StringVar(&findingsFile, "findings-file", "", "review findings file (kind=review only)")
 	cmd.Flags().StringVar(&reviewerAgent, "reviewer-agent", "", "reviewer agent id (kind=review only)")
 	return cmd

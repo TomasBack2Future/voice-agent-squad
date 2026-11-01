@@ -51,7 +51,7 @@ func (s *Server) handleItemDone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	required := requiredAttestKinds(parsed.EvidenceRequired)
+	required := attest.EffectiveRequired(parsed.Area, requiredAttestKinds(parsed.EvidenceRequired))
 	if len(required) > 0 {
 		L := attest.New(s.db, repoID, nil)
 		missing, mErr := L.MissingKinds(r.Context(), id, required)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zsiec/squad/internal/attest"
 	"github.com/zsiec/squad/internal/claims"
 	"github.com/zsiec/squad/internal/store"
 )
@@ -41,6 +42,7 @@ type Finding struct {
 
 type ItemRef struct {
 	ID, Path, Status string
+	Area             string
 	Created, Updated string
 	References       []string
 	BlockedBy        []string
@@ -285,7 +287,7 @@ func (sw *Sweeper) Sweep(ctx context.Context) ([]Finding, error) {
 				}
 			}
 			if len(r.EvidenceRequired) > 0 && (r.Status == "done" || strings.Contains(r.Path, "/done/")) {
-				missing, err := evidenceMissing(ctx, sw.db, sw.repoID, r.ID, r.EvidenceRequired)
+				missing, err := evidenceMissing(ctx, sw.db, sw.repoID, r.ID, r.Area, r.EvidenceRequired)
 				if err != nil {
 					return nil, err
 				}
@@ -502,9 +504,9 @@ func isValidDateField(s string) bool {
 	return true
 }
 
-func evidenceMissing(ctx context.Context, db *sql.DB, repoID, itemID string, required []string) ([]string, error) {
+func evidenceMissing(ctx context.Context, db *sql.DB, repoID, itemID, area string, required []string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT kind FROM attestations WHERE repo_id = ? AND item_id = ? AND exit_code = 0
+		SELECT kind FROM attestations WHERE repo_id = ? AND item_id = ? AND exit_code = 0 AND kind != 'release'
  AND NOT EXISTS (SELECT 1 FROM attestation_revocations v WHERE v.attestation_id=attestations.id)
 	`, repoID, itemID)
 	if err != nil {
@@ -524,7 +526,18 @@ func evidenceMissing(ctx context.Context, db *sql.DB, repoID, itemID string, req
 	}
 	var missing []string
 	for _, k := range required {
-		if _, ok := have[strings.TrimSpace(k)]; !ok {
+		k = strings.TrimSpace(k)
+		_, ok := have[k]
+		if k == "release" || (k == "test" && area == "release") {
+			// A release item's test requirement is met by its current (newest)
+			// complete verdict; history closed with a test attestation stays valid.
+			if rel, err := attest.New(db, repoID, nil).ReleaseSatisfied(ctx, itemID); err != nil {
+				return nil, err
+			} else if rel {
+				ok = true
+			}
+		}
+		if !ok {
 			missing = append(missing, k)
 		}
 	}
