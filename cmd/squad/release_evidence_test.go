@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zsiec/squad/internal/attest"
 	"github.com/zsiec/squad/internal/releaseevidence"
 )
 
@@ -161,5 +162,35 @@ func TestReleaseKindRejectsCommandAndOtherKindsRejectEvidenceFile(t *testing.T) 
 	}
 	if _, err := Attest(context.Background(), AttestArgs{DB: env.DB, RepoID: env.RepoID, AgentID: env.AgentID, ItemID: "TASK-064", Kind: "test", Command: "true", EvidenceFile: "x", AttDir: attDir}); err == nil {
 		t.Fatal("kind=test accepted evidence_file")
+	}
+}
+
+func TestNewerIncompleteVerdictRevokesEarlierCompleteForDone(t *testing.T) {
+	env := newTestEnv(t)
+	claimed(t, env, "TASK-064", releaseItem)
+	if res := recordRelease(t, env, "TASK-064", releaseDoc(nil)); res.ExitCode != 0 {
+		t.Fatalf("%+v", res)
+	}
+	// A later report of failed cleanup supersedes the earlier complete verdict.
+	if res := recordRelease(t, env, "TASK-064", releaseDoc(func(d *releaseevidence.Document) { d.Cleanup.Result = "failed" })); res.ExitCode == 0 {
+		t.Fatal("failed cleanup recorded as satisfied")
+	}
+	if _, err := env.DB.Exec(`UPDATE attestations SET created_at = created_at + id WHERE kind = 'release'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := doneNoForce(env, "TASK-064"); err == nil {
+		t.Fatal("done accepted an older complete verdict after a newer failure")
+	}
+}
+
+func TestCommandCannotForgeReleaseAttestation(t *testing.T) {
+	env := newTestEnv(t)
+	claimed(t, env, "TASK-064", releaseItem)
+	l := attest.New(env.DB, env.RepoID, nil)
+	if _, err := l.Run(context.Background(), attest.RunOpts{ItemID: "TASK-064", Kind: attest.KindRelease, Command: "true", AgentID: env.AgentID, AttDir: filepath.Join(env.Root, ".squad", "attestations")}); err == nil {
+		t.Fatal("command-based release attestation accepted")
+	}
+	if err := doneNoForce(env, "TASK-064"); err == nil {
+		t.Fatal("forged release closed the item")
 	}
 }

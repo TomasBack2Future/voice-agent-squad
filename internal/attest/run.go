@@ -53,6 +53,9 @@ func (l *Ledger) run(ctx context.Context, opts RunOpts, observed *Execution) (Re
 	if !opts.Kind.Valid() {
 		return Record{}, fmt.Errorf("attest.Run: invalid kind %q", opts.Kind)
 	}
+	if opts.Kind == KindRelease {
+		return Record{}, fmt.Errorf("attest.Run: kind release is recorded only from verified release evidence, not a command")
+	}
 
 	if (opts.Command == "") == (len(opts.Argv) == 0) {
 		return Record{}, fmt.Errorf("provide exactly one of command or argv")

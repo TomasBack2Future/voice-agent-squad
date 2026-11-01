@@ -125,8 +125,10 @@ attestation artifact. Only `complete` records exit 0 and satisfies the gate:
 Precedence is invalid, blocked, custody-retained, partial. An incomplete verdict
 is still recorded, so the owner resumes from the recorded position and unmet list;
 re-recording identical content converges on the same row, and a corrected
-document is a new row. The newest verdict wins for projection; revoke a wrong row
-with `squad attest revoke`.
+document is a new row. The newest non-revoked verdict is the release's current state for `done`, hygiene,
+closeout and projection alike, so a later failure supersedes an earlier complete
+verdict; revoke a wrong row with `squad attest revoke`. A `release` attestation can
+not be produced by running a command (`attest`/`operation run` reject it).
 
 `squad closeout` accepts a `release:<ref>` assignment. It refuses, writing no
 receipt, until the newest non-revoked verdict (re-hashed from its artifact) is

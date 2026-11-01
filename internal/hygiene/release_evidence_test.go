@@ -16,8 +16,8 @@ func TestDoneReleaseItemWithReleaseVerdictIsNotFlaggedMissingTest(t *testing.T) 
 		t.Fatal(err)
 	}
 	sw := NewWithClock(db, "repo", fakeItems{refs: []ItemRef{
-		{ID: "REL", Status: "done", EvidenceRequired: []string{"test"}},
-		{ID: "ENG", Status: "done", EvidenceRequired: []string{"test"}},
+		{ID: "REL", Status: "done", Area: "release", EvidenceRequired: []string{"test"}},
+		{ID: "ENG", Status: "done", Area: "core", EvidenceRequired: []string{"test"}},
 	}}, time.Now)
 	findings, err := sw.Sweep(ctx)
 	if err != nil {
@@ -46,4 +46,28 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestHygieneUsesNewestReleaseVerdictAndReleaseAreaOnly(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	l := attest.New(db, "repo", nil)
+	for i, exit := range []int{0, 1} {
+		if _, err := l.Insert(ctx, attest.Record{ItemID: "REL", Kind: attest.KindRelease, Command: "release-evidence r", ExitCode: exit, OutputHash: string(rune('a' + i)), AgentID: "owner", CreatedAt: int64(100 + i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sw := NewWithClock(db, "repo", fakeItems{refs: []ItemRef{
+		{ID: "REL", Status: "done", Area: "release", EvidenceRequired: []string{"test"}},
+	}}, time.Now)
+	findings, err := sw.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range findings {
+		if f.Code == "evidence_missing" {
+			return
+		}
+	}
+	t.Fatalf("older complete verdict outlived a newer incomplete one: %+v", findings)
 }

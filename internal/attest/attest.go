@@ -180,7 +180,7 @@ func (l *Ledger) MissingKinds(ctx context.Context, itemID string, required []Kin
 	}
 	rows, err := l.db.QueryContext(ctx, `
 		SELECT kind FROM attestations
-		WHERE repo_id = ? AND item_id = ? AND exit_code = 0
+		WHERE repo_id = ? AND item_id = ? AND exit_code = 0 AND kind != 'release'
  AND NOT EXISTS (SELECT 1 FROM attestation_revocations v WHERE v.attestation_id=attestations.id)
 	`, l.repoID, itemID)
 	if err != nil {
@@ -198,6 +198,12 @@ func (l *Ledger) MissingKinds(ctx context.Context, itemID string, required []Kin
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
+	if ok, err := l.ReleaseSatisfied(ctx, itemID); err != nil {
+		return nil, err
+	} else if ok {
+		have[KindRelease] = struct{}{}
+	}
 	var missing []Kind
 	for _, k := range required {
 		if _, ok := have[k]; !ok {
@@ -205,6 +211,20 @@ func (l *Ledger) MissingKinds(ctx context.Context, itemID string, required []Kin
 		}
 	}
 	return missing, nil
+}
+
+// ReleaseSatisfied reports whether the newest non-revoked release verdict for
+// the item is complete. Unlike other kinds, an older complete verdict never
+// outlives a later incomplete one: the current release state is the newest.
+func (l *Ledger) ReleaseSatisfied(ctx context.Context, itemID string) (bool, error) {
+	var exit int
+	err := l.db.QueryRowContext(ctx, `SELECT exit_code FROM attestations WHERE repo_id = ? AND item_id = ? AND kind = 'release'
+ AND NOT EXISTS (SELECT 1 FROM attestation_revocations v WHERE v.attestation_id=attestations.id)
+ ORDER BY created_at DESC, id DESC LIMIT 1`, l.repoID, itemID).Scan(&exit)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && exit == 0, err
 }
 
 // DistinctReviewers returns the set of unique reviewer-agent ids that
