@@ -23,6 +23,7 @@ var (
 	ErrExpired          = errors.New("dispatch: reservation expired before worker binding")
 	ErrIdentityConflict = errors.New("dispatch: item and source refer to different reservations")
 	ErrCanonicalItem    = errors.New("dispatch: canonical item is not attached")
+	ErrNativeReused     = errors.New("dispatch: native session is already bound to another reservation; each Issue needs its own native session")
 )
 
 type Reservation struct {
@@ -190,12 +191,20 @@ func (s *Store) bind(ctx context.Context, itemID, actor, workerThreadID string, 
 			return nil, fmt.Errorf("%w: %s", ErrReceiverNotReady, ready.Repair)
 		}
 	}
+	var other int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_reservations WHERE repo_id=? AND worker_thread_id=? AND item_id<>?`, s.repoID, workerThreadID, itemID).Scan(&other); err != nil {
+		return nil, err
+	}
+	if other != 0 {
+		return nil, ErrNativeReused
+	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE dispatch_reservations
 		SET state='dispatched', worker_thread_id=?, updated_at=?, expires_at=0
 		WHERE repo_id=? AND item_id=? AND reserved_by=? AND generation=?
 		  AND state='reserved' AND expires_at>? AND canonical_item_id<>''
-	`, workerThreadID, now, s.repoID, itemID, actor, generation, now)
+		  AND NOT EXISTS(SELECT 1 FROM dispatch_reservations o WHERE o.repo_id=? AND o.worker_thread_id=? AND o.item_id<>?)
+	`, workerThreadID, now, s.repoID, itemID, actor, generation, now, s.repoID, workerThreadID, itemID)
 	if err != nil {
 		return nil, err
 	}

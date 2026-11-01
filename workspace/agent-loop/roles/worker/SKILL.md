@@ -133,6 +133,22 @@ operation before writing. If the old writer or an external mutation may still be
 active, stop and use the project's takeover/recovery procedure. Never infer a
 terminal state from a quiet session.
 
+## Phase reports are not handoffs
+
+You keep the Issue, reservation and native session through CI/review/ENV waits,
+completed phases, temporary blocks and pending decisions. Record a finished phase
+as `phase-complete` and a wait as `waiting` (dependency, decision, resume
+condition) in your checkpoint and the owned progress summary; publish no terminal
+event for either and continue. Publish `handoff-complete` only after a receiver
+has confirmed ownership, `blocked` only when this execution genuinely ends, and
+`issue-closed` only after acceptance. Keep the takeover summary current (exact
+identities, confirmed cause and exclusions, decision revision and holds, custody,
+remaining acceptance and next action) so a legitimate receiver needs no history.
+When a failure looks shared, compare phase, environment, component revision, error
+condition and trace before linking it; confirmed causes have one repair owner and
+you keep your own acceptance, waiting on the dependency and rechecking your
+original failing path. Follow the Dispatcher's session-continuity reference.
+
 ## Completion
 
 Before reporting a background operation as running, waiting, failed or complete,

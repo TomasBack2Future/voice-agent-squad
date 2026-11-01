@@ -83,7 +83,10 @@ separately. Instructions alone do not qualify an unattended recovery capability.
 ## Phase completion and changed inputs
 
 A phase ending advances to its prepared, authorized successor without requesting
-unchanged authorization. If a native Goal ends at an intermediate milestone,
+unchanged authorization, and the same Worker and native session keep the Issue;
+only a planned role boundary, an unrecoverable owner or a human reassignment
+transfers ownership (see the Dispatcher's session-continuity reference for the
+state vocabulary, shared-cause repair ownership and takeover summary). If a native Goal ends at an intermediate milestone,
 retain the assignment as waiting and record the next trigger/owner; do not equate
 Goal 100%, PR merge or event ACK with the user's requested endpoint. A genuine new
 phase permission remains a named hold. Before closure reconcile Issue disposition,
