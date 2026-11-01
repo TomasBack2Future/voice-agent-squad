@@ -233,12 +233,13 @@ const schemaAttest = `{
   "required": ["item_id", "kind"],
   "properties": {
     "item_id":        {"type": "string"},
-    "kind":           {"type": "string", "enum": ["test", "lint", "typecheck", "build", "review", "manual"]},
+    "kind":           {"type": "string", "enum": ["test", "lint", "typecheck", "build", "review", "manual", "release"]},
     "work_dir": {"type": "string", "description": "Absolute command execution directory; evidence stays in the selected ledger."},
     "argv": {"type":"array","minItems":1,"items":{"type":"string"},"description":"Execute directly without shell expansion."},
     "command":        {"type": "string", "description": "Shell command to run and capture; mutually exclusive with argv. Exit zero is process status, not semantic acceptance."},
     "findings_file":  {"type": "string", "description": "Review findings file (kind=review only)."},
     "reviewer_agent": {"type": "string", "description": "Reviewer agent id (kind=review only)."},
+    "evidence_file":  {"type": "string", "description": "squad.release-evidence.v1 JSON file (kind=release only)."},
     "agent_id":       {"type": "string"}
   },
   "additionalProperties": false

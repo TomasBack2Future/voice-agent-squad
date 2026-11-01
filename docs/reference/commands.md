@@ -505,7 +505,7 @@ the existing repository-root execution behavior. It is invalid for review-file
 attestations. A directory receipt is not proof of the tested Git revision; verify
 the command and suite against the assigned revision as well.
 
-Record a verification artifact (test/lint/build/typecheck/manual/review) into the evidence ledger. Items with `evidence_required: [...]` in their frontmatter need an attestation per kind before `squad done` will close them out (without `--force`).
+Record a verification artifact (test/lint/build/typecheck/manual/review/release) into the evidence ledger. Items with `evidence_required: [...]` in their frontmatter need an attestation per kind before `squad done` will close them out (without `--force`).
 
 Priority and risk are scheduling metadata; they never synthesize evidence kinds
 or reviewer-count requirements. Declare `review` explicitly in
@@ -535,10 +535,11 @@ squad attest --item FEAT-001 --kind test --command "go test ./..."
 | Flag | Required when | Meaning |
 |---|---|---|
 | (positional) or `--item` | always | Item id; the attestation is scoped to one item. |
-| `--kind <kind>` | always | One of `test`, `lint`, `typecheck`, `build`, `review`, `manual`. |
+| `--kind <kind>` | always | One of `test`, `lint`, `typecheck`, `build`, `review`, `manual`, `release`. |
 | `--command <cmd>` | non-review, when not using `--argv` | Shell command to run; squad captures stdout and exit code into the ledger. |
 | `--findings-file <path>` | `kind=review` | File whose body becomes the review record. |
 | `--reviewer-agent <id>` | `kind=review` | The agent id of the reviewer. |
+| `--evidence-file <path>` | `kind=release` | `squad.release-evidence.v1` JSON for a `[release:<ref>]` item; see [release evidence](delivery-lifecycle.md#release-evidence-and-closeout). Takes no `--command`. |
 
 The attestation is stored under `.squad/attestations/<hash>.txt` (committed) and indexed in `~/.squad/global.db` (operational). Records are deduplicated on `(repo_id, item_id, kind, output_hash)` — re-running an identical attestation is a no-op.
 

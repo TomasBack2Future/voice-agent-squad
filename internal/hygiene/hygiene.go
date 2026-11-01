@@ -524,7 +524,14 @@ func evidenceMissing(ctx context.Context, db *sql.DB, repoID, itemID string, req
 	}
 	var missing []string
 	for _, k := range required {
-		if _, ok := have[strings.TrimSpace(k)]; !ok {
+		k = strings.TrimSpace(k)
+		// A verified release verdict is only recordable on a [release:<ref>]
+		// item and stands in for the generic test requirement there.
+		_, ok := have[k]
+		if _, rel := have["release"]; !ok && k == "test" && rel {
+			ok = true
+		}
+		if !ok {
 			missing = append(missing, k)
 		}
 	}

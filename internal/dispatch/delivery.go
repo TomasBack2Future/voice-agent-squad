@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zsiec/squad/internal/releaseevidence"
 	"github.com/zsiec/squad/internal/store"
 )
 
@@ -44,12 +45,15 @@ type DeliveryStatus struct {
 	Drift                 []string    `json:"drift"`
 
 	// Derived, never edited: the facts the single reservation state cannot express.
-	WorkerPhase          string     `json:"worker_phase"`
-	Continuation         string     `json:"continuation"`
-	Custody              Custody    `json:"custody"`
-	Acceptance           Acceptance `json:"acceptance"`
-	OperationHandledAt   int64      `json:"operation_handled_at,omitempty"`
-	OperationHandledNote string     `json:"operation_handled_note,omitempty"`
+	WorkerPhase  string     `json:"worker_phase"`
+	Continuation string     `json:"continuation"`
+	Custody      Custody    `json:"custody"`
+	Acceptance   Acceptance `json:"acceptance"`
+	// Release is set for a release:<ref> assignment: the newest recorded evidence
+	// verdict, never inferred from the reservation state or a process exit.
+	Release              *ReleaseStatus `json:"release,omitempty"`
+	OperationHandledAt   int64          `json:"operation_handled_at,omitempty"`
+	OperationHandledNote string         `json:"operation_handled_note,omitempty"`
 }
 
 // Custody lists what still binds this assignment, separately from its state.
@@ -69,6 +73,18 @@ type Acceptance struct {
 	Coverage    string `json:"coverage"`
 	Ref         string `json:"ref,omitempty"`
 	GoalReached bool   `json:"goal_reached"`
+}
+
+// ReleaseStatus projects the newest verified release-evidence verdict.
+type ReleaseStatus struct {
+	Ref           string   `json:"ref"`
+	State         string   `json:"state"` // complete|partial|blocked|custody-retained|invalid|unrecorded
+	AttestationID int64    `json:"attestation_id,omitempty"`
+	EvidenceHash  string   `json:"evidence_hash,omitempty"`
+	RecordedAt    int64    `json:"recorded_at,omitempty"`
+	Candidate     string   `json:"candidate,omitempty"`
+	CurrentRef    string   `json:"current_conclusion_ref,omitempty"`
+	Unmet         []string `json:"unmet"`
 }
 
 // AcceptanceCoverages are the values an owner may record with closeout or partial retirement.
@@ -136,7 +152,7 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 	}
 	var exit int
 	var at int64
-	err = s.db.QueryRowContext(ctx, `SELECT exit_code,created_at FROM attestations WHERE repo_id=? AND item_id=? AND created_at>=? ORDER BY created_at DESC,id DESC LIMIT 1`, s.repoID, r.CanonicalItemID, r.ReservedAt).Scan(&exit, &at)
+	err = s.db.QueryRowContext(ctx, `SELECT exit_code,created_at FROM attestations WHERE repo_id=? AND item_id=? AND created_at>=? AND kind!='release' ORDER BY created_at DESC,id DESC LIMIT 1`, s.repoID, r.CanonicalItemID, r.ReservedAt).Scan(&exit, &at)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
@@ -300,6 +316,27 @@ func (s *Store) projectState(ctx context.Context, key string, r *Reservation, ou
 		out.Acceptance.Coverage, out.Acceptance.Ref = coverage, ref
 	}
 	out.Acceptance.GoalReached = out.Acceptance.Coverage == "full" && out.IssueState == "closed"
+	if ref, release := releaseevidence.RefFromSource(r.SourceRef); release {
+		rs := &ReleaseStatus{Ref: ref, State: "unrecorded", Unmet: []string{"release evidence not recorded"}}
+		latest, lerr := releaseevidence.ReadLatest(ctx, s.db, s.repoID, r.CanonicalItemID)
+		if lerr != nil {
+			return lerr
+		}
+		if latest != nil {
+			rs.State, rs.Unmet = latest.Verdict.State, latest.Verdict.Unmet
+			rs.AttestationID, rs.EvidenceHash, rs.RecordedAt, rs.Candidate, rs.CurrentRef = latest.AttestationID, latest.OutputHash, latest.RecordedAt, latest.Verdict.Candidate, latest.CurrentRef
+		}
+		out.Release = rs
+		// Only a complete verified verdict reaches the goal; a completed
+		// reservation or an exited client never does.
+		out.Acceptance.GoalReached = rs.State == releaseevidence.StateComplete
+		if r.State == "completed" && rs.State != releaseevidence.StateComplete {
+			out.Drift = append(out.Drift, "release-completed-without-complete-evidence")
+		}
+		if rs.State == releaseevidence.StateComplete && out.ItemState != "done" {
+			out.Drift = append(out.Drift, "release-evidence-complete-item-open")
+		}
+	}
 
 	var handledAt int64
 	var note string

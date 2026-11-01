@@ -97,7 +97,7 @@ func Done(ctx context.Context, args DoneArgs) (*DoneResult, error) {
 	if len(rawRequired) == 0 {
 		rawRequired = args.DefaultEvidenceRequired
 	}
-	required := requiredKinds(rawRequired)
+	required := attest.EffectiveRequired(parsed.Area, requiredKinds(rawRequired))
 	var bypassed []attest.Kind
 	L := attest.New(args.DB, args.RepoID, clock)
 	if len(required) > 0 {

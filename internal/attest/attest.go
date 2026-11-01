@@ -31,11 +31,13 @@ const (
 	KindBuild     Kind = "build"
 	KindReview    Kind = "review"
 	KindManual    Kind = "manual"
+	// KindRelease is a verified release-evidence verdict (internal/releaseevidence).
+	KindRelease Kind = "release"
 )
 
 func (k Kind) Valid() bool {
 	switch k {
-	case KindTest, KindLint, KindTypecheck, KindBuild, KindReview, KindManual:
+	case KindTest, KindLint, KindTypecheck, KindBuild, KindReview, KindManual, KindRelease:
 		return true
 	}
 	return false
@@ -87,7 +89,7 @@ func (l *Ledger) Hash(b []byte) string {
 
 func (l *Ledger) Insert(ctx context.Context, r Record) (int64, error) {
 	if !r.Kind.Valid() {
-		return 0, fmt.Errorf("invalid kind %q (want test|lint|typecheck|build|review|manual)", r.Kind)
+		return 0, fmt.Errorf("invalid kind %q (want test|lint|typecheck|build|review|manual|release)", r.Kind)
 	}
 	created := r.CreatedAt
 	if created == 0 {
@@ -277,4 +279,27 @@ func (l *Ledger) ListForItem(ctx context.Context, itemID string) ([]Record, erro
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// EffectiveRequired maps an item's declared evidence kinds onto the evidence its
+// area can truthfully produce. A release item cannot run a unit-test command to
+// show a production release happened, so its generic `test` requirement is
+// satisfied by a verified `release` verdict instead; every other area, and every
+// other kind, is unchanged. Engineering items keep their test requirement.
+func EffectiveRequired(area string, required []Kind) []Kind {
+	if strings.TrimSpace(area) != "release" {
+		return required
+	}
+	out := make([]Kind, 0, len(required))
+	seen := map[Kind]bool{}
+	for _, k := range required {
+		if k == KindTest {
+			k = KindRelease
+		}
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out
 }

@@ -160,6 +160,15 @@ cannot represent safe partial retirement/continuation, record that capability
 gap and retained ownership rather than inventing a state, force-releasing WIP,
 or silently relabelling partial delivery as completion.
 
+A release assignment (`release:<ref>` source) is complete only when its delivery
+projection shows a `complete` release verdict; a completed reservation, an exited
+Deployer or a released ENV is not acceptance. Read the projection's `release.state`
+and `unmet`, route a `partial`/`blocked`/`custody-retained` verdict to the original
+owner through the existing decision and event path, and reconcile the reservation
+only after the owner's `handoff-complete`. Add no post-release approval or poller.
+Update the single current-status summary and the report's current-conclusion link
+instead of rewriting frozen candidate material.
+
 ## Delivery capability admission
 
 Before launching a Worker, verify how it can reach the requested final outcome,

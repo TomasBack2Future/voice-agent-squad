@@ -286,3 +286,8 @@ A missing capability retains the existing authorized gh/done/event sequence,
 not a new approval. For long owned commands, an available `operation run` records
 start/exit and original-native delivery; a started record without a terminal
 result requires reconciliation, never an automatic second execution.
+
+A release item (`area: release`, `[release:<ref>]`, `release:` source) is closed
+with a `release` attestation of the real execution/acceptance/observation/cleanup/
+custody facts, then the same `closeout`; never `--force` or a fabricated `test`.
+See [release evidence](../../../docs/reference/delivery-lifecycle.md#release-evidence-and-closeout).

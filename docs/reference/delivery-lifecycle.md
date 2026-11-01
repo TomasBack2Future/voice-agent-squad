@@ -84,6 +84,76 @@ local step is adopted. An interrupted wrapper does not prove external work
 stopped. Reconcile owned operations before retrying an unresolved live intent.
 GitHub output is bounded and stderr/credentials are not copied into receipts.
 
+## Release evidence and closeout
+
+A release is keyed by its release ref (`release:<ref>` reservation source, item
+title `[release:<ref>] ...`), not by a GitHub Issue. A release item has
+`area: release`; `squad done` maps its generic `evidence_required: [test]` to a
+verified `release` attestation, because a production release is proven by its
+execution, acceptance, observation, cleanup and custody facts, not by a unit
+test command. Every other area keeps its declared kinds, a `test` or `manual`
+attestation never satisfies a release item, and `--force` is not the route.
+Being the Deployer, the release client exiting, a completed reservation or a
+terminal event never counts as evidence.
+
+The release owner records one `squad.release-evidence.v1` JSON document
+(unknown fields are rejected, at most 64 KiB):
+
+```bash
+squad attest TASK-064 --kind release --evidence-file release-evidence.json
+```
+
+(MCP `squad_attest`, `kind=release`, `evidence_file`.) It carries `release_ref`,
+the exact candidate (`application_sha`, `version`, `manifest_sha256`), the
+`execution` result and reference, `acceptance` checks and an `observation`
+(`passed|failed|pending|not-applicable`, each with a bounded evidence reference;
+`required:false` marks an optional check), `cleanup`, and `custody`
+(`none|released|retained` plus retained resource names). Optional
+`current_conclusion_ref` names the authoritative current conclusion.
+
+The verdict is deterministic and stored, with the document, in the hashed
+attestation artifact. Only `complete` records exit 0 and satisfies the gate:
+
+| State | Meaning | Recorded exit |
+|---|---|---|
+| `complete` | candidate, execution, every required acceptance, observation, cleanup and custody disposition are evidenced | 0 |
+| `partial` | something is still pending or lacks a reference (`unmet` lists each) | 1 |
+| `blocked` | a recorded failure: execution, a required check or cleanup | 1 |
+| `custody-retained` | everything else holds but resources remain retained | 1 |
+| `invalid` | wrong release ref, malformed candidate identity, or unknown values | 1 |
+
+Precedence is invalid, blocked, custody-retained, partial. An incomplete verdict
+is still recorded, so the owner resumes from the recorded position and unmet list;
+re-recording identical content converges on the same row, and a corrected
+document is a new row. The newest verdict wins for projection; revoke a wrong row
+with `squad attest revoke`.
+
+`squad closeout` accepts a `release:<ref>` assignment. It refuses, writing no
+receipt, until the newest non-revoked verdict (re-hashed from its artifact) is
+`complete` for that ref, naming the state and unmet conditions. Then it runs the
+same receipted, resumable steps without GitHub: the existing `done` gates, then
+one `handoff-complete` outcome. Completed steps are adopted on retry and crash
+resume; held ENV claims, active execution pins or unresolved operations still
+refuse. The Dispatcher alone reconciles the reservation afterwards; no routine
+post-release approval is added. A partial or blocked release uses the existing
+`blocked` outcome and, for a failed assignment, `retire-partial`.
+
+`squad dispatch delivery KEY` adds a `release` block for a release assignment:
+`state` (including `unrecorded`), `unmet`, `candidate`, `attestation_id`,
+`evidence_hash` and `current_conclusion_ref`. `acceptance.goal_reached` is true
+only for a `complete` verdict. Drift codes
+`release-completed-without-complete-evidence` and
+`release-evidence-complete-item-open` flag the reported cases for the owner.
+A release verdict is never shown as the latest command result.
+
+Release reports keep three layers: the frozen candidate package (immutable,
+original text retained), execution records, and one current conclusion that links
+the authoritative evidence. Put current status first in the report README, linking
+`current_conclusion_ref` and the attestation hash. Do not edit frozen candidate
+material or add a ledger. A historical NO-GO preparation statement remains as
+history with a pointer, and a stale "preparing" scope is superseded by the link,
+not rewritten.
+
 ## Partial delivery and continuation
 
 Keep the Issue OPEN and the unfinished item blocked. Publish `blocked`, have its
