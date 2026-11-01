@@ -62,15 +62,85 @@ session or stealing locks. An explicit user takeover request still requires
 custody verification. Compare providers using comparable evidence; record
 handoff overhead separately rather than attributing all delay to a model.
 
+## Continuous ownership
+
+One Issue keeps one reservation, one primary item and one native session until its
+own closeout. Waiting for CI, review or an environment, a completed phase, a
+temporary block, a pending Dispatcher decision or a model/connection failure does
+not end the reservation, start a Worker or change the owner; resume the same
+native from the current checkpoint. Release `ENV-*` and other shared resources
+at their safe boundary while ownership stays, and keep counting the assignment
+in WIP until its terminal reconciliation. A user pause or HOLD is never lifted by
+this rule. A different Issue always gets a new reservation, item and native;
+`dispatch bind` rejects a native already bound to another reservation, so a
+finished or idle session cannot be reassigned to save launch time.
+
+## Shared causes: one repair owner, many acceptance owners
+
+Treat a failure as shared only after comparing failed phase, environment,
+component revision, error code or failed condition and trace/regression evidence;
+similar text or a similar symptom alone is `unconfirmed`, and a later record that
+traces it to a Worker's own fixture or input reclassifies it. A confirmed cause
+gets exactly one canonical repair owner: reuse its existing Issue, PR and fix
+evidence, and check that owner's current PR/head and whether the fix is merged,
+integrated or deployed before creating any new implementation. Every other
+affected Issue keeps its own Worker and acceptance gate, records the repair as a
+dependency, waits without changing owner, and then reruns its original failing
+path. Coordination-tool defects are routed to the designated maintenance agent,
+never explained as a business root cause or moved into a business Worker.
+
+## Handoff means ownership transfer
+
+Transfer ownership only for a planned role boundary recorded at admission (for
+example a donor-to-integration owner), an original owner proven unable to
+recover or to continue safely in its session, or an explicit human reassignment.
+Name the receiver, its capabilities, permissions and phase boundary before the
+transfer. A completed phase, a shared dependency or a stalled terminal is not a
+handoff. Do not call a transfer complete until the receiver's binding, claims and
+callback route are read back and the old writer is fenced; there must never be two
+effective writers. If no supported transfer exists, report the capability gap and
+keep the original owner's custody. Use `worker-handoff`/`takeover` only through
+their documented routes; never recreate a worker to bypass a ledger fault.
+
+## State vocabulary
+
+Checkpoints, progress summaries and events use one of these states and never one
+for another:
+
+| State | Owner | Meaning | Event |
+| --- | --- | --- | --- |
+| `phase-complete` | original owner | a phase finished; the owner continues | none (checkpoint/progress summary only) |
+| `waiting` | original owner | named dependency or decision, with resume condition | none; `decision-request` only for a real decision |
+| `transferring` | old owner until readback | transfer prepared, receiver not yet confirmed | none |
+| `receiver-confirmed` | receiver | binding, claims, callback and summary readback verified | `handoff-complete` |
+| `task-complete` | closed | Issue acceptance, cleanup and release done | `issue-closed` |
+
+`handoff-complete` is a terminal ownership-transfer event and the donor ends after
+it; consumers retire or release the donor. Never publish it for a phase report,
+and never publish it twice for the same Worker generation. Phase reports that
+must unblock another reservation use a `decision-request` as already required.
+
+## Takeover summary
+
+Keep the takeover summary in the existing checkpoint (no new ledger) and update
+it at each material phase change. It holds: exact identities (repo, branch, PR
+head, candidate/image, reservation, generation, native, item); confirmed cause,
+excluded hypotheses and unknowns; the effective decision revision, authorizations,
+pauses and prohibitions; in-flight operations, claims, ENV and cleanup custody;
+remaining acceptance, next action and resume condition. A receiver reads the
+summary and its references, rechecks volatile facts (head, decision revision,
+claims, operation state) and does not redo valid investigation. A decision
+revision newer than the summary supersedes it; an older decision never overrides
+a newer one.
+
 ## Authorized takeover
 
 1. Identify the old native session, task, reservation owner/generation, claims,
    execution pins and external operation IDs. Verify it cannot continue writing
    by the authorized stop/fencing path. A dead local process does not terminate
    its Actions; assign supervision of any still-running operation.
-2. Freeze a handoff receipt: current target and baseline, effective user
-   decisions, evidence, known unknowns, operations, remaining acceptance and
-   next action. The destination must be able to read this before taking custody.
+2. Freeze the takeover summary (see above) as the handoff receipt. The
+   destination must be able to read this before taking custody.
 3. Verify destination capabilities for the actual role, provider/native task ID,
    ledger binding and callback route. Use supported fenced ownership operations;
    never force-register/impersonate the old identity or substitute a handoff note

@@ -158,3 +158,34 @@ func TestInactiveLegacyItemKeyMigratesToSourceFirstKey(t *testing.T) {
 		t.Fatalf("migrated=%+v", r)
 	}
 }
+
+func TestBindRejectsNativeSessionBoundToAnotherIssue(t *testing.T) {
+	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	for _, n := range []string{"601", "602"} {
+		if _, err := s.Reserve(ctx, "DISPATCH-STUDIO-"+n, "github:o/r#"+n, "dispatcher-a", "ready", 15*time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Attach(ctx, "DISPATCH-STUDIO-"+n, "STUDIO-"+n, "dispatcher-a", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	qualifyReceiver(t, s, ctx, "dispatcher-a", "dispatcher-a-native", "lifecycle-incarnation")
+	if _, err := s.Bind(ctx, "DISPATCH-STUDIO-601", "dispatcher-a", "native-shared", 1); err != nil {
+		t.Fatal(err)
+	}
+	// Even after the first Issue is finished, its native is retired, never reassigned.
+	if _, err := s.Close(ctx, "DISPATCH-STUDIO-601", "dispatcher-a", "completed", "done", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bind(ctx, "DISPATCH-STUDIO-602", "dispatcher-a", "native-shared", 1); !errors.Is(err, ErrNativeReused) {
+		t.Fatalf("want ErrNativeReused, got %v", err)
+	}
+	if _, err := s.BindSupervised(ctx, "DISPATCH-STUDIO-602", "dispatcher-a", "native-shared", 1); !errors.Is(err, ErrNativeReused) {
+		t.Fatalf("supervised: want ErrNativeReused, got %v", err)
+	}
+	if r, err := s.Bind(ctx, "DISPATCH-STUDIO-602", "dispatcher-a", "native-own", 1); err != nil || r.State != "dispatched" {
+		t.Fatalf("own native must bind: %+v %v", r, err)
+	}
+}

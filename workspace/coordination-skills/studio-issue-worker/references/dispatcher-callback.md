@@ -41,8 +41,10 @@ is finished, immediately before ending the current turn:
   An unresolved operation or ENV claim must be reported explicitly, never as
   safe completion. Do not release unsafe ENV solely to emit this event.
 
-Routine CI, review, percentage progress, resource waits and repeated unchanged
-blockers emit no callback. A blocked event does not release WIP or authorize a
+Routine CI, review, percentage progress, resource waits, completed phases that
+the Worker continues and repeated unchanged blockers emit no callback. Never emit
+`handoff-complete` for a phase report or twice for one Worker generation: it ends
+the donor's ownership and consumers retire or release it. A blocked event does not release WIP or authorize a
 replacement. A later distinct resolution/closure is a new event.
 
 Use a stable event id:

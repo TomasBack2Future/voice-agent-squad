@@ -76,6 +76,18 @@ class NormativeSourceTests(unittest.TestCase):
         self.assertIn('close the\n  Issue yourself', worker)
         self.assertIn('different Issue', worker)
 
+    def test_continuity_handoff_and_state_rules_are_stated(self):
+        cont = (WORKSPACE / 'coordination-skills/squad-dispatcher/references/session-continuity.md').read_text()
+        flat = ' '.join(cont.split())
+        for needle in ('## Continuous ownership', '## Shared causes: one repair owner', '## Handoff means ownership transfer',
+                       '## State vocabulary', '## Takeover summary', '`receiver-confirmed`', 'twice for the same Worker generation',
+                       'rejects a native already bound'):
+            self.assertIn(needle, flat)
+        worker = (WORKSPACE / 'agent-loop/roles/worker/SKILL.md').read_text()
+        self.assertIn('## Phase reports are not handoffs', worker)
+        callback = (WORKSPACE / 'coordination-skills/studio-issue-worker/references/dispatcher-callback.md').read_text()
+        self.assertRegex(callback.replace('\n', ' '), r'Never emit\s+`handoff-complete` for a phase report')
+
 
 class GeneratedPromptTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('ASSIGNMENT_PROMPT_FILES'), 'set to generated prompt paths (os.pathsep separated)')
