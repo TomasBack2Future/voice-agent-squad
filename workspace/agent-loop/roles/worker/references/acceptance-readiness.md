@@ -42,6 +42,45 @@ use bounded asynchronous requests and sanitized results rather than a long
 synchronous eval. Choose explicit timeouts and bounded polling appropriate to
 the operation; do not treat the browser bridge's timeout as server duration.
 
+## Choose the shortest authorized verification path
+
+Pick the cheapest path that proves the assertion on the real deployed target;
+a one-off verification does not wait for a repository script, Action or tool PR.
+
+- **Local client, real target.** staging and production may both be verified from
+  a local command, temporary script, supported API client or browser. "Local"
+  is where the client runs, not a copy or mock: confirm the target URL, the
+  served page/service version, the effective configuration and what the
+  assertion covers. A mock or local-copy pass is not live acceptance.
+- **UI journeys: prefer browser use.** Operate the deployed page directly with
+  the client's browser automation or computer-use, reusing a valid browser login
+  the task is authorized to use. Do not require a new user, copied profile,
+  exported key/cookie or headless-runner workflow. Keep identity isolation when
+  the task requires it, never use another person's session or revoked
+  credentials, and ask once for login/MFA only when it is truly user-only. API
+  reads may confirm backend state, hashes, paging and cleanup but never stand in
+  for the UI journey; report what was actually observed.
+- **Three kinds of work stay separate.** A one-off script lives in the task's
+  temporary/evidence directory (record its hash or content reference). A product
+  defect still gets a meaningful source regression test. A tool is committed only
+  for repeat reuse, an explicit task requirement, or a protected execution
+  boundary that truly needs a maintained adapter; reuse an existing remote
+  executor rather than building one per Issue. Optional tooling follow-up never
+  delays closing an Issue whose gates are met.
+- **Permissions follow the operation, not the location.** Local does not add an
+  approval and does not bypass any: read-only checks, synthetic writes, model
+  calls, configuration changes and deployments each keep their own authorization,
+  budget, ownership/ENV claim and cleanup. Production verification relies on an
+  existing explicit authorization and does not widen it. If a credential or
+  network path works only inside a protected remote environment, name that exact
+  limit and use the supported remote entry for that case only; it is not a rule
+  that every acceptance needs a workflow.
+- **Evidence is light.** In the Issue summary/checkpoint record target and version,
+  UTC time, the operation or script reference, expected vs actual, needed
+  request/trace IDs, sanitized output or screenshot, cleanup result and what was
+  not covered. A passing local run satisfies the gate without a GitHub Action URL.
+  Scripts and screenshots do not prove a result; the observation does.
+
 ## Diagnose a timeout once, with attribution
 
 Record the operation, UTC window, component revision, expected status/semantic
