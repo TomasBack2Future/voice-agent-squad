@@ -78,7 +78,7 @@ a one-off verification does not wait for a repository script, Action or tool PR.
 - **Evidence is light.** In the Issue summary/checkpoint record target and version,
   UTC time, the operation or script reference, expected vs actual, needed
   request/trace IDs, sanitized output or screenshot, cleanup result and what was
-  not covered. A passing local run satisfies the gate without a GitHub Action URL.
+  not covered. A passing local run satisfies the gate without a GitHub Action URL, unless the gate itself requires a specific CI job or protected remote execution.
   Scripts and screenshots do not prove a result; the observation does.
 
 ## Diagnose a timeout once, with attribution

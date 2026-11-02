@@ -64,7 +64,7 @@ restarted merely because they predate this contract.
 Use [automated acceptance and human fallback](references/delivery-quality.md#automated-acceptance-and-human-fallback)
 when deciding who executes acceptance steps. Shell commands, browser replay,
 result capture and terminal notification are Worker responsibilities whenever
-available authorized tools support them. One-off acceptance uses a local client or
+available authorized tools support them. Within the assigned authorization, one-off acceptance uses a local client or
 browser against the real target and needs no tool PR first.
 
 ## Standing authorization
