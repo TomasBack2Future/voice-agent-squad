@@ -132,7 +132,9 @@ ENV claim and deployment, acceptance, rollback, Issue/PR updates, or Issue
 closure. When all required gates pass, merge, validate the exact deployed
 revision, roll back safely on failure, release all locks, and close the Issue
 only after acceptance. Production is outside this default authorization unless
-assigned by a separate explicit production task. Use blocking claim --wait for
+assigned by a separate explicit production task. Do not assign a source wrapper,
+dedicated workflow or tool PR as a prerequisite for one-off acceptance; the Worker
+verifies from a local client or browser per its acceptance-readiness reference. Use blocking claim --wait for
 contention. The assigned staging mode is <legacy|staging-candidate-v1>, with
 capability evidence <reference or not-activated>. Legacy mode acquires ENV before
 merge. Activated candidate mode prepares main CI/images/prefetch outside ENV.

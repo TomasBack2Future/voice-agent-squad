@@ -97,6 +97,12 @@ same-origin authentication does not require exporting or inspecting cookies.
 Do not extract tokens, copy cookie values or bypass application authentication.
 Preserve the test key/payload and collect only sanitized acceptance receipts.
 
+A missing dedicated repository script, consumer or Action does not block acceptance.
+Verify staging or production from a local client or, for UI journeys, directly
+with browser use under the existing authorization, and follow the
+[verification path rules](../../../agent-loop/roles/worker/references/acceptance-readiness.md#choose-the-shortest-authorized-verification-path).
+Do not turn a one-off check into a source wrapper, workflow and merge gate.
+
 Separate an operation from one implementation path. A deploy workflow that
 requires a new source revision is not automatically the mechanism for a
 same-revision restart. With existing authorization and the correct ENV claim,

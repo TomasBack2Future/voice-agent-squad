@@ -48,7 +48,8 @@ when a shared blocker appears, before transferring a blocker, and before
 environment admission. Keep its startup receipt separate from ownership and
 release evidence.
 
-Before environment admission, use [acceptance readiness](references/acceptance-readiness.md)
+Choose the shortest authorized verification path (local client or browser against the real target; no tool PR for one-off acceptance) per [acceptance readiness](references/acceptance-readiness.md#choose-the-shortest-authorized-verification-path).
+Before environment admission, use that reference
 to prepare executable assertions and fixtures. Use the same reference for timeout
 attribution and interrupted ENV ownership.
 
