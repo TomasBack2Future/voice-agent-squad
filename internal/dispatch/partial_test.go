@@ -113,3 +113,50 @@ func TestPartialRetirementRollsBackAuditWhenUpdateIsNotApplied(t *testing.T) {
 		t.Fatalf("unapplied transition left audit: %d %v", n, err)
 	}
 }
+
+func TestPartialRetirementWaitsForWorkerHoldReadback(t *testing.T) {
+	for _, delivered := range []int{0, 4} {
+		t.Run(map[int]string{0: "not-delivered", 4: "delivered-not-handled"}[delivered], func(t *testing.T) {
+			s, q := partialFixture(t)
+			ctx := context.Background()
+			if _, err := s.db.Exec(`UPDATE dispatch_reservations SET state='dispatched';
+ INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(2,'repo-test',4,'owner','T','say','hold for partial handoff','[]','normal');
+ UPDATE dispatch_decisions SET revision=2,outcome_id=2;
+ INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_at,processed_at) VALUES('repo-test','worker','hold','D',1,'native','T','decision-resolved',2,2,?,0)`, delivered); err != nil {
+				t.Fatal(err)
+			}
+			q.Expected.State = "dispatched"
+			if _, err := s.RetirePartial(ctx, "owner", q); err == nil {
+				t.Fatal("retired before the original Worker could acknowledge its hold")
+			}
+			current, err := s.Get(ctx, "D")
+			if err != nil || current.State != "dispatched" {
+				t.Fatalf("rejected retirement changed custody: %+v %v", current, err)
+			}
+			var audits int
+			if err := s.db.QueryRow(`SELECT count(*) FROM messages WHERE kind='partial-retirement'`).Scan(&audits); err != nil || audits != 0 {
+				t.Fatalf("rejected retirement left an audit: %d %v", audits, err)
+			}
+			if _, err := s.db.Exec(`UPDATE terminal_event_receipts SET delivered_at=4,processed_at=5 WHERE event_id='hold'`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.RetirePartial(ctx, "owner", q); err != nil {
+				t.Fatalf("handled hold cannot retire: %v", err)
+			}
+		})
+	}
+}
+
+func TestPartialRetirementIgnoresSupersededDecisionReceipts(t *testing.T) {
+	s, q := partialFixture(t)
+	if _, err := s.db.Exec(`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_at,processed_at) VALUES('repo-test','worker','obsolete','D',1,'native','T','decision-resolved',99,99,4,0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RetirePartial(context.Background(), "owner", q); err != nil {
+		t.Fatalf("obsolete decision stranded retirement: %v", err)
+	}
+	var handled int
+	if err := s.db.QueryRow(`SELECT processed_at FROM terminal_event_receipts WHERE event_id='obsolete'`).Scan(&handled); err != nil || handled != 0 {
+		t.Fatalf("retirement manufactured an acknowledgement: %d %v", handled, err)
+	}
+}

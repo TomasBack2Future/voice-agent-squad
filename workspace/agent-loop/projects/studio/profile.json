@@ -48,10 +48,10 @@
     ],
     "staging": [
       "read-only prerequisite receipt before environment ownership; for report intake use node scripts/report_intake_preflight.mjs with the explicit target and exact CI tuple when that repository capability is available",
-      "explicit kubeconfig and context selection",
+      "explicit kubeconfig and context selection for cluster operations; local API/browser acceptance uses its authorized target and login route without requiring cluster credentials",
       "explicit Studio Couchbase environment and credential role; clear inherited CB_* values before loading the selected environment, and verify connected cluster, bucket and scope",
-      "current PR tuple and required checks revalidated before and after ownership",
-      "exact-revision rollout, functional acceptance, bounded SLS evidence and rollback disposition"
+      "current PR tuple and required checks revalidated for merge/deployment admission; otherwise-authorized local checks of an existing deployed revision do not wait for an unrelated source or tool PR",
+      "exact-revision rollout when assigned, functional acceptance on the actual target, bounded SLS evidence and applicable cleanup/rollback disposition"
     ]
   },
   "resources": {

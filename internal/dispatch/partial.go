@@ -69,6 +69,13 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 		if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e JOIN messages m ON m.id=e.outcome_id AND m.repo_id=e.repo_id WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.recipient=? AND e.item_id=? AND e.kind='blocked' AND e.outcome_id=? AND e.processed_at>0 AND m.agent_id=?`, s.repoID, current.ItemID, current.Generation, current.WorkerThreadID, actor, current.CanonicalItemID, q.BlockedOutcome, worker).Scan(&n); e != nil || n != 1 {
 			return fmt.Errorf("original Worker's blocked outcome must be handled by its owner")
 		}
+		if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.processed_at=0
+ AND (e.kind!='decision-resolved' OR NOT EXISTS(SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=e.repo_id AND d.reservation_key=e.reservation_key AND d.generation=e.generation AND d.item_id=e.item_id AND d.outcome_id!=e.outcome_id))`, s.repoID, current.ItemID, current.Generation, current.WorkerThreadID).Scan(&n); e != nil {
+			return e
+		}
+		if n != 0 {
+			return fmt.Errorf("terminal events remain unhandled; keep the reservation live until the original recipient acknowledges")
+		}
 		if e = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM claims WHERE repo_id=? AND (agent_id=? OR item_id=?))+(SELECT count(*) FROM execution_authorizations WHERE repo_id=? AND holder=? AND state='active')`, s.repoID, worker, current.CanonicalItemID, s.repoID, worker).Scan(&n); e != nil {
 			return e
 		}

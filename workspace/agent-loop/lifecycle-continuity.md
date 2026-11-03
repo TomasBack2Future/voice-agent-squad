@@ -54,6 +54,14 @@ Separate provider retries, agent-turn continuation and external-operation status
 Use the already-authorized monitor or Dispatcher cycle outside the failed model
 session; do not create a second controller, timer or perpetual prompt loop.
 
+Before relying on unattended work, qualify that observer's actual enabled state,
+target and supported continuation route in the existing checkpoint. A paused
+observer remains paused; report unattended recovery as unavailable rather than
+promising it from a skill or adding another timer. A failed turn with an idle ENV
+claim is actionable in the existing owner cycle: reconcile external operations
+and, if safe and within authority, have its owner release the idle resource.
+Never infer safety from elapsed time or release another owner's claim.
+
 On a failed turn, read the last error and the subsequent native execution events.
 Classify first-output/stream timeout, connection-refused/reset, proxy unavailable,
 rate limit, authentication failure, explicit pause and unknown failure separately.

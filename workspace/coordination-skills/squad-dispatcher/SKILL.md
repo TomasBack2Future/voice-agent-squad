@@ -122,6 +122,17 @@ justify serializing independent preparation. Never bypass current merge/ENV rule
 A prepared release is not a deployed release, and unfinished production acceptance
 must remain visibly pending even when earlier phases are complete.
 
+Give an acceptance owner one bounded execution scope in the existing assignment
+and decision: target, owned resources, permitted operations, limits, cleanup and
+stop conditions. Do not make every ordinary assertion, readback, log query or
+cleanup wait for another phase decision. Reuse recorded standing access and a
+qualified permitted browser session; a new unauthenticated profile is not an
+access failure. Agree the applicable evidence layers against the Issue contract
+before execution, escalating only an actual change to required scope or evidence.
+On a verification-method change, replace obsolete routine waits once through the
+durable decision/readback route; preserve real human holds and production scope.
+Keep independent owned fixtures parallel; serialize only conflicting shared writes.
+
 ## Merge release (bounded merge order)
 
 When you record a bounded merge order or merge window for a repository, set
