@@ -259,6 +259,18 @@ class CodexControlPlaneTests(unittest.TestCase):
         self.assertIn('on-request', argv)
         self.assertFalse(any('bypass' in value for value in argv))
 
+    def test_worker_output_defaults_preserve_execution_selection(self):
+        argv = launcher.argv(self.c, str(self.root), 'prompt')
+        overrides = dict(argv[i + 1].split('=', 1) for i, value in enumerate(argv) if value == '-c')
+        self.assertEqual(json.loads(overrides['model_verbosity']), 'low')
+        self.assertEqual(overrides['hide_agent_reasoning'], 'true')
+        self.assertEqual(json.loads(overrides['model_reasoning_effort']), self.c['effort'])
+        self.assertEqual(json.loads(overrides['model_provider']), self.c['provider'])
+        self.assertEqual(argv[argv.index('--model') + 1], self.c['model'])
+        self.assertEqual(argv[argv.index('--sandbox') + 1], self.c['sandbox'])
+        self.assertEqual(argv[argv.index('--ask-for-approval') + 1], self.c['approval_policy'])
+        self.assertEqual(argv[-3:], ['resume', NATIVE, 'prompt'])
+
     def test_human_receipt_is_bounded_context_not_sensitive_permission(self):
         self.assertEqual(launcher.authorization(self.c,self.a)['status'], 'absent')
         auth = dict(assignment_id='repo/1/1', repository='owner/repo', reference='human:message-1',
