@@ -195,6 +195,17 @@ transition without changing state or writing a retirement audit; keep the
 reservation live so its recipient can finish handling, then retry the same request.
 Decision receipts superseded by a newer durable decision are no longer routable
 and do not block retirement; ignoring them never fabricates an acknowledgement.
+After a Dispatcher handoff the handled `blocked` receipt keeps its original
+recipient, a retired predecessor. The current owner may reuse it only when
+`dispatch_retired_controllers` plus matching `dispatch_handoffs` receipts form a
+chain from that recipient to the current owner, each link retired no earlier than
+the reservation was made. Exact reservation, generation, native, canonical item,
+outcome, Worker authorship and `processed_at` are still checked; the receipt is
+never rewritten, and the use is audited as `partial-retirement-receipt` with the
+original recipient. A Worker that published `blocked` and then released its claim
+leaves the item `open`; retirement accepts that only when the same Worker's
+`release` message follows the blocked outcome and nobody has reclaimed the item.
+A merely `open` item without that evidence, or a `done` item, is refused.
 It does not close the Issue or invent a done
 item. A new authorized continuation of the same Issue can use existing reserve/attach/bind with
 next generation and the same canonical item, under the reservation owner; it never reuses a retired session for a different
