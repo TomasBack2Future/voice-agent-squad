@@ -70,6 +70,10 @@ attribution and interrupted ENV ownership.
 - Treat the Issue's stable acceptance criteria and decisions as authoritative.
   Report contradictions or missing safety-critical scope; do not repair them by
   guessing from chat history.
+- Carry the bounded acceptance scope through its ordinary steps without asking
+  for each assertion or readback. Select evidence layers before execution and
+  qualify existing authorized browser access before declaring a user-only login;
+  use the acceptance-readiness reference. Preserve explicit holds and scope changes.
 - Keep generic lifecycle decisions here and project-specific commands, resource
   keys and runbooks in the project profile. Do not copy project operations into
   this skill.

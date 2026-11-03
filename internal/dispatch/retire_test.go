@@ -228,6 +228,21 @@ func TestPartialRetirementIsEligibleDespiteItsFencingHold(t *testing.T) {
 	}
 }
 
+func TestRetirementIgnoresSupersededDecisionWithoutForgingAck(t *testing.T) {
+	native := "native-obsolete-hold"
+	s := retireLedger(t, native, "completed",
+		`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES('repo-test','D',1,'T',2,2,'proceed','finished','worker')`,
+		`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_at,processed_at) VALUES('repo-test','worker','old-hold','D',1,'`+native+`','T','decision-resolved',1,1,4,0)`)
+	st, err := s.Retirement(context.Background(), req(native))
+	if err != nil || !st.Eligible {
+		t.Fatalf("obsolete hold blocked retirement: %+v %v", st, err)
+	}
+	var handled int
+	if err := s.db.QueryRow(`SELECT processed_at FROM terminal_event_receipts WHERE event_id='old-hold'`).Scan(&handled); err != nil || handled != 0 {
+		t.Fatalf("eligibility manufactured an acknowledgement: %d %v", handled, err)
+	}
+}
+
 func TestRetireClientKeepsAnUnresponsiveClientAndRecordsTheTimeout(t *testing.T) {
 	native := "native-stuck"
 	client := startClient(t, native, "FIXTURE_IGNORE_TERM=1")

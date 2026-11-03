@@ -16,6 +16,13 @@ that only failed/cancelled records can be retried. Reuse valid retained evidence
 Separate correctness, environment health, performance objectives and review state.
 Existing approved hard gates remain; do not invent latency gates from one sample.
 
+Map each assertion to real-target execution, an applicable committed regression,
+retained evidence, or an uncovered condition before starting the journey. Explain
+version/configuration applicability and keep required live assertions live. This
+is evidence selection within the existing contract, not another approval: ask
+only when changing a required criterion or its accepted evidence would change
+scope. Do not discover the closure standard at the final report.
+
 Bind the plan to the configured API origin/Project and candidate/fixture provenance.
 Check execution and ephemeral-cleanup scope separately, including the actual supported
 cleanup method; credential presence is not sufficient. A retained fixture needs a
@@ -60,6 +67,12 @@ a one-off verification does not wait for a repository script, Action or tool PR.
   credentials, and ask once for login/MFA only when it is truly user-only. API
   reads may confirm backend state, hashes, paging and cleanup but never stand in
   for the UI journey; report what was actually observed.
+  Before declaring login unavailable, inspect the existing recorded authorization
+  and permitted managed browser profiles, then qualify the selected session with
+  a non-secret identity/access check in an owned pane. A fresh unauthenticated
+  profile proves nothing about an already-authorized session. Reuse a valid
+  shared qualification while its scope and state apply; coordinate cookie-jar
+  changes and close only owned panes, without copying authentication state.
 - **Three kinds of work stay separate.** A one-off script lives in the task's
   temporary/evidence directory (record its hash or content reference). A product
   defect still gets a meaningful source regression test. A tool is committed only
@@ -75,11 +88,23 @@ a one-off verification does not wait for a repository script, Action or tool PR.
   network path works only inside a protected remote environment, name that exact
   limit and use the supported remote entry for that case only; it is not a rule
   that every acceptance needs a workflow.
+- **One bounded execution scope.** Carry forward the current decision's allowed
+  target, owned resources, operations, limits, cleanup and stop conditions.
+  Ordinary preparation, assertions, readbacks and cleanup inside that scope
+  proceed without a new phase decision for each step. Report progress without
+  turning the report into a permission request. A real hold or changed shared
+  write, privilege, budget or scope still requires its existing decision route.
+  If a method change supersedes an old routine wait, obtain the owner's durable
+  replacement once; do not ignore the old decision or rebuild its gate locally.
 - **Evidence is light.** In the Issue summary/checkpoint record target and version,
   UTC time, the operation or script reference, expected vs actual, needed
   request/trace IDs, sanitized output or screenshot, cleanup result and what was
   not covered. A passing local run satisfies the gate without a GitHub Action URL, unless the gate itself requires a specific CI job or protected remote execution.
   Scripts and screenshots do not prove a result; the observation does.
+  Derive log windows and deadlines from the operation's timestamp/epoch with an
+  explicit timezone, not the chat's calendar date. At a material result or wait,
+  update the owned Issue summary with the current remaining condition and owner;
+  a detailed internal thread is not a substitute for that current projection.
 
 ## Diagnose a timeout once, with attribution
 

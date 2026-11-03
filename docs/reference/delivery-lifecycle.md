@@ -173,13 +173,28 @@ lookup and new-operation admission; do not manufacture a new work decision to
 retire it. Both paths require matching native/generation/actor, blocked canonical
 item, handled original outcome, no retained Worker claims/active execution pins
 and no other claimant of the canonical item. Audit and the exact one-row
-reservation update commit together; an unapplied update rolls back the audit. It does not close the Issue or invent a done
+reservation update commit together; an unapplied update rolls back the audit.
+All current receipts for that reservation/generation/native must be handled first,
+including the original Worker's HOLD readback. An unhandled receipt refuses the
+transition without changing state or writing a retirement audit; keep the
+reservation live so its recipient can finish handling, then retry the same request.
+Decision receipts superseded by a newer durable decision are no longer routable
+and do not block retirement; ignoring them never fabricates an acknowledgement.
+It does not close the Issue or invent a done
 item. A new authorized continuation of the same Issue can use existing reserve/attach/bind with
 next generation and the same canonical item, under the reservation owner; it never reuses a retired session for a different
 Issue. A process exit or Issue observation
 alone never qualifies retirement. Unmanaged external operation custody still
 requires the original owner's verification; absence from this ledger is not
 proof that those operations stopped. Remote mutation remains disabled.
+
+For a legacy partial-retirement race, the original recipient may use the existing
+`terminal-events ack --native-session ORIGINAL_NATIVE` on its already-delivered,
+still-current HOLD (MCP `squad_terminal_events_ack` uses `native_session`). This requires
+the exact native/generation, owner-authored partial-retirement audit, sole original
+custody and no retained claims or active execution. It only reconciles that receipt:
+no new delivery, work decision, reservation reopen or controller impersonation is
+allowed. Unrelated failures, stale holds and successor generations remain refused.
 
 ## Finished-client retirement
 

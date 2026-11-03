@@ -161,7 +161,8 @@ func (s *Store) retirement(ctx context.Context, db retirementQuerier, q Retireme
 		refuse("owned-operation-unresolved")
 	}
 	var pending int
-	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND worker_session=? AND processed_at=0`, s.repoID, q.Reservation, q.Generation, q.WorkerSession).Scan(&pending); err != nil {
+	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.processed_at=0
+ AND (e.kind!='decision-resolved' OR NOT EXISTS(SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=e.repo_id AND d.reservation_key=e.reservation_key AND d.generation=e.generation AND d.item_id=e.item_id AND d.outcome_id!=e.outcome_id))`, s.repoID, q.Reservation, q.Generation, q.WorkerSession).Scan(&pending); err != nil {
 		return nil, err
 	}
 	if pending > 0 {

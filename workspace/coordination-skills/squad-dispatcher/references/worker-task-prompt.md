@@ -30,6 +30,11 @@ For a Studio Worker, include:
   environment access path and live resource identity when available, applicable
   browser/login path, user-selected effective permission mode and callback
   route; distinguish verified, external prerequisite and not-yet-checked;
+- one bounded acceptance scope (owned resources, permitted operations, limits,
+  cleanup and stop conditions), with the existing authorized browser/access route
+  and the assertion-to-evidence mapping; ordinary in-scope steps need no new
+  phase approval. Requalify the permitted existing session before asking for
+  login; real holds, changed scope and required live assertions remain binding;
 - ownership of authorized restart, browser replay and evidence collection:
   no manual shell/DevTools/output-relay chores when available tools support
   execution. Escalate only the concrete user-only interaction or verified

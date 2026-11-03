@@ -343,6 +343,9 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 		if n == 1 {
 			return nil
 		}
+		if handled, err := s.ackPartialRetiredHold(ctx, tx, id, note); err != nil || handled {
+			return err
+		}
 		var previous string
 		err = tx.QueryRowContext(ctx, `SELECT processed_note FROM terminal_event_receipts WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at>0`, s.Repo, s.Recipient, id).Scan(&previous)
 		if err == nil && previous == note {

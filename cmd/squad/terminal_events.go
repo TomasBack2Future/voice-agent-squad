@@ -69,7 +69,7 @@ func newTerminalEventsCmd() *cobra.Command {
 		defer bc.Close()
 		return (terminalevents.Store{DB: bc.db, Repo: bc.repoID, Recipient: bc.agentID, NativeSession: nativeSession}).Ack(cmd.Context(), args[0], note)
 	}}
-	ack.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound controller native")
+	ack.Flags().StringVar(&nativeSession, "native-session", "", "Exact bound native; required for a partial-retired Worker's delivered HOLD")
 	ack.Flags().StringVar(&note, "note", "", "Durable reconciliation result/reference")
 	var request terminalevents.PublishRequest
 	publish := &cobra.Command{Use: "publish", Short: "Persist one validated event for its ledger-derived recipient", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
