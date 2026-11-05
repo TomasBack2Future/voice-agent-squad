@@ -68,6 +68,16 @@ rate limit, authentication failure, explicit pause and unknown failure separatel
 For a configured local relay, bounded read-only listener/process and endpoint
 health checks distinguish a missing local service from a remote failure. A TCP
 listener alone is not a healthy model response; mark unproven conditions unknown.
+A Claude launch configuration may declare `model_endpoint`, an https origin chosen
+by the project or runtime configuration (never a Squad default). Cold start, check
+and same-native resume then force that value into the child environment and fail
+with an explicit diagnostic when the client's settings layers (config directory,
+project, local; these override inherited environment) still name another address,
+such as a retired loopback tunnel, or when the endpoint is unreachable over HTTPS.
+The launcher never rewrites settings or falls back. A passing check proves the
+configured address and reachability, not that a running client uses it: confirm an
+actual new model response and its connection separately.
+
 Do not expose credentials, send customer prompts as probes, change providers,
 restart a shared relay or alter credentials without the corresponding authority.
 
