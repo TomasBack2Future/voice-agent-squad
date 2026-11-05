@@ -12,6 +12,9 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 import terminal_receiver
 from claude_workspace_trust import workspace_trust
@@ -85,7 +88,61 @@ def child_environment(c: dict) -> dict:
         # Local squad-coordination -> squad-codex may require these even for Claude.
         # Derive both from the assigned child; never inherit the Dispatcher id.
         env.update(CODEX_THREAD_ID=c['native_session_id'], CODEX_SESSION_ID=c['native_session_id'])
+    if c.get('model_endpoint'):
+        # The runtime configuration names the endpoint; a parent shell started
+        # before a cutover must not carry a stale address into a launch or resume.
+        env['ANTHROPIC_BASE_URL'] = c['model_endpoint']
     return env
+
+
+def redact_url(value: str) -> str:
+    return re.sub(r'(?i)(https?://)[^\s/@]*@', r'\1[redacted]@', str(value))[:200]
+
+
+def client_settings_endpoint(c: dict, env: dict, worktree: Path) -> tuple[str, str] | None:
+    """Last base URL the client's settings layers set; they override inherited env."""
+    config = Path(env.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude')
+    found = None
+    for path in (config / 'settings.json', worktree / '.claude' / 'settings.json',
+                 worktree / '.claude' / 'settings.local.json'):
+        try:
+            value = json.loads(path.read_text()).get('env', {}).get('ANTHROPIC_BASE_URL')
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(value, str) and value:
+            found = (value, str(path))
+    return found
+
+
+def probe_https(url: str) -> bool:
+    """Reachability only: any HTTP answer proves the TLS endpoint; no credentials or prompts are sent."""
+    request = urllib.request.Request(url, method='HEAD')
+    try:
+        urllib.request.urlopen(request, timeout=8).close()
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return True
+
+
+def check_model_endpoint(c: dict, env: dict, worktree: Path, probe=probe_https) -> dict:
+    expected = c.get('model_endpoint')
+    if not expected:
+        return {'status': 'not-configured'}
+    parsed = urllib.parse.urlsplit(expected)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.path not in ('', '/'):
+        raise ValidationError('model_endpoint must be an https origin without credentials or path')
+    expected = expected.rstrip('/')
+    layer = client_settings_endpoint(c, env, worktree)
+    effective, source = layer if layer else (env.get('ANTHROPIC_BASE_URL', ''), 'process environment')
+    if effective.rstrip('/') != expected:
+        raise ValidationError(f'model endpoint resolves to {redact_url(effective)} from {source}; expected {expected}. '
+                              'Fix that setting; the launcher does not fall back or rewrite client settings')
+    if not probe(expected):
+        raise ValidationError(f'model endpoint {expected} is not reachable over HTTPS')
+    return {'status': 'verified', 'effective': expected, 'source': source,
+            'parent_environment_stale': os.environ.get('ANTHROPIC_BASE_URL', expected).rstrip('/') != expected}
 
 
 def binding(assignment: dict, c: dict, env: dict) -> str:
@@ -246,7 +303,8 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
     state = binding(assignment, c, env)
     resources = check_resources(assignment, c, env)
     check_heartbeat_runtime(c, env)
-    return {'status': 'launch-checked', 'role': assignment['role']['id'], 'runtime_identity': runtime_identity(c, env), 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
+    endpoint = check_model_endpoint(c, env, Path(assignment['worktree']))
+    return {'status': 'launch-checked', 'model_endpoint': endpoint, 'role': assignment['role']['id'], 'runtime_identity': runtime_identity(c, env), 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed',
@@ -373,6 +431,12 @@ def resume_arguments(c, effective):
             *selection_arguments(c)]
 
 
+def resume_environment(c: dict, worktree: Path, probe=probe_https) -> tuple[dict, dict]:
+    """Environment and verified endpoint for resuming the SAME native session."""
+    env = child_environment(c)
+    return env, check_model_endpoint(c, env, worktree, probe=probe)
+
+
 def check_resume_effective(selected, effective):
     """Reject a resumed session whose effective selection drifted."""
     for name in ('model', 'effort'):
@@ -402,6 +466,7 @@ def main() -> int:
             check_deployer_launch_inputs(a, c)
         authorization(c, a)
         env = child_environment(c)
+        check_model_endpoint(c, env, Path(a['worktree']))
         check_resources(a, c, env)
         wait_for_binding(a, c, env, args.wait_seconds)
         check_profile(a)
