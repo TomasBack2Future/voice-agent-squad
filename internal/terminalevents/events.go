@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +17,7 @@ import (
 	"github.com/zsiec/squad/internal/store"
 )
 
-var eventPattern = regexp.MustCompile(`worker-terminal-v1/([A-Za-z0-9_.:-]+)/([1-9][0-9]*)/([A-Za-z0-9_.-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed|runtime-failure|operation-exit)/([1-9][0-9]*)(/[A-Za-z0-9_.-]{1,128})?`)
+var eventPattern = regexp.MustCompile(`worker-terminal-v1/([A-Za-z0-9_.:-]+)/([1-9][0-9]*)/([A-Za-z0-9_.-]+)/(issue-closed|handoff-complete|blocked|decision-request|decision-resolved|reconcile-needed|runtime-failure|operation-exit|phase-result)/([1-9][0-9]*)(/[A-Za-z0-9_.-]{1,128})?`)
 
 type Event struct {
 	ID          string `json:"event_id"`
@@ -84,6 +85,16 @@ func (s Store) recordTx(ctx context.Context, tx *sql.Tx, actor string, q Publish
 	}
 	if err := decisionFence(ctx, tx, s.Repo, q); err != nil {
 		return "", err
+	}
+	if q.Kind == "phase-result" {
+		// Only a recorded phase result can be announced; prose cannot mint one.
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM dispatch_phase_results WHERE repo_id=? AND reservation_key=? AND outcome_id=?`, s.Repo, q.Reservation, q.OutcomeID).Scan(&n); err != nil {
+			return "", err
+		}
+		if n != 1 {
+			return "", ErrInvalidEvent
+		}
 	}
 	// A global legacy message is valid only with task custody. Same-thread prose
 	// alone is also insufficient: another actor must not forge this Worker's event.
@@ -323,6 +334,9 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 		if err := s.controllerFence(ctx, tx, ""); err != nil {
 			return err
 		}
+		if err := s.phaseConsumed(ctx, tx, id); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE terminal_event_receipts SET processed_at=?,processed_note=?
  WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0 AND delivered_at>0
  AND (kind!='decision-resolved' OR NOT EXISTS (SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=terminal_event_receipts.repo_id AND d.reservation_key=terminal_event_receipts.reservation_key AND d.generation=terminal_event_receipts.generation AND d.item_id=terminal_event_receipts.item_id AND d.outcome_id!=terminal_event_receipts.outcome_id))
@@ -353,6 +367,27 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 		}
 		return fmt.Errorf("event missing, not delivered, stale, or already acknowledged with another note")
 	})
+}
+
+// phaseConsumed refuses to acknowledge a phase result while a live hold that
+// waits on it has every wait satisfied: an ACK is not consumption until each
+// such dependent has a new effective decision.
+func (s Store) phaseConsumed(ctx context.Context, tx *sql.Tx, id string) error {
+	var kind, reservation string
+	var outcome int64
+	err := tx.QueryRowContext(ctx, `SELECT kind,reservation_key,outcome_id FROM terminal_event_receipts WHERE repo_id=? AND recipient=? AND event_id=? AND processed_at=0`, s.Repo, s.Recipient, id).Scan(&kind, &reservation, &outcome)
+	if errors.Is(err, sql.ErrNoRows) || kind != "phase-result" {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	deps, err := unconsumedDependents(ctx, tx, s.Repo, reservation, outcome)
+	if err != nil || len(deps) == 0 {
+		return err
+	}
+	sort.Strings(deps)
+	return &Rejection{Condition: "phase-result-unconsumed", Repair: "holds " + strings.Join(deps, ", ") + " now have every wait satisfied; publish each one's next decision (decision-set or decision-reorder) before acknowledging"}
 }
 
 // A controller's native binding is distinct from the receiver incarnation.

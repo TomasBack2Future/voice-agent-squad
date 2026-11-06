@@ -43,6 +43,9 @@ type DeliveryStatus struct {
 	LastResultAt          int64       `json:"last_result_at,omitempty"`
 	VerifiedAt            int64       `json:"verified_at"`
 	Drift                 []string    `json:"drift"`
+	// Waits projects a structured hold's dependencies; a hold whose waits are
+	// all met, or whose time box ended, is drift the Dispatcher must resolve.
+	Waits []DeliveryWait `json:"waits,omitempty"`
 
 	// Derived, never edited: the facts the single reservation state cannot express.
 	WorkerPhase  string     `json:"worker_phase"`
@@ -120,9 +123,16 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT action,condition,worker_agent FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, key, r.Generation, r.CanonicalItemID).Scan(&out.DecisionAction, &out.RemainingCondition, &out.NextOwner)
+	var waits string
+	var deadline int64
+	err = s.db.QueryRowContext(ctx, `SELECT action,condition,worker_agent,waits_for,wait_deadline FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, key, r.Generation, r.CanonicalItemID).Scan(&out.DecisionAction, &out.RemainingCondition, &out.NextOwner, &waits, &deadline)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
+	}
+	if err == nil && out.DecisionAction == "hold" && r.State == "dispatched" {
+		if err = s.projectWaits(ctx, waits, deadline, out); err != nil {
+			return nil, err
+		}
 	}
 	// A retained decision records the last execution scope, not ownership of
 	// terminal reconciliation after that execution has ended.
@@ -354,6 +364,53 @@ func (s *Store) projectState(ctx context.Context, key string, r *Reservation, ou
 	}
 	if unrouted > 0 {
 		out.Drift = append(out.Drift, "operation-exit-unrouted")
+	}
+	return nil
+}
+
+// DeliveryWait is one structured wait of the current hold with its live fact.
+type DeliveryWait struct {
+	Reservation string `json:"reservation"`
+	Phase       string `json:"phase,omitempty"`
+	Until       string `json:"until"`
+	Satisfied   bool   `json:"satisfied"`
+}
+
+// projectWaits reads each wait's fact the same way the decision CAS does:
+// a recorded phase result or a terminal reservation, never prose.
+func (s *Store) projectWaits(ctx context.Context, raw string, deadline int64, out *DeliveryStatus) error {
+	var waits []DeliveryWait
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), &waits); err != nil {
+		return err
+	}
+	all := true
+	for i := range waits {
+		w := &waits[i]
+		if w.Until == "terminal" {
+			var state string
+			err := s.db.QueryRowContext(ctx, `SELECT state FROM dispatch_reservations WHERE repo_id=? AND item_id=?`, s.repoID, w.Reservation).Scan(&state)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			w.Satisfied = state == "completed" || state == "failed" || state == "cancelled"
+		} else {
+			var checks, verdict string
+			err := s.db.QueryRowContext(ctx, `SELECT checks,verdict FROM dispatch_phase_results WHERE repo_id=? AND reservation_key=? AND phase=?`, s.repoID, w.Reservation, w.Phase).Scan(&checks, &verdict)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			w.Satisfied = checks == "all" && (w.Until == "executed" || verdict == "passed")
+		}
+		all = all && w.Satisfied
+	}
+	out.Waits = waits
+	if all {
+		out.Drift = append(out.Drift, "hold-waits-satisfied")
+	} else if deadline > 0 && out.VerifiedAt > deadline {
+		out.Drift = append(out.Drift, "hold-time-box-expired")
 	}
 	return nil
 }
