@@ -33,6 +33,30 @@ follow readiness, not the reverse. For external services, resolve an existing
 authorized target, source/image identity and permitted test operation early;
 missing configuration is a bounded discovery task, not automatic missing authority.
 
+## Close the cause before claiming the fix
+
+Separate the observed symptom, the failed condition, the mechanism and the root
+cause. Before changing code, prove the mechanism with a failing test or a
+discriminating observation: name the exact field, branch, plan operator or
+timing that differs between the passing and failing case. When the Issue says
+the cause is unproven, the first deliverable is that proof, not a mitigation.
+
+- Regressions cover the conditions the symptom depends on: repeats across
+  time (a later second, minute or deploy), a retry after a lost response,
+  concurrent callers and both sides of any cache or fallback window.
+- Database behavior tests run on the engine version and topology the target
+  runs. Record `SELECT RAW ds_version()` (or the client's server version) with
+  the evidence; a result from an older engine does not establish plan or
+  index behavior on the current one. When the target has several query nodes,
+  sample each node before attributing a plan difference to the statement.
+- Do not add hysteresis, retries or longer caches to hide an unexplained
+  definitive answer (for example an EXPLAIN that shows a Fetch). Fix the cause,
+  or keep the unknown open with its next discriminating check and the access it
+  needs. Use only an existing legitimate read route; a missing operations
+  identity is an access gap, not permission to borrow one.
+- A partial fix or diagnosis says what it covers. It never closes, or reports
+  as resolved, the original symptom it does not remove.
+
 ## Acceptance and performance
 
 Record required correctness/security/resource limits separately from latency

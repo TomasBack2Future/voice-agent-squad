@@ -29,7 +29,21 @@ Worker or an automatic reservation close.
 
 A ready member with exact-head gates and integrated predecessors can merge under
 its existing ownership and repository policy. Shared paths serialize actual merges;
-review and investigation continue. The planner returns the next independent set,
+review and investigation continue. Only the final merge and genuinely shared
+resources (an ENV, a shared index or configuration write) are serialized.
+Implementation, targeted tests, independent review and acceptance preparation
+of queued members run in parallel; a member never waits at the queue tail for a
+predecessor it does not depend on. Name the shared file, resource or operation
+behind every ordering edge; a later common deployment is not such an edge.
+
+A mechanical rebase onto the new tip keeps a review only when the repository
+policy allows it and evidence shows the patch unchanged: the same `git patch-id
+--stable` before and after, a clean rebase without conflict resolution, and no
+change in files the review covered. Exact-head CI always reruns; any conflict
+resolution, semantic adaptation or new file is a changed input that needs its
+own review. Your own additional check of a member targets a named risk or an
+open dispute and states what it covers; it is not a second full approval round
+and does not hold a release by default. The planner returns the next independent set,
 not a promise that those heads will remain green after the first merge. Re-read
 before executing. WIP counts paused tasks, external operations, retained claims
 and unbound active reservations. Default is five; an explicit user decision may

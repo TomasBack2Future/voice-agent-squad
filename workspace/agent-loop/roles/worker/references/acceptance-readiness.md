@@ -49,6 +49,36 @@ use bounded asynchronous requests and sanitized results rather than a long
 synchronous eval. Choose explicit timeouts and bounded polling appropriate to
 the operation; do not treat the browser bridge's timeout as server duration.
 
+## Prepare alongside implementation, not after deploy
+
+Start the acceptance plan when implementation starts and finish it before the
+candidate deploys. For every acceptance criterion record the concrete assertion,
+fixture, real target and version, the access path qualified by a cheap read,
+model-call budget, cleanup and the failure branch (what is retried, what moves
+to a later candidate, what keeps the Issue open). Check the target's actual
+executability for that assertion before deploy: required model or evaluator
+binding, sampling or enablement settings, feature flags, pool or queue read
+paths. A criterion that cannot execute on the current target is found during
+implementation, not after rollout.
+
+- **No unrecoverable fixtures.** Before creating Sessions, runs, queue entries
+  or other writes, prove a supported way to observe them and to cancel or clean
+  them up. Without both, do not create them; record the missing capability and
+  route it to its owner. Never remove another owner's fixtures to recover.
+- **Reuse standing authority.** Apply the latest recorded standing budget and
+  access authorizations (for example a per-task model-call cap) and recompute
+  older cost or access blockers against them before asking. Count retries in
+  the same budget. A standing budget never widens shared configuration,
+  production or customer scope.
+- **Surface real human decisions early.** When preparation shows a decision
+  only the user can make (real-model package, production history, customer
+  data, a disputed criterion), raise it once with options and its effect as
+  soon as it is known; continue independent work meanwhile. Do not collect such
+  decisions for the final report.
+- **Unfinished technical preparation is not a waiver.** A missing fixture,
+  read path or tool gap is preparation work for its owner. Never ask the user
+  to waive a criterion because its preparation is incomplete.
+
 ## Choose the shortest authorized verification path
 
 Pick the cheapest path that proves the assertion on the real deployed target;
