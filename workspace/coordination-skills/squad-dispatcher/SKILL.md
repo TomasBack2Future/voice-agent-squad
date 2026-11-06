@@ -186,6 +186,23 @@ wait on a result that is already recorded and an expired time box.
   compare it with the owner's latest result and receipt note; drop a condition
   the owner already satisfied.
 
+## Independent review agents and host capacity
+
+An independent review or verification agent you start is your owned process
+tree. Its brief must carry the reproduction limits in the
+`squad-reviewing-as-disprove` skill: isolated state, every background or load
+reproduction through `bounded_run.py` with an owner, wall-clock and CPU limit,
+no raw CPU burners, and PID/process-group cleanup of only its own processes.
+When it ends, verify from its report and a filtered process check (exact PIDs or
+process group, never a broad name search) that nothing it started remains.
+
+Heavy test capacity is separate from the Worker WIP limit: WIP counts admitted
+assignments, while full `-race` suites, integration lanes and reproductions are
+host load. Run at most two heavy review/verification agents at once, start
+another only when the host load average is below its core count, and prefer
+targeted tests. This never lowers WIP or pauses admitted work. Do not load the
+shared host to prove a fix; use the bounded isolated regression.
+
 ## Autonomous closeout and current status
 
 Carry the user's existing delivery authority into assignments and effective
