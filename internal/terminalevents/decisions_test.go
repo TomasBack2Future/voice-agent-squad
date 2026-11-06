@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -26,7 +27,7 @@ func TestDecisionCASAndReleasedWorkerRecovery(t *testing.T) {
 	if err != nil || d.Revision != 1 {
 		t.Fatal(d, err)
 	}
-	if again, err := s.Decide(ctx, "dispatcher", q); err != nil || again != d {
+	if again, err := s.Decide(ctx, "dispatcher", q); err != nil || !reflect.DeepEqual(again, d) {
 		t.Fatal("retry", again, err)
 	}
 	worker := s
@@ -60,7 +61,7 @@ func TestDecisionCASAndReleasedWorkerRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	read, err := s.CurrentDecision(ctx, q.Reservation, 1, q.WorkerSession)
-	if err != nil || read != d {
+	if err != nil || !reflect.DeepEqual(read, d) {
 		t.Fatal(read, err)
 	}
 	q.OutcomeID = decisionMessage(t, s)

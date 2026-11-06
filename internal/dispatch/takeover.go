@@ -156,7 +156,7 @@ func (s *Store) Takeover(ctx context.Context, actor string, q TakeoverRequest) (
 			if e != nil {
 				return e
 			}
-			_, e = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) SELECT repo_id,reservation_key,?,item_id,revision,outcome_id,action,condition,? FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, r.Generation+1, q.NewHolder, s.repoID, q.Reservation, r.Generation, r.CanonicalItemID)
+			_, e = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,waits_for,blocks_phase,wait_deadline) SELECT repo_id,reservation_key,?,item_id,revision,outcome_id,action,condition,?,waits_for,blocks_phase,wait_deadline FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, r.Generation+1, q.NewHolder, s.repoID, q.Reservation, r.Generation, r.CanonicalItemID)
 			if e != nil {
 				return e
 			}

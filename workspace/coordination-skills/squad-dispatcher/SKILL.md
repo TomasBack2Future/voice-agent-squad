@@ -147,6 +147,45 @@ independent review and exact-head CI you verified. Any later revision revokes th
 The Claude native fence enforces it at the tool boundary; Muse/Codex Workers and
 sessions without the hook are not covered, so do not rely on it for them.
 
+## Dependency waits, reorders and phase results
+
+A wait that stops an owner is an effective decision, never prose. When a hold
+waits on another assignment, set it with structured `--wait-for
+RESERVATION:PHASE:executed|passed` (or `RESERVATION::terminal`), `--blocks-phase`
+for the phase it stops, and `--wait-time-box` when you promise to revisit it
+(see the commands reference). Squad then refuses a current-phase wait cycle, a
+wait on a result that is already recorded and an expired time box.
+
+- **Reorder.** Make the predecessor's change effective first, then establish the
+  successor's wait. Use `terminal-events decision-reorder` for both in one
+  transaction; a rejected step changes nothing and a retry is idempotent. Never
+  announce a reorder by `say`, checkpoint edit or terminal text and leave the old
+  revision in force. After the CAS read back every changed revision and confirm
+  each owner's receipt and next action before recording the reorder as done.
+- **Time box.** A promised time box is the hold's `--wait-time-box`. Each
+  existing cycle reads `dispatch delivery` drift: `hold-time-box-expired` and
+  `hold-waits-satisfied` are answered in that cycle with a new decision (proceed,
+  a re-justified hold, or a reorder). Add no timer or poller; expiry never
+  auto-proceeds.
+- **Skipping a head.** Ready-first may skip an unready queue head only by
+  publishing the skipped owner's and the new head's decisions together; an owner
+  still holding a wait on the skipped head must be re-decided in the same batch.
+- **Phase results.** Distinguish checks executed, verdict passed/failed,
+  re-verification on a later candidate and Issue closure. An owner's report that
+  a phase's checks all ran is recorded as `terminal-events phase-result`
+  (the owner records its own; you may record one you have verified from its
+  canonical report). Wait on `executed` when the successor only needs the checks
+  to have run, and on `passed` only when it needs the verdict. A failed verdict
+  blocks that Issue's acceptance, not a conflict-free successor phase. Keep the
+  failed assertion's re-verification, the Issue's OPEN state, ENV custody and any
+  human HOLD as they are.
+- **Consumption.** Consuming a phase result means updating every dependent
+  decision it releases. An ACK or receipt note is not consumption; Squad refuses
+  to acknowledge a `phase-result` while a dependent hold has all waits met.
+  Before keeping any wait condition in your own window or merge admission,
+  compare it with the owner's latest result and receipt note; drop a condition
+  the owner already satisfied.
+
 ## Autonomous closeout and current status
 
 Carry the user's existing delivery authority into assignments and effective

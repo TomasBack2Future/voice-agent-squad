@@ -38,3 +38,24 @@ before changing delivery modes. Add `decision_revision`, `operation_receipts`
 and `next_operation` to the existing checkpoint. Run validate_context_package.py
 before resuming a typed checkpoint; if an intent was already submitted, reconcile
 it instead of dispatching again. Preserve ambiguous operations and their locks.
+
+## Structured waits and phase results
+
+When the current decision is a hold with `waits_for`, `decision-get` shows each
+wait's `satisfied` fact, `waits_satisfied` and `wait_overdue`. A hold whose
+waits are all met, or whose time box ended, is not permission to proceed: submit
+one `decision-request` citing that readback and keep working on what the hold
+does not block (`blocks_phase`). A hold that only blocks one phase (for example
+`merge`) never stops implementation, tests, review or acceptance preparation.
+
+When a phase finishes, record its result before or with the report:
+`terminal-events phase-result --reservation KEY --generation N --worker-session
+ID --phase NAME --checks all|partial --verdict passed|failed|partial
+--deferred TEXT --outcome MESSAGE`. `--checks all` means every planned check of
+that phase ran, whatever the verdict; name what moved to a later candidate in
+`--deferred` (for example a failed replay re-verified on the next candidate).
+The record wakes the Dispatcher and is what dependents wait on; a prose report
+or a receipt note alone does not release them. It is not acceptance or closure:
+keep the Issue OPEN, ENV custody and human holds unchanged. A result that
+cannot be recorded (older tool, rejected identity) is a capability gap to state
+in the report, not a reason to repeat the phase.

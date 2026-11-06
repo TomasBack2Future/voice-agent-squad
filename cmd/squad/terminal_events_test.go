@@ -345,3 +345,73 @@ func TestDecisionGetRejectsMissingOrWrongSessionPrecisely(t *testing.T) {
 		t.Fatal(mcpOut.String())
 	}
 }
+
+func TestParseWaitSpecs(t *testing.T) {
+	got, err := parseWaits([]string{"DISPATCH-STUDIO-1940:s6-acceptance:executed", "release:v1:2::terminal"})
+	if err != nil || len(got) != 2 || got[0].Reservation != "DISPATCH-STUDIO-1940" || got[0].Phase != "s6-acceptance" || got[0].Until != "executed" ||
+		got[1].Reservation != "release:v1:2" || got[1].Phase != "" || got[1].Until != "terminal" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	for _, bad := range []string{"D", "D:x", ":x:executed"} {
+		if _, err := parseWaits([]string{bad}); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}
+
+func TestMCPReorderAndPhaseResultParity(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	for _, k := range []string{"A", "B"} {
+		if _, err := env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,?,?,?,1,1,0,'dispatched',1,?,'',?)`, env.RepoID, k, "github:repo#"+k, env.AgentID, "native-"+k, "TASK-"+k); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,?,?,1,2,'blocked')`, env.RepoID, "TASK-"+k, "worker-"+k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := chat.New(env.DB, env.RepoID)
+	msg := func(thread string) int64 {
+		if err := c.Post(ctx, chat.PostRequest{AgentID: env.AgentID, Thread: thread, Kind: "fyi", Body: "decision"}); err != nil {
+			t.Fatal(err)
+		}
+		var id int64
+		if err := env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	call := func(name string, args map[string]any) string {
+		request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+		var out bytes.Buffer
+		if err := runMCP(ctx, env.DB, env.RepoID, env.Root, strings.NewReader(string(request)+"\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	waitA := []map[string]any{{"reservation": "A", "phase": "merge", "until": "executed"}}
+	waitB := []map[string]any{{"reservation": "B", "phase": "merge", "until": "executed"}}
+	out := call("squad_terminal_decision_set", map[string]any{"reservation": "A", "generation": 1, "worker_session": "native-A", "expected_revision": 0, "outcome_id": msg("TASK-A"), "action": "hold", "condition": "after B merges", "blocks_phase": "merge", "waits_for": waitB, "agent_id": env.AgentID})
+	if strings.Contains(out, `"isError":true`) {
+		t.Fatal(out)
+	}
+	out = call("squad_terminal_decision_set", map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B", "expected_revision": 0, "outcome_id": msg("TASK-B"), "action": "hold", "condition": "after A merges", "blocks_phase": "merge", "waits_for": waitA, "agent_id": env.AgentID})
+	if !strings.Contains(out, "wait-cycle") {
+		t.Fatalf("MCP accepted a cycle: %s", out)
+	}
+	out = call("squad_terminal_decision_reorder", map[string]any{"agent_id": env.AgentID, "decisions": []map[string]any{
+		{"reservation": "A", "generation": 1, "worker_session": "native-A", "expected_revision": 1, "outcome_id": msg("TASK-A"), "action": "proceed", "condition": "A first"},
+		{"reservation": "B", "generation": 1, "worker_session": "native-B", "expected_revision": 0, "outcome_id": msg("TASK-B"), "action": "hold", "condition": "after A merges", "blocks_phase": "merge", "waits_for": waitA},
+	}})
+	if strings.Contains(out, `"isError":true`) || !strings.Contains(out, `"satisfied":false`) {
+		t.Fatalf("MCP reorder: %s", out)
+	}
+	out = call("squad_terminal_phase_result", map[string]any{"reservation": "A", "generation": 1, "worker_session": "native-A", "phase": "merge", "checks": "all", "verdict": "passed", "outcome_id": msg("TASK-A"), "agent_id": env.AgentID})
+	if strings.Contains(out, `"isError":true`) {
+		t.Fatalf("owner phase result: %s", out)
+	}
+	out = call("squad_terminal_decision_get", map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B"})
+	if !strings.Contains(out, `waits_satisfied`) {
+		t.Fatalf("readback lacks satisfaction: %s", out)
+	}
+}

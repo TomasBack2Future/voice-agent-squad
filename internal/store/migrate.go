@@ -386,6 +386,16 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		}
 		legacy = append(legacy, legacyRow{27, "dispatch_merge_release"})
 	}
+	var phaseObjects, waitColumns int
+	if err := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dispatch_phase_results'), (SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name IN ('waits_for','blocks_phase','wait_deadline'))`).Scan(&phaseObjects, &waitColumns); err != nil {
+		return err
+	}
+	if phaseObjects+waitColumns > 0 {
+		if phaseObjects != 1 || waitColumns != 3 {
+			return fmt.Errorf("incomplete decision wait schema; refusing legacy bootstrap")
+		}
+		legacy = append(legacy, legacyRow{28, "decision_waits"})
+	}
 
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {

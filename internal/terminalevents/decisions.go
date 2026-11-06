@@ -22,6 +22,15 @@ type Decision struct {
 	// the native tool boundary refuse merge-class commands without MergeRelease.
 	MergePolicy  string        `json:"merge_policy,omitempty"`
 	MergeRelease *MergeRelease `json:"merge_release,omitempty"`
+	// WaitsFor is the hold's structured dependencies with their current
+	// satisfaction; BlocksPhase is the phase the hold stops ("" = every phase).
+	WaitsFor     []WaitStatus `json:"waits_for,omitempty"`
+	BlocksPhase  string       `json:"blocks_phase,omitempty"`
+	WaitDeadline int64        `json:"wait_deadline,omitempty"`
+	// WaitsSatisfied: every wait is met, so this hold needs a new decision.
+	// WaitOverdue: the time box ended with waits unmet; it never auto-proceeds.
+	WaitsSatisfied bool `json:"waits_satisfied,omitempty"`
+	WaitOverdue    bool `json:"wait_overdue,omitempty"`
 }
 
 type DecisionRequest struct {
@@ -35,6 +44,11 @@ type DecisionRequest struct {
 	// MergePolicy is optional; empty keeps the assignment's current policy.
 	MergePolicy  string        `json:"merge_policy,omitempty"`
 	MergeRelease *MergeRelease `json:"merge_release,omitempty"`
+	// WaitsFor makes a hold's dependencies checkable (hold only). A wait on an
+	// already satisfied result or one closing a current-phase cycle is refused.
+	WaitsFor     []Wait `json:"waits_for,omitempty"`
+	BlocksPhase  string `json:"blocks_phase,omitempty"`
+	WaitDeadline int64  `json:"wait_deadline,omitempty"`
 }
 
 var ErrStaleDecision = errors.New("decision changed or missing: read terminal-events decision-get before proceeding")
@@ -136,11 +150,15 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 	case session == "":
 		return d, &DecisionLookupError{"missing-worker-session", "--worker-session is required: decision-get never resolves a session implicitly"}
 	}
-	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,'')
+	var rawWaits string
+	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,''),COALESCE(d.waits_for,'[]'),COALESCE(d.blocks_phase,''),COALESCE(d.wait_deadline,0)
  FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation AND d.item_id=r.canonical_item_id
- WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item)
+ WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item, &rawWaits, &d.BlocksPhase, &d.WaitDeadline)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, s.diagnoseLookup(ctx, key, generation)
+	}
+	if err == nil {
+		err = d.loadWaits(ctx, s.DB, s.Repo, rawWaits, time.Now())
 	}
 	if err == nil && d.Revision == 0 {
 		// An unadopted assignment keeps the original zero-value decision shape.
@@ -157,24 +175,46 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 // replace a newer decision even when their message was posted later.
 func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Decision, error) {
 	var d Decision
+	if err := s.precheck(ctx, q); err != nil {
+		return d, err
+	}
+	err := store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
+		var e error
+		d, e = s.decideTx(ctx, tx, actor, q)
+		return e
+	})
+	if err == nil {
+		s.wakeReceivers(ctx)
+	}
+	return d, err
+}
+
+// precheck validates a request and verifies live PR facts outside any
+// transaction; decideTx re-checks everything that depends on the ledger.
+func (s Store) precheck(ctx context.Context, q DecisionRequest) error {
 	if q.MergePolicy != "" && q.MergePolicy != "standing" && q.MergePolicy != "release-required" {
-		return d, ErrInvalidEvent
+		return ErrInvalidEvent
 	}
 	if q.MergeRelease != nil {
 		if q.Action != "proceed" {
-			return d, &Rejection{Condition: "invalid-merge-release", Repair: "a merge release can only accompany a proceed decision"}
+			return &Rejection{Condition: "invalid-merge-release", Repair: "a merge release can only accompany a proceed decision"}
 		}
 		if err := q.MergeRelease.validate(time.Now()); err != nil {
-			return d, err
+			return err
 		}
 		if err := q.MergeRelease.verify(ctx, s.PRFacts); err != nil {
-			return d, err
+			return err
 		}
 	}
 	if q.ExpectedRevision < 0 || (q.Action != "proceed" && q.Action != "hold") || len(q.Condition) > 500 || (q.Action == "hold" && strings.TrimSpace(q.Condition) == "") {
-		return d, ErrInvalidEvent
+		return ErrInvalidEvent
 	}
-	err := store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
+	return validateWaits(q, q.Reservation, time.Now())
+}
+
+func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q DecisionRequest) (Decision, error) {
+	var d Decision
+	err := func() error {
 		var item string
 		err := tx.QueryRowContext(ctx, `SELECT r.canonical_item_id FROM dispatch_reservations r JOIN messages m ON m.repo_id=r.repo_id AND m.id=? AND m.agent_id=r.reserved_by AND m.thread=r.canonical_item_id AND m.ts>=r.reserved_at
  WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.reserved_by=? AND r.state='dispatched'`, q.OutcomeID, s.Repo, q.Reservation, q.Generation, q.WorkerSession, actor).Scan(&item)
@@ -189,7 +229,8 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 			return err
 		}
 		var old Decision
-		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy)
+		oldWaits := "[]"
+		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy,waits_for,blocks_phase,wait_deadline FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy, &oldWaits, &old.BlocksPhase, &old.WaitDeadline)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -206,8 +247,12 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 		if policy == "" {
 			policy = "standing"
 		}
-		if old.Revision > 0 && old.OutcomeID == q.OutcomeID && old.Action == q.Action && old.Condition == q.Condition && old.WorkerAgent == worker && old.Revision == q.ExpectedRevision+1 && old.MergePolicy == policy {
+		waits := encodeWaits(q.WaitsFor)
+		if old.Revision > 0 && old.OutcomeID == q.OutcomeID && old.Action == q.Action && old.Condition == q.Condition && old.WorkerAgent == worker && old.Revision == q.ExpectedRevision+1 && old.MergePolicy == policy && oldWaits == waits && old.BlocksPhase == q.BlocksPhase && old.WaitDeadline == q.WaitDeadline {
 			d = old
+			if err = d.loadWaits(ctx, tx, s.Repo, oldWaits, time.Now()); err != nil {
+				return err
+			}
 			if q.MergeRelease != nil {
 				rel, e := currentRelease(ctx, tx, s.Repo, q.Reservation, q.Generation, item, old.Revision, time.Now().Unix())
 				if e != nil {
@@ -222,10 +267,16 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 		if old.Revision != q.ExpectedRevision || q.OutcomeID <= old.OutcomeID {
 			return ErrStaleDecision
 		}
-		d = Decision{Revision: old.Revision + 1, OutcomeID: q.OutcomeID, Action: q.Action, Condition: q.Condition, WorkerAgent: worker, MergePolicy: policy}
-		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,merge_policy) VALUES(?,?,?,?,?,?,?,?,?,?)
- ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent,merge_policy=excluded.merge_policy`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker, policy)
+		if err = checkWaitGraph(ctx, tx, s.Repo, q.Reservation, q); err != nil {
+			return err
+		}
+		d = Decision{Revision: old.Revision + 1, OutcomeID: q.OutcomeID, Action: q.Action, Condition: q.Condition, WorkerAgent: worker, MergePolicy: policy, BlocksPhase: q.BlocksPhase, WaitDeadline: q.WaitDeadline}
+		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,merge_policy,waits_for,blocks_phase,wait_deadline) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+ ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent,merge_policy=excluded.merge_policy,waits_for=excluded.waits_for,blocks_phase=excluded.blocks_phase,wait_deadline=excluded.wait_deadline`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker, policy, waits, q.BlocksPhase, q.WaitDeadline)
 		if err != nil {
+			return err
+		}
+		if err = d.loadWaits(ctx, tx, s.Repo, waits, time.Now()); err != nil {
 			return err
 		}
 		// Any new revision revokes earlier releases; only this request's release survives.
@@ -250,11 +301,25 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 		publisher.Recipient = ""
 		_, err = publisher.recordTx(ctx, tx, actor, PublishRequest{Reservation: q.Reservation, Generation: q.Generation, WorkerSession: q.WorkerSession, Kind: "decision-resolved", OutcomeID: q.OutcomeID}, q.OutcomeID)
 		return err
-	})
-	if err == nil {
-		s.wakeReceivers(ctx)
-	}
+	}()
 	return d, err
+}
+
+// loadWaits attaches the hold's waits with their current satisfaction.
+func (d *Decision) loadWaits(ctx context.Context, q querier, repo, raw string, now time.Time) error {
+	waits, err := decodeWaits(raw)
+	if err != nil || len(waits) == 0 {
+		return err
+	}
+	if d.WaitsFor, err = waitStatuses(ctx, q, repo, waits); err != nil {
+		return err
+	}
+	d.WaitsSatisfied = true
+	for _, w := range d.WaitsFor {
+		d.WaitsSatisfied = d.WaitsSatisfied && w.Satisfied
+	}
+	d.WaitOverdue = !d.WaitsSatisfied && d.WaitDeadline > 0 && now.Unix() > d.WaitDeadline
+	return nil
 }
 
 func decisionFence(ctx context.Context, tx *sql.Tx, repo string, q PublishRequest) error {

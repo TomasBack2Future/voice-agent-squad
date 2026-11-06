@@ -1049,6 +1049,54 @@ MCP: `squad_terminal_decision_set`, fields `reservation`, `generation`,
 `worker_session`, `expected_revision`, `outcome_id`, `action`, `condition`, and
 optional `agent_id`. Both interfaces use the same transaction.
 
+#### Structured waits, phase results and reorders
+
+A hold that waits on another assignment names that dependency instead of
+describing it only in prose: repeat `--wait-for RESERVATION:PHASE:executed`,
+`RESERVATION:PHASE:passed` or `RESERVATION::terminal`, add
+`--blocks-phase PHASE` for the phase of this assignment the hold stops (empty
+means every phase) and optionally `--wait-time-box 25m`. MCP: `waits_for`
+(`reservation`, `phase`, `until`), `blocks_phase`, `wait_deadline` (unix
+seconds). Waits are valid only on a hold. In the same CAS transaction the
+command refuses:
+
+- `wait-cycle`: following the unsatisfied waits of current holds from the new
+  targets returns to a phase this hold blocks (for example A waits for B's
+  merge while B is told to wait for A's merge). The error prints the cycle.
+- `wait-already-satisfied`: the named result is already recorded; consume it
+  and publish the next decision instead of waiting on it.
+- `expired-wait-deadline`: a time box must end in the future.
+
+`decision-get` and `dispatch delivery` show each wait with `satisfied`, plus
+`waits_satisfied` (every wait met: the hold needs a new decision) and
+`wait_overdue` (the time box ended with waits unmet). Delivery reports these as
+drift `hold-waits-satisfied` and `hold-time-box-expired`. Expiry never turns a
+hold into proceed; the owner answers it with a new decision.
+
+`terminal-events decision-reorder --request FILE` applies a JSON array of up to
+eight decision requests (the MCP field names) in one transaction, in array
+order, so a predecessor's `proceed` is effective before the successor's wait is
+checked. Any rejected step rolls the whole batch back and names the failed
+step; retrying the identical batch after a lost response is idempotent. Each
+changed decision enqueues its own `decision-resolved` wake. MCP:
+`squad_terminal_decision_reorder` with `decisions`.
+
+`terminal-events phase-result --reservation KEY --generation N --worker-session
+ID --phase NAME --checks all|partial --verdict passed|failed|partial
+[--deferred TEXT] --outcome MESSAGE_ID` records that a phase's checks ran and
+with which verdict, citing the recorder's own canonical-thread message. Checks
+that did not all run cannot pass. Execution and verdict are separate: an
+`executed` wait is met by a failed verdict, a `passed` wait is not, so a failure
+blocks acceptance without freezing a successor that only needed the checks to
+have run. The claimant Worker's record also publishes a `phase-result` event to
+the reservation owner; the owner may record a result it has verified, without
+an event. An older outcome cannot replace a newer one. A phase result is never
+Issue closure or acceptance authority. MCP: `squad_terminal_phase_result`.
+
+Acknowledging a `phase-result` event is refused with `phase-result-unconsumed`
+while a live hold that cites it has every wait satisfied: publish each such
+dependent's next decision first. An acknowledgement alone is not consumption.
+
 Only the current decision is delivered; an older delivered decision cannot be
 acknowledged as current. A released primary claim does not disable the wake:
 an unambiguous current-generation custody history can identify the same Worker.
