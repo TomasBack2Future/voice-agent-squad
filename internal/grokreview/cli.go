@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zsiec/squad/internal/procgroup"
 )
 
 const FindingsSchemaVersion = "squad.review.findings.v2"
@@ -304,12 +306,18 @@ func (r *CLIRunner) verifyOneShotInvocationContract(ctx context.Context, workDir
 	defer cancel()
 	command := exec.CommandContext(callCtx, r.config.Binary, r.commandArguments(promptPath, workDir)...)
 	command.Dir = workDir
+	group, err := procgroup.New()
+	if err != nil {
+		return fmt.Errorf("reviewer process group: %w", err)
+	}
+	defer func() { _ = group.Close() }()
+	group.Attach(command)
 	command.Env = r.childEnvironment(workDir)
 	stdout := &cappedBuffer{limit: r.config.MaxOutputBytes}
 	stderr := &cappedBuffer{limit: r.config.MaxOutputBytes}
 	command.Stdout = stdout
 	command.Stderr = stderr
-	err := command.Run()
+	err = descendantTolerantJoin(command, command.Run())
 	if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("grok CLI invocation contract check exceeded %s", min(r.config.Timeout, time.Minute))
 	}
@@ -345,12 +353,18 @@ func (r *CLIRunner) runDoctorCommand(ctx context.Context, workDir string, args .
 	defer cancel()
 	command := exec.CommandContext(callCtx, r.config.Binary, args...)
 	command.Dir = workDir
+	group, err := procgroup.New()
+	if err != nil {
+		return nil, fmt.Errorf("reviewer process group: %w", err)
+	}
+	defer func() { _ = group.Close() }()
+	group.Attach(command)
 	command.Env = r.childEnvironment(workDir)
 	stdout := &cappedBuffer{limit: r.config.MaxOutputBytes}
 	stderr := &cappedBuffer{limit: r.config.MaxOutputBytes}
 	command.Stdout = stdout
 	command.Stderr = stderr
-	if err := command.Run(); err != nil {
+	if err := descendantTolerantJoin(command, command.Run()); err != nil {
 		if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
 			return nil, fmt.Errorf("grok CLI doctor command %q exceeded %s", args[0], timeout)
 		}
@@ -444,6 +458,20 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 	}()
 	prepared.command.Stdout = stdout
 	prepared.command.Stderr = stderr
+	// The reviewer and every descendant run in one owned process group: a
+	// timeout, cancellation or normal exit ends the whole tree, and cleanup
+	// cannot reach another owner's processes.
+	group, err := procgroup.New()
+	if err != nil {
+		return FindingsResult{}, audit, fmt.Errorf("reviewer process group: %w", err)
+	}
+	defer func() {
+		if members, e := group.Members(); e == nil {
+			terminal.DescendantsReaped = len(members)
+		}
+		_ = group.Close()
+	}()
+	group.Attach(prepared.command)
 	started := time.Now()
 	terminal.StartedAt = started
 	if r.launchObserver != nil {
@@ -456,7 +484,7 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 		terminal.ChildStarted = true
 		if r.processObserver != nil {
 			if custodyErr := r.processObserver(ctx, prepared.command.Process.Pid); custodyErr != nil {
-				_ = prepared.command.Process.Kill()
+				_ = group.Kill()
 				_ = prepared.command.Wait()
 				terminal.ChildWaited = true
 				audit.FailureKind = CLIFailureCanceled
@@ -464,7 +492,7 @@ func (r *CLIRunner) Review(ctx context.Context, frozenBundle []byte) (FindingsRe
 				return FindingsResult{}, audit, fmt.Errorf("reviewer process custody recording failed: %w", custodyErr)
 			}
 		}
-		err = prepared.command.Wait()
+		err = descendantTolerantJoin(prepared.command, prepared.command.Wait())
 		terminal.ChildWaited = true
 	}
 	duration := time.Since(started)
@@ -869,4 +897,16 @@ func (b *cappedBuffer) digest() string {
 		return hex.EncodeToString(sum[:])
 	}
 	return hex.EncodeToString(b.sum.Sum(nil))
+}
+
+// descendantTolerantJoin accepts a successful reviewer exit whose join only
+// waited out WaitDelay because a leftover descendant still held the output
+// pipes. Everything the reviewer wrote before exiting was already read; the
+// owned process group then ends the descendant, and the structured-output
+// parser still rejects any incomplete answer.
+func descendantTolerantJoin(command *exec.Cmd, err error) error {
+	if errors.Is(err, exec.ErrWaitDelay) && command.ProcessState != nil && command.ProcessState.Success() {
+		return nil
+	}
+	return err
 }

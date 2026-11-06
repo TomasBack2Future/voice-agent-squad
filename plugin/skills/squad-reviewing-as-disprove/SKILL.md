@@ -44,6 +44,28 @@ For each finding you are tempted to write:
 - **Verify the attestation hash.** If the author shipped an `attest --kind test` row, locate the file, re-hash it, and confirm it matches the recorded hash. A mismatch means tampering or stale evidence; both are blocking findings on their own.
 - **Check the assertion against the spec.** If the finding is "this contradicts the spec section S," open `.squad/specs/<NAME>.md` and quote section S. If the spec is silent on the matter, the finding is not "contradicts the spec" — it is "spec is silent; author chose X; reviewer would have chosen Y." That is a discussion, not a blocking finding.
 
+## Running reproductions without harming the host
+
+Running tests is part of the review, but the review shares its host with every
+other session. Load, timing or flake reproductions follow these limits:
+
+- Run them in isolated temporary state, never against a shared server, ENV or
+  another session's worktree.
+- Start every background, stress or long-running reproduction through the
+  `bounded_run.py` from the installed Squad skill package (`workspace/agent-loop/bounded_run.py`): `bounded_run.py --owner <your id> --timeout
+  SECONDS --cpu-seconds SECONDS [--record FILE] -- COMMAND`. It keeps the whole
+  tree in one owned process group and ends it on exit, timeout, interrupt or a
+  crash of the runner; RLIMIT_CPU caps each process. Never start a CPU load
+  generator (`yes`, busy loops, `stress`) or a `&`/`nohup` background job
+  outside it, and never use more parallel burners than the reproduction needs.
+- Keep the budget small (seconds to a few minutes) and prefer a deterministic
+  reproduction (an injected delay, a fake clock, `-count`) over host pressure.
+- Before reporting, confirm the runner's report shows the tree ended. Clean up
+  only processes you started, by their recorded PID or process group; never by
+  name, pattern or port.
+- If the reproduction genuinely needs more CPU than a bounded run on the shared
+  host, state that limit in the finding instead of loading the host.
+
 ## Recording the review
 
 When the disprove loop concludes, record the review with `squad attest --kind review --reviewer-agent <your-id> --findings-file <path>`. The findings file must declare:

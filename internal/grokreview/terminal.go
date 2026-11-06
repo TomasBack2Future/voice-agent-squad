@@ -19,21 +19,24 @@ import (
 // TerminalDiagnostics is local process and CLI-reported evidence only. It is
 // never a verdict, provider cancellation acknowledgment, or retry authority.
 type TerminalDiagnostics struct {
-	InputSHA256      string           `json:"input_sha256"`
-	StartedAt        time.Time        `json:"started_at"`
-	FinishedAt       time.Time        `json:"finished_at"`
-	JoinedAt         *time.Time       `json:"joined_at,omitempty"`
-	ChildStarted     bool             `json:"child_started"`
-	ChildWaited      bool             `json:"child_waited"`
-	ExitCode         *int             `json:"exit_code,omitempty"`
-	DeadlineProducer string           `json:"deadline_producer,omitempty"`
-	StdoutBytes      int64            `json:"stdout_bytes"`
-	StderrBytes      int64            `json:"stderr_bytes"`
-	StdoutSHA256     string           `json:"stdout_sha256"`
-	StderrSHA256     string           `json:"stderr_sha256"`
-	OutputTruncated  bool             `json:"output_truncated"`
-	SessionEvidence  string           `json:"session_evidence"`
-	Session          *TerminalSession `json:"session,omitempty"`
+	InputSHA256      string     `json:"input_sha256"`
+	StartedAt        time.Time  `json:"started_at"`
+	FinishedAt       time.Time  `json:"finished_at"`
+	JoinedAt         *time.Time `json:"joined_at,omitempty"`
+	ChildStarted     bool       `json:"child_started"`
+	ChildWaited      bool       `json:"child_waited"`
+	ExitCode         *int       `json:"exit_code,omitempty"`
+	DeadlineProducer string     `json:"deadline_producer,omitempty"`
+	StdoutBytes      int64      `json:"stdout_bytes"`
+	StderrBytes      int64      `json:"stderr_bytes"`
+	StdoutSHA256     string     `json:"stdout_sha256"`
+	StderrSHA256     string     `json:"stderr_sha256"`
+	OutputTruncated  bool       `json:"output_truncated"`
+	// DescendantsReaped counts processes still in the reviewer's owned
+	// process group after the reviewer exited; cleanup killed exactly those.
+	DescendantsReaped int              `json:"descendants_reaped,omitempty"`
+	SessionEvidence   string           `json:"session_evidence"`
+	Session           *TerminalSession `json:"session,omitempty"`
 }
 
 type TerminalSession struct {
