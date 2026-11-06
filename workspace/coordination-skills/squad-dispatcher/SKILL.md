@@ -156,6 +156,13 @@ for the phase it stops, and `--wait-time-box` when you promise to revisit it
 (see the commands reference). Squad then refuses a current-phase wait cycle, a
 wait on a result that is already recorded and an expired time box.
 
+These flags, `decision-reorder` and `phase-result` exist only when the installed
+binary lists them (`squad terminal-events decision-set --help`, `squad
+terminal-events --help`). Until then apply the same order by hand: CAS the
+predecessor's decision, read back its revision and receipt, then CAS the
+successor; name the waited reservation and phase in the condition text and
+record the missing capability once in the checkpoint. Never fall back to `say`.
+
 - **Reorder.** Make the predecessor's change effective first, then establish the
   successor's wait. Use `terminal-events decision-reorder` for both in one
   transaction; a rejected step changes nothing and a retry is idempotent. Never

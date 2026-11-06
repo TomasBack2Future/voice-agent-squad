@@ -48,7 +48,9 @@ one `decision-request` citing that readback and keep working on what the hold
 does not block (`blocks_phase`). A hold that only blocks one phase (for example
 `merge`) never stops implementation, tests, review or acceptance preparation.
 
-When a phase finishes, record its result before or with the report:
+When a phase finishes and the installed binary lists `terminal-events
+phase-result`, record its result before or with the report (with an older
+binary, put the same fields in the report and the decision request):
 `terminal-events phase-result --reservation KEY --generation N --worker-session
 ID --phase NAME --checks all|partial --verdict passed|failed|partial
 --deferred TEXT --outcome MESSAGE`. `--checks all` means every planned check of

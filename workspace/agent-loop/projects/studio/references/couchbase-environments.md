@@ -21,6 +21,16 @@ cutover; the old source database can remain running. XDCR is one-way, so switchi
 an application back does not synchronize writes made on the new cluster: reconcile
 those writes before a database rollback.
 
+## Engine version for tests
+
+Studio staging and production run Couchbase Server 8.1 Enterprise
+(8.1.0-2452 observed on staging on 2026-11-06), with two Query nodes. Tests
+that assert query plans, index coverage or optimizer behavior must run on that
+major.minor version and record the server version they ran against; 7.6.x
+lanes remain useful for functional checks but are not evidence for 8.1 plan
+behavior. Production EXPLAIN or node settings need the protected operations
+route; the runtime users cannot read node-level query settings.
+
 ## Connection settings
 
 Use the complete configuration tuple; changing only a bootstrap IP is insufficient.
