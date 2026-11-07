@@ -257,7 +257,8 @@ func (s Store) Discover(ctx context.Context) error {
 	return nil
 }
 
-// discoverPostReleaseReports turns any Worker message posted on the canonical
+// discoverPostReleaseReports turns a message by the assignment's claimant Worker
+// (the same predicate delivery uses) posted on the canonical
 // thread after a decision that carries a merge release into a reconcile-needed
 // wake. The 2026-11-07 stalls were exactly this: the Worker merged under the
 // release and reported it with a plain message, which woke nobody. The
@@ -271,6 +272,9 @@ func (s Store) discoverPostReleaseReports(ctx context.Context) error {
  JOIN dispatch_reservations r ON r.repo_id=rel.repo_id AND r.item_id=rel.reservation_key AND r.generation=rel.generation AND r.canonical_item_id=rel.item_id
  JOIN messages m ON m.repo_id=r.repo_id AND m.thread=r.canonical_item_id AND m.id>d.outcome_id AND m.agent_id!=r.reserved_by
  WHERE rel.repo_id=? AND r.reserved_by=? AND r.state='dispatched' AND m.kind NOT IN ('done','ask') AND COALESCE(m.body,'') NOT LIKE '%worker-terminal-v1/%'
+ AND m.ts>=r.reserved_at
+ AND (EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=r.reserved_at)
+  OR EXISTS(SELECT 1 FROM claim_history c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=r.reserved_at))
  ORDER BY m.id`, s.Repo, s.Recipient)
 	if err != nil {
 		return err

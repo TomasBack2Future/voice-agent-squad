@@ -181,3 +181,59 @@ func TestFormalResultSurvivesEachDeliveryBoundary(t *testing.T) {
 		t.Fatalf("results=%d %v", results, err)
 	}
 }
+
+// Review follow-up: a supervisor or reviewer note alone never wakes, and a
+// message after the answering decision never matches (the release is revoked).
+func TestPostReleaseNetIgnoresNonClaimantsAndAnsweredReleases(t *testing.T) {
+	s := waitFixture(t, "D1940")
+	ctx := context.Background()
+	d := releaseDecision(t, s, "D1940", 0)
+	disp := s
+	disp.Recipient = "dispatcher"
+	say(t, s, "supervisor", "TASK-D1940")
+	say(t, s, "reviewer", "TASK-D1940")
+	if err := disp.Discover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := receiptsOf(t, s, "reconcile-needed"); n != 0 {
+		t.Fatalf("a non-claimant note woke the Dispatcher: %d", n)
+	}
+	answer := proceed(s, t, "D1940", d.Revision)
+	answer.Condition = "answered without a Worker report"
+	if _, err := s.Decide(ctx, "dispatcher", answer); err != nil {
+		t.Fatal(err)
+	}
+	say(t, s, "worker-D1940", "TASK-D1940")
+	if err := disp.Discover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := receiptsOf(t, s, "reconcile-needed"); n != 0 {
+		t.Fatalf("a message after the answering decision matched: %d", n)
+	}
+}
+
+// Review follow-up: a newer submitted phase result replaces the older one by
+// design (the same rule as RecordPhaseResult): an incomplete rerun reopens a
+// passed wait, and every result keeps its own outcome and generation.
+func TestSubmittedNewerPhaseResultReplacesOlderByDesign(t *testing.T) {
+	s := waitFixture(t, "D1940")
+	ctx := context.Background()
+	base := SubmitRequest{Reservation: "D1940", Generation: 1, WorkerSession: "native-D1940", Kind: "phase-result", Phase: "acceptance:s9", Checks: "all", Verdict: "passed", Body: "pass", RequestKey: "run-1"}
+	first, err := s.Submit(ctx, "worker-D1940", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rerun := base
+	rerun.RequestKey, rerun.Body, rerun.Checks, rerun.Verdict = "run-2", "rerun interrupted", "partial", "partial"
+	second, err := s.Submit(ctx, "worker-D1940", rerun)
+	if err != nil || second.MessageID <= first.MessageID {
+		t.Fatalf("rerun: %+v %v", second, err)
+	}
+	if ok, _, _ := waitSatisfied(ctx, s.DB, "repo", Wait{Reservation: "D1940", Phase: "acceptance:s9", Until: "passed"}); ok {
+		t.Fatal("an older pass survived a newer incomplete rerun")
+	}
+	var outcome int64
+	if err = s.DB.QueryRow(`SELECT outcome_id FROM dispatch_phase_results WHERE phase='acceptance:s9'`).Scan(&outcome); err != nil || outcome != second.MessageID {
+		t.Fatalf("stored outcome %d, want the newer report %d", outcome, second.MessageID)
+	}
+}
