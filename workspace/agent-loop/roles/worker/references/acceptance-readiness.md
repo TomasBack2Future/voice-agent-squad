@@ -79,6 +79,24 @@ implementation, not after rollout.
   read path or tool gap is preparation work for its owner. Never ask the user
   to waive a criterion because its preparation is incomplete.
 
+## Design verification from behavior, not from the patch
+
+Derive checks from the user-visible behavior and state transitions the change
+promises, then from the first symptom. For retries, idempotency, persistence
+and version compatibility, cover by risk: data written by the old code read by
+the new code, repeats across time and across deployed versions, resume after a
+failure, duplicate operations and real content conflicts (#1977 needed a second
+deploy because only the time variation was tested). For UI changes, run the
+actual operation sequence in a local browser: cancel, retry, refresh and
+re-enter. Query and index behavior is proven on the matching engine version
+(integration test) and, where authorized, by a read-only check of the target;
+a mock or a different engine version is not evidence for it.
+
+When an acceptance check fails, first try to disprove the failing assertion
+with the smallest discriminating check before changing code, schema, DDL or
+asking for permissions. Commit a regression only when it guards lasting
+behavior; keep valid evidence and repeat only checks a change actually affects.
+
 ## Choose the shortest authorized verification path
 
 Pick the cheapest path that proves the assertion on the real deployed target;

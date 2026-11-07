@@ -101,6 +101,49 @@ phase permission remains a named hold. Before closure reconcile Issue dispositio
 reservation, primary claim, ENV custody and external operations under their
 existing owners; do not reacquire ENV merely for administrative cleanup.
 
+### A result is handed off only by a formal event
+
+Distinguish four things: an ordinary message (context), an input or decision
+acknowledgement (transport), a phase result (the checks of a phase ran, with a
+verdict) and task completion (Issue gates met). When the next step belongs to
+someone else, the owner reports the finished phase in the same call that wakes
+that owner: `terminal-events submit --kind phase-result` (or `decision-request`
+for a question, `blocked`, `issue-closed`). A plain message is never the
+handoff; after a merge release, Squad turns such a report into a
+`reconcile-needed` wake as a safety net, not as the contract.
+
+The states after a result are separate: stored but not delivered (pending),
+delivered but not handled (redelivered to a restarted receiver), handled but the
+downstream decision missing (`decision-request-acknowledged-without-decision`)
+and decided but not executed (no owner activity after the decision). A report
+that produced no event shows as `worker-report-without-event` in `dispatch
+delivery`. A retry of the same request key never repeats its side effects;
+merges, deployments, fixtures and model calls are never repeated to re-trigger a
+handoff.
+
+An asynchronous operation (CI, review, rollout) is bound to its exact input,
+the identity that runs it, the owner who handles its result and the next step.
+Starting a watch is not closure: on its notification the owner reads the real
+result, confirms the input is still current and acts. Waits stay interruptible
+(native background tasks or bounded reads), so a delivered decision is handled
+while an operation runs.
+
+### Recovery is proven by the next step, not by connectivity
+
+After a sleep, network or model outage, reachability, a living process and an
+online receiver are preconditions only. Recheck, in order: an actual model
+call, the native session binding, every external operation's real state, results
+completed during the outage and not yet consumed, and the recorded next step.
+Consume completed operations instead of resubmitting them. Re-evaluate ordinary
+dependency holds against new evidence; explicit human pauses stay paused.
+Recovery is complete when the original owner's next step is observed: new owner
+activity after the recovery time (`last_owner_activity_at`) and the matching
+state change (a new event, decision or phase result). A supervisor that finds a
+repairable break hands it to the right owner through the existing route and
+verifies the handling; repeating the same report without a handler is not
+progress. If no supported route can act, report that capability gap instead of
+claiming unattended readiness.
+
 Before freezing delivery, exercise the real invocation boundaries that are
 applicable: launcher arguments, workflow/script CLI, event/reply route, effective
 configuration and a business trigger. Reuse valid checks. If another authorized
@@ -126,7 +169,10 @@ reviving completed work. A paused task can acknowledge policy without resuming i
 In existing adoption/checkpoint evidence record source revision and content hashes,
 installed client entry, native/actor/reservation generation, actual files read,
 effective decisions and mode, unchanged custody, and next authorized action.
-Distinguish sent, received, read/adopted and behavior observed. Verify the receipt
+Distinguish sent, received, read/adopted and behavior observed. `squad dispatch
+receivers` lists which binary each live receiver/MCP process actually runs
+against the installed target; a pinned older binary is not adopted until its
+owner's supported restart or resume rebinds it. Verify the receipt
 and subsequent relevant action; do not declare all sessions effective because
 links changed or the Dispatcher acknowledged for everyone. Missing acknowledgments
 remain explicit pending adoption with an owner and next safe opportunity.

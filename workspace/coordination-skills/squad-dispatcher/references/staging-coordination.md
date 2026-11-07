@@ -133,3 +133,28 @@ repair it. Preserve the user's full-scale requirement. A healthy small smoke is
 preparation, not a substitute for that acceptance. While a long run needs the
 exact revision, protect it; parallel deployments require actual version isolation.
 Do not add granular locks merely to make WIP look busy.
+
+## One set of images from staging to production
+
+Default promotion is build once, verify in staging, promote the same immutable
+image digests to production. Environment configuration, credentials and
+replica counts change through deployment configuration; a change of target
+environment never justifies rebuilding the application.
+
+- Another build of the same SHA is a new candidate with new digests and never
+  inherits the earlier build's staging acceptance.
+- Classify each disruption before acting: a network or runner retry, an image
+  re-pull, a configuration change and a release-tool repair keep the candidate
+  and its evidence (repeat only the affected check); an application code change
+  produces a new candidate whose affected parts are re-verified while evidence
+  with unchanged identity and applicability is kept.
+- Before production, compare the candidate's components one by one with what
+  staging actually ran. A component that was rolled back, never deployed or
+  verified at another digest has not passed staging, whatever the other
+  components show; record per-component `digest`, `staging_digest` and
+  `staging_rollout` in the release evidence (`candidate.components`).
+- Keep each layer's job distinct: development verification proves behavior,
+  staging proves integration of the exact images, production verifies its own
+  configuration, upgrade path and the target-only behavior (network, permissions,
+  data scale, external services). Do not repeat every acceptance at every layer,
+  and do not let a local pass replace a target-only check.
