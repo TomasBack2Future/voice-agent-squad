@@ -37,6 +37,49 @@ type Check struct {
 	Ref      string `json:"ref"`
 }
 
+// Component is one deployed image of the candidate. StagingRollout is the
+// actual staging outcome for that exact digest: verified, rolled-back,
+// not-deployed or failed. A rebuild of the same SHA has a new digest and is a
+// new candidate; it never inherits the earlier build's staging evidence.
+type Component struct {
+	Name           string `json:"name"`
+	Digest         string `json:"digest"`
+	StagingDigest  string `json:"staging_digest"`
+	StagingRollout string `json:"staging_rollout"`
+	Ref            string `json:"ref"`
+}
+
+var imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// componentGaps reports why a component is not proven by staging. A malformed
+// entry is invalid; a mismatch or an unverified rollout keeps the release open.
+func componentGaps(cs []Component) (invalid, partial []string) {
+	seen := map[string]bool{}
+	for _, c := range cs {
+		switch {
+		case !refPattern.MatchString(c.Name) || seen[c.Name]:
+			invalid = append(invalid, "candidate.components: each component needs a unique simple name")
+			continue
+		case !imageDigestPattern.MatchString(c.Digest) || !imageDigestPattern.MatchString(c.StagingDigest):
+			invalid = append(invalid, "candidate.components."+c.Name+": digest and staging_digest must be sha256:<64 hex>")
+			continue
+		}
+		seen[c.Name] = true
+		if c.Digest != c.StagingDigest {
+			partial = append(partial, "component "+c.Name+": production digest differs from the staging-verified digest (a rebuild is a new candidate and needs its own staging verification)")
+		}
+		switch c.StagingRollout {
+		case "verified":
+		case "rolled-back", "not-deployed", "failed":
+			partial = append(partial, "component "+c.Name+": staging rollout "+c.StagingRollout+"; the candidate has not passed staging for this component")
+		default:
+			invalid = append(invalid, "candidate.components."+c.Name+": staging_rollout must be verified, rolled-back, not-deployed or failed")
+		}
+		needRef(&partial, "candidate.components."+c.Name+".ref", c.Ref)
+	}
+	return invalid, partial
+}
+
 type Document struct {
 	Schema     string `json:"schema"`
 	ReleaseRef string `json:"release_ref"`
@@ -44,6 +87,9 @@ type Document struct {
 		ApplicationSHA string `json:"application_sha"`
 		Version        string `json:"version"`
 		ManifestSHA256 string `json:"manifest_sha256"`
+		// Components, when present, bind the released images to staging: each
+		// production digest must be the digest staging actually verified.
+		Components []Component `json:"components,omitempty"`
 	} `json:"candidate"`
 	Execution struct {
 		Result string `json:"result"` // succeeded|failed|blocked|pending
@@ -133,6 +179,9 @@ func Evaluate(d Document, wantRef string) Verdict {
 	if d.ReleaseRef != wantRef || wantRef == "" {
 		invalid = append(invalid, "release_ref must equal the item's release ref "+wantRef)
 	}
+	ci, cp := componentGaps(d.Candidate.Components)
+	invalid = append(invalid, ci...)
+	partial = append(partial, cp...)
 	if !shaPattern.MatchString(d.Candidate.ApplicationSHA) {
 		invalid = append(invalid, "candidate.application_sha must be an exact 40-hex SHA")
 	} else {

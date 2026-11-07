@@ -947,7 +947,11 @@ and `agent_id`) is the canonical Worker outcome path: it
 validates the explicit ledger/repository plus reservation, generation, native
 session and actor, then atomically stores the canonical outcome message and
 the durable event, returning message and event IDs. Kinds: `issue-closed`,
-`handoff-complete`, `blocked`, `decision-request`, `runtime-failure`
+`handoff-complete`, `blocked`, `decision-request`, `runtime-failure`,
+`phase-result` (also `--phase NAME --checks all|partial --verdict
+passed|failed|partial [--deferred TEXT]`; MCP `phase`, `checks`, `verdict`,
+`deferred`: the report, the phase result and the Dispatcher wake are stored in
+one transaction, so a completed phase is never reported by a message alone)
 (`runtime-failure` bodies must match the exact one-line closed-enum contract;
 anything else is a precise `malformed-failure-body`). `request-key` is the stable
 request identity: retries with the same key deduplicate to the same IDs,
@@ -1106,6 +1110,19 @@ Structured waits belong to the revision that wrote them (`waits_revision`,
 migration 029). During a rollout a binary that predates them can still set a
 decision; that newer revision is read as a plain hold without waits, never
 with the previous revision's waits, cycle edges or time box.
+
+A Worker message on the canonical thread after a decision that carries a merge
+release (for example "merged PR #N" written as plain text) becomes one
+`reconcile-needed` wake for the reservation owner when its receiver next runs
+discovery. Messages from other actors, earlier generations, or after the next
+decision revision (which revokes the release) do not.
+
+`dispatch receivers [--installed PATH]` reads the local process table and
+reports, for each `squad terminal-events listen` and `squad mcp` process, its
+pid, mode, native session and executable, and whether that executable is the
+installed target (default: this binary, symlinks resolved). Only identity
+fields are printed, never full command lines. Installation is the installed
+target; adoption is each live process running it.
 
 Acknowledging a `phase-result` event is refused with `phase-result-unconsumed`
 while a live hold that cites it has every wait satisfied: publish each such

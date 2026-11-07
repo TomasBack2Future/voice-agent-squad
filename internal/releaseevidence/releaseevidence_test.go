@@ -124,3 +124,47 @@ func TestHistoricalY4ReleaseIsDecidable(t *testing.T) {
 		t.Fatalf("preparation-stage claims satisfied the contract: %+v", v)
 	}
 }
+
+// Same-image promotion: production releases the digests staging verified. A
+// rebuild of the same SHA (new digest) or a component whose staging rollout
+// was rolled back or never deployed keeps the release from completing.
+func TestComponentDigestsMustBeTheStagingVerifiedImages(t *testing.T) {
+	api, worker := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+	rebuilt := "sha256:" + strings.Repeat("c", 64)
+	base := func() Document {
+		d := complete()
+		d.Candidate.Components = []Component{
+			{Name: "go-runtime", Digest: api, StagingDigest: api, StagingRollout: "verified", Ref: "staging/run-1#runtime"},
+			{Name: "execution-worker", Digest: worker, StagingDigest: worker, StagingRollout: "verified", Ref: "staging/run-1#worker"},
+		}
+		return d
+	}
+	if v := Evaluate(base(), complete().ReleaseRef); v.State != StateComplete {
+		t.Fatalf("same-digest promotion: %+v", v)
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*Document)
+		state  string
+		want   string
+	}{
+		"same SHA, different build": {func(d *Document) { d.Candidate.Components[0].Digest = rebuilt }, StatePartial, "differs from the staging-verified digest"},
+		"staging partial rollback":  {func(d *Document) { d.Candidate.Components[1].StagingRollout = "rolled-back" }, StatePartial, "staging rollout rolled-back"},
+		"component never deployed":  {func(d *Document) { d.Candidate.Components[1].StagingRollout = "not-deployed" }, StatePartial, "not-deployed"},
+		"malformed digest":          {func(d *Document) { d.Candidate.Components[0].StagingDigest = "latest" }, StateInvalid, "sha256:<64 hex>"},
+		"duplicate component":       {func(d *Document) { d.Candidate.Components[1].Name = "go-runtime" }, StateInvalid, "unique simple name"},
+		"unknown rollout":           {func(d *Document) { d.Candidate.Components[0].StagingRollout = "probably" }, StateInvalid, "staging_rollout must be"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := base()
+			tc.mutate(&d)
+			v := Evaluate(d, d.ReleaseRef)
+			if v.State != tc.state || !strings.Contains(strings.Join(v.Unmet, "|"), tc.want) {
+				t.Fatalf("%+v", v)
+			}
+		})
+	}
+	// Documents without components keep their previous verdicts.
+	if v := Evaluate(complete(), complete().ReleaseRef); v.State != StateComplete {
+		t.Fatalf("component-less evidence changed: %+v", v)
+	}
+}
