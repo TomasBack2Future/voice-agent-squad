@@ -182,7 +182,10 @@ record the missing capability once in the checkpoint. Never fall back to `say`.
   a phase's checks all ran is recorded as `terminal-events phase-result`
   (the owner records its own; you may record one you have verified from its
   canonical report). Wait on `executed` when the successor only needs the checks
-  to have run, and on `passed` only when it needs the verdict. A failed verdict
+  to have run, and on `passed` only when it needs the verdict. Name the phase
+  by what was checked (`acceptance:s7`, `merge:pr1972`); a result outlives
+  handoffs and re-reservations as evidence, so a later candidate needs its own
+  phase name. A failed verdict
   blocks that Issue's acceptance, not a conflict-free successor phase. Keep the
   failed assertion's re-verification, the Issue's OPEN state, ENV custody and any
   human HOLD as they are.
