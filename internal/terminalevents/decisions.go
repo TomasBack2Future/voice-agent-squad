@@ -151,7 +151,7 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 		return d, &DecisionLookupError{"missing-worker-session", "--worker-session is required: decision-get never resolves a session implicitly"}
 	}
 	var rawWaits string
-	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,''),COALESCE(d.waits_for,'[]'),COALESCE(d.blocks_phase,''),COALESCE(d.wait_deadline,0)
+	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.waits_for ELSE '[]' END,'[]'),CASE WHEN d.waits_revision=d.revision THEN d.blocks_phase ELSE '' END,CASE WHEN d.waits_revision=d.revision THEN d.wait_deadline ELSE 0 END
  FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation AND d.item_id=r.canonical_item_id
  WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item, &rawWaits, &d.BlocksPhase, &d.WaitDeadline)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -230,7 +230,7 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 		}
 		var old Decision
 		oldWaits := "[]"
-		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy,waits_for,blocks_phase,wait_deadline FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy, &oldWaits, &old.BlocksPhase, &old.WaitDeadline)
+		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy,CASE WHEN waits_revision=revision THEN waits_for ELSE '[]' END,CASE WHEN waits_revision=revision THEN blocks_phase ELSE '' END,CASE WHEN waits_revision=revision THEN wait_deadline ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy, &oldWaits, &old.BlocksPhase, &old.WaitDeadline)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -271,8 +271,8 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 			return err
 		}
 		d = Decision{Revision: old.Revision + 1, OutcomeID: q.OutcomeID, Action: q.Action, Condition: q.Condition, WorkerAgent: worker, MergePolicy: policy, BlocksPhase: q.BlocksPhase, WaitDeadline: q.WaitDeadline}
-		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,merge_policy,waits_for,blocks_phase,wait_deadline) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
- ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent,merge_policy=excluded.merge_policy,waits_for=excluded.waits_for,blocks_phase=excluded.blocks_phase,wait_deadline=excluded.wait_deadline`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker, policy, waits, q.BlocksPhase, q.WaitDeadline)
+		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,merge_policy,waits_for,blocks_phase,wait_deadline,waits_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent,merge_policy=excluded.merge_policy,waits_for=excluded.waits_for,blocks_phase=excluded.blocks_phase,wait_deadline=excluded.wait_deadline,waits_revision=excluded.waits_revision`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker, policy, waits, q.BlocksPhase, q.WaitDeadline, d.Revision)
 		if err != nil {
 			return err
 		}

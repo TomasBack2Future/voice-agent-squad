@@ -174,7 +174,7 @@ type activeHold struct {
 func currentHolds(ctx context.Context, tx *sql.Tx, repo string) (map[string]activeHold, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT d.reservation_key,d.blocks_phase,d.waits_for FROM dispatch_decisions d JOIN dispatch_reservations r
  ON r.repo_id=d.repo_id AND r.item_id=d.reservation_key AND r.generation=d.generation AND r.canonical_item_id=d.item_id
- WHERE d.repo_id=? AND r.state='dispatched' AND d.action='hold' AND d.waits_for!='[]'`, repo)
+ WHERE d.repo_id=? AND r.state='dispatched' AND d.action='hold' AND d.waits_for!='[]' AND d.waits_revision=d.revision`, repo)
 	if err != nil {
 		return nil, err
 	}

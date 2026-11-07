@@ -396,6 +396,13 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		}
 		legacy = append(legacy, legacyRow{28, "decision_waits"})
 	}
+	var waitsRevision int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name='waits_revision'`).Scan(&waitsRevision); err != nil {
+		return err
+	}
+	if waitsRevision > 0 {
+		legacy = append(legacy, legacyRow{29, "decision_waits_revision"})
+	}
 
 	nowTS := time.Now().Unix()
 	for _, l := range legacy {

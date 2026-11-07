@@ -1102,6 +1102,11 @@ checks distinctly (`acceptance:s7`, `merge:pr1972`); a wait on a reused name
 that already has a result is refused as `wait-already-satisfied`, never
 released by the older result. MCP: `squad_terminal_phase_result`.
 
+Structured waits belong to the revision that wrote them (`waits_revision`,
+migration 029). During a rollout a binary that predates them can still set a
+decision; that newer revision is read as a plain hold without waits, never
+with the previous revision's waits, cycle edges or time box.
+
 Acknowledging a `phase-result` event is refused with `phase-result-unconsumed`
 while a live hold that cites it has every wait satisfied: publish each such
 dependent's next decision first. An acknowledgement alone is not consumption.
