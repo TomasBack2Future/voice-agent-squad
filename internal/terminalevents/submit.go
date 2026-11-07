@@ -44,6 +44,13 @@ type SubmitRequest struct {
 	Body             string `json:"body"`
 	ExpectedDecision int64  `json:"expected_decision"`
 	RequestKey       string `json:"request_key"`
+	// Phase, Checks, Verdict and Deferred are required for kind phase-result:
+	// one call stores the report, the phase result and the Dispatcher wake, so
+	// a completed phase is never reported by a message alone.
+	Phase    string `json:"phase,omitempty"`
+	Checks   string `json:"checks,omitempty"`
+	Verdict  string `json:"verdict,omitempty"`
+	Deferred string `json:"deferred,omitempty"`
 }
 
 // MaxRequestKeyBytes caps request keys; empty means the legacy single-slot
@@ -92,8 +99,15 @@ func (s Store) Submit(ctx context.Context, actor string, q SubmitRequest) (Submi
 	if s.Repo == "" || actor == "" || q.Reservation == "" || q.WorkerSession == "" {
 		return out, &Rejection{Condition: "ambiguous-identity", Repair: "pass explicit ledger/repository, reservation, worker session and actor; nothing is guessed across repositories"}
 	}
-	if q.Generation < 1 || (q.Kind != "issue-closed" && q.Kind != "handoff-complete" && q.Kind != "blocked" && q.Kind != "decision-request" && q.Kind != "runtime-failure") {
-		return out, &Rejection{Condition: "malformed-request", Repair: "generation must be >= 1 and kind one of issue-closed, handoff-complete, blocked, decision-request, runtime-failure"}
+	if q.Generation < 1 || (q.Kind != "issue-closed" && q.Kind != "handoff-complete" && q.Kind != "blocked" && q.Kind != "decision-request" && q.Kind != "runtime-failure" && q.Kind != "phase-result") {
+		return out, &Rejection{Condition: "malformed-request", Repair: "generation must be >= 1 and kind one of issue-closed, handoff-complete, blocked, decision-request, runtime-failure, phase-result"}
+	}
+	if q.Kind == "phase-result" {
+		if err := validatePhaseFields(q.Phase, q.Checks, q.Verdict, q.Deferred); err != nil {
+			return out, err
+		}
+	} else if q.Phase != "" || q.Checks != "" || q.Verdict != "" || q.Deferred != "" {
+		return out, &Rejection{Condition: "malformed-request", Repair: "phase, checks, verdict and deferred belong to kind phase-result"}
 	}
 	if strings.TrimSpace(q.Body) == "" || len(q.Body) > MaxSubmitBodyBytes {
 		return out, &Rejection{Condition: "malformed-request", Repair: "outcome body must be non-empty and at most 65536 bytes"}
@@ -190,6 +204,13 @@ func (s Store) submitTx(ctx context.Context, tx *sql.Tx, actor string, q SubmitR
 	messageID, err = result.LastInsertId()
 	if err != nil {
 		return out, err
+	}
+	if q.Kind == "phase-result" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+ ON CONFLICT(repo_id,reservation_key,phase) DO UPDATE SET generation=excluded.generation,item_id=excluded.item_id,checks=excluded.checks,verdict=excluded.verdict,deferred=excluded.deferred,outcome_id=excluded.outcome_id,recorded_by=excluded.recorded_by,recorded_at=excluded.recorded_at`,
+			s.Repo, q.Reservation, q.Phase, q.Generation, item, q.Checks, q.Verdict, q.Deferred, messageID, actor, now); err != nil {
+			return out, err
+		}
 	}
 	id := fmt.Sprintf("worker-terminal-v1/%s/%d/%s/%s/%d", q.Reservation, q.Generation, q.WorkerSession, q.Kind, messageID)
 	if q.RequestKey != "default" {

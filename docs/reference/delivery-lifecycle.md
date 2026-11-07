@@ -44,7 +44,14 @@ the note for the Worker's recorded next step. An exit with no routed receipt is
 
 Stable drift codes distinguish an open Issue with a completed reservation,
 a closed Issue with active reservation, a terminal reservation retaining claims,
-and pending delivery on a blocked item. The latest attestation is a command
+and pending delivery on a blocked item. Handoff drift for a dispatched
+assignment: `worker-report-without-event` (the Worker's newest canonical
+message is newer than the current decision and produced no formal event: a
+report that woke nobody) and `decision-request-acknowledged-without-decision`
+(a request was acknowledged but no newer decision answers it).
+`last_owner_activity_at` is the newest Worker message time; a recovery is
+proven by owner activity after the recovery, not by a live process or a
+delivered send. The latest attestation is a command
 exit, never proof of native session death or business acceptance. This read
 operation does not mirror files, rewrite messages or release resources.
 
@@ -110,6 +117,14 @@ the exact candidate (`application_sha`, `version`, `manifest_sha256`), the
 `required:false` marks an optional check), `cleanup`, and `custody`
 (`none|released|retained` plus retained resource names). Optional
 `current_conclusion_ref` names the authoritative current conclusion.
+
+Optional `candidate.components` binds the released images to staging: each
+entry has `name`, the production `digest`, the `staging_digest` that staging
+actually ran and `staging_rollout` (`verified|rolled-back|not-deployed|failed`)
+with a bounded `ref`. A production digest that differs from the staging digest
+(for example another build of the same SHA) or a component whose staging
+rollout was not verified leaves the verdict `partial`: the candidate has not
+passed staging for that component. Malformed digests or rollouts are `invalid`.
 
 The verdict is deterministic and stored, with the document, in the hashed
 attestation artifact. Only `complete` records exit 0 and satisfies the gate:

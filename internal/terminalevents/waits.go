@@ -280,19 +280,28 @@ func describeWait(w Wait) string {
 // Dispatcher in the same transaction, so consumption uses the existing
 // receipt route. Retrying the same outcome is idempotent; an older outcome
 // cannot replace a newer one.
-func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResult) (PhaseResult, error) {
+// validatePhaseFields is shared by phase-result and submit --kind phase-result.
+func validatePhaseFields(phase, checks, verdict, deferred string) error {
 	switch {
-	case !phaseName.MatchString(p.Phase):
-		return p, &Rejection{Condition: "invalid-phase-result", Repair: "phase must match " + phaseName.String()}
-	case p.Checks != "all" && p.Checks != "partial":
-		return p, &Rejection{Condition: "invalid-phase-result", Repair: "checks must be all or partial"}
-	case p.Verdict != "passed" && p.Verdict != "failed" && p.Verdict != "partial":
-		return p, &Rejection{Condition: "invalid-phase-result", Repair: "verdict must be passed, failed or partial"}
-	case p.Checks == "partial" && p.Verdict == "passed":
-		return p, &Rejection{Condition: "invalid-phase-result", Repair: "a phase whose checks did not all run cannot have passed"}
-	case len(p.Deferred) > 300:
-		return p, &Rejection{Condition: "invalid-phase-result", Repair: "deferred is at most 300 characters"}
-	case p.Reservation == "" || p.Generation < 1 || p.WorkerSession == "" || p.OutcomeID < 1:
+	case !phaseName.MatchString(phase):
+		return &Rejection{Condition: "invalid-phase-result", Repair: "phase must match " + phaseName.String()}
+	case checks != "all" && checks != "partial":
+		return &Rejection{Condition: "invalid-phase-result", Repair: "checks must be all or partial"}
+	case verdict != "passed" && verdict != "failed" && verdict != "partial":
+		return &Rejection{Condition: "invalid-phase-result", Repair: "verdict must be passed, failed or partial"}
+	case checks == "partial" && verdict == "passed":
+		return &Rejection{Condition: "invalid-phase-result", Repair: "a phase whose checks did not all run cannot have passed"}
+	case len(deferred) > 300:
+		return &Rejection{Condition: "invalid-phase-result", Repair: "deferred is at most 300 characters"}
+	}
+	return nil
+}
+
+func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResult) (PhaseResult, error) {
+	if err := validatePhaseFields(p.Phase, p.Checks, p.Verdict, p.Deferred); err != nil {
+		return p, err
+	}
+	if p.Reservation == "" || p.Generation < 1 || p.WorkerSession == "" || p.OutcomeID < 1 {
 		return p, ErrInvalidEvent
 	}
 	err := store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {

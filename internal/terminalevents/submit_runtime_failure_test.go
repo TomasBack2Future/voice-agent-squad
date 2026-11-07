@@ -18,18 +18,18 @@ func TestSubmitRuntimeFailureAdmitsSanitizedBody(t *testing.T) {
 	ctx := context.Background()
 	publisher := s
 	publisher.Recipient = ""
-	out, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", "runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta", 0, "ep-1"})
+	out, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", "runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta", 0, "ep-1", "", "", "", ""})
 	if err != nil {
 		t.Fatalf("sanitized runtime-failure rejected: %v", err)
 	}
 	if out.MessageID == 0 || !strings.HasSuffix(out.EventID, "/ep-1") {
 		t.Fatalf("no keyed IDs: %+v", out)
 	}
-	retry, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", "runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta", 0, "ep-1"})
+	retry, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", "runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta", 0, "ep-1", "", "", "", ""})
 	if err != nil || retry != out {
 		t.Fatalf("same-episode retry must retain IDs: %+v %+v %v", out, retry, err)
 	}
-	second, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", "runtime-failure ep-2 exhausted turn=t3 request=r3 attempt=1 provider=meta", 0, "ep-2"})
+	second, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", "runtime-failure ep-2 exhausted turn=t3 request=r3 attempt=1 provider=meta", 0, "ep-2", "", "", "", ""})
 	if err != nil || second == out {
 		t.Fatalf("new episode must record again: %+v %v", second, err)
 	}
@@ -53,7 +53,7 @@ func TestSubmitRuntimeFailureRejectsUnsanitizedBody(t *testing.T) {
 		"please retry the model call now",
 		"runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta\nsecond line injection",
 	} {
-		_, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 0, "ep-x"})
+		_, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 0, "ep-x", "", "", "", ""})
 		var rejection *Rejection
 		if !errors.As(err, &rejection) || rejection.Condition != "malformed-failure-body" {
 			t.Fatalf("body %q: want malformed-failure-body, got %v", body, err)
@@ -67,7 +67,7 @@ func TestSubmitRuntimeFailureKeepsCustodyAndDecisionFences(t *testing.T) {
 	publisher := s
 	publisher.Recipient = ""
 	body := "runtime-failure ep-1 exhausted turn=t1 request=r1 attempt=1 provider=meta"
-	_, err := publisher.Submit(ctx, "intruder", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 0, "ep-1"})
+	_, err := publisher.Submit(ctx, "intruder", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 0, "ep-1", "", "", "", ""})
 	var rejection *Rejection
 	if !errors.As(err, &rejection) || rejection.Condition != "actor-custody" {
 		t.Fatalf("no-custody: want actor-custody, got %v", err)
@@ -78,11 +78,11 @@ func TestSubmitRuntimeFailureKeepsCustodyAndDecisionFences(t *testing.T) {
 	if _, err := s.DB.Exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES('repo','DISPATCH-1',1,'TASK',3,1,'proceed','', 'worker')`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 0, "ep-1"})
+	_, err = publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 0, "ep-1", "", "", "", ""})
 	if !errors.As(err, &rejection) || rejection.Condition != "stale-decision" {
 		t.Fatalf("stale revision: want stale-decision, got %v", err)
 	}
-	out, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 3, "ep-1"})
+	out, err := publisher.Submit(ctx, "worker", SubmitRequest{"DISPATCH-1", 1, "worker-session", "runtime-failure", body, 3, "ep-1", "", "", "", ""})
 	if err != nil {
 		t.Fatalf("live revision rejected: %v", err)
 	}

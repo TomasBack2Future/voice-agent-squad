@@ -46,6 +46,10 @@ type DeliveryStatus struct {
 	// Waits projects a structured hold's dependencies; a hold whose waits are
 	// all met, or whose time box ended, is drift the Dispatcher must resolve.
 	Waits []DeliveryWait `json:"waits,omitempty"`
+	// LastOwnerActivityAt is the newest message the assignment's Worker posted
+	// on its canonical thread: recovery is proven by owner activity after the
+	// recovery time, not by a live process or a delivered send.
+	LastOwnerActivityAt int64 `json:"last_owner_activity_at,omitempty"`
 
 	// Derived, never edited: the facts the single reservation state cannot express.
 	WorkerPhase  string     `json:"worker_phase"`
@@ -124,10 +128,15 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 		return nil, err
 	}
 	var waits string
-	var deadline int64
-	err = s.db.QueryRowContext(ctx, `SELECT action,condition,worker_agent,CASE WHEN waits_revision=revision THEN waits_for ELSE '[]' END,CASE WHEN waits_revision=revision THEN wait_deadline ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, key, r.Generation, r.CanonicalItemID).Scan(&out.DecisionAction, &out.RemainingCondition, &out.NextOwner, &waits, &deadline)
+	var deadline, decisionOutcome int64
+	err = s.db.QueryRowContext(ctx, `SELECT action,condition,worker_agent,CASE WHEN waits_revision=revision THEN waits_for ELSE '[]' END,CASE WHEN waits_revision=revision THEN wait_deadline ELSE 0 END,outcome_id FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, key, r.Generation, r.CanonicalItemID).Scan(&out.DecisionAction, &out.RemainingCondition, &out.NextOwner, &waits, &deadline, &decisionOutcome)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
+	}
+	if r.State == "dispatched" {
+		if err = s.projectHandoff(ctx, r, decisionOutcome, out); err != nil {
+			return nil, err
+		}
 	}
 	if err == nil && out.DecisionAction == "hold" && r.State == "dispatched" {
 		if err = s.projectWaits(ctx, waits, deadline, out); err != nil {
@@ -411,6 +420,43 @@ func (s *Store) projectWaits(ctx context.Context, raw string, deadline int64, ou
 		out.Drift = append(out.Drift, "hold-waits-satisfied")
 	} else if deadline > 0 && out.VerifiedAt > deadline {
 		out.Drift = append(out.Drift, "hold-time-box-expired")
+	}
+	return nil
+}
+
+// projectHandoff exposes the handoff states a single reservation state cannot:
+// a Worker report that produced no formal event (a plain message after the
+// current decision), and a decision request the Dispatcher acknowledged
+// without publishing a newer decision. Both are drift for the owner of the
+// next step, never completion.
+func (s *Store) projectHandoff(ctx context.Context, r *Reservation, decisionOutcome int64, out *DeliveryStatus) error {
+	var lastReport, lastReportAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(m.id),0),COALESCE(max(m.ts),0) FROM messages m
+ WHERE m.repo_id=? AND m.thread=? AND m.ts>=? AND m.agent_id!=?
+ AND (EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=?)
+  OR EXISTS(SELECT 1 FROM claim_history c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=?))`,
+		s.repoID, r.CanonicalItemID, r.ReservedAt, r.ReservedBy, r.ReservedAt, r.ReservedAt).Scan(&lastReport, &lastReportAt)
+	if err != nil {
+		return err
+	}
+	out.LastOwnerActivityAt = lastReportAt
+	if lastReport > decisionOutcome && lastReport > 0 {
+		var routed int
+		if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND kind!='decision-resolved' AND (outcome_id>=? OR source_message_id>=?)`,
+			s.repoID, r.ItemID, r.Generation, lastReport, lastReport).Scan(&routed); err != nil {
+			return err
+		}
+		if routed == 0 {
+			out.Drift = append(out.Drift, "worker-report-without-event")
+		}
+	}
+	var acknowledged int
+	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts WHERE repo_id=? AND reservation_key=? AND generation=? AND kind='decision-request' AND processed_at>0 AND outcome_id>?`,
+		s.repoID, r.ItemID, r.Generation, decisionOutcome).Scan(&acknowledged); err != nil {
+		return err
+	}
+	if acknowledged > 0 {
+		out.Drift = append(out.Drift, "decision-request-acknowledged-without-decision")
 	}
 	return nil
 }
