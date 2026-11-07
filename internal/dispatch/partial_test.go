@@ -246,6 +246,7 @@ func TestPartialRetirementAcceptsReleasedOpenItemOnlyWithWorkerReleaseEvidence(t
 		{"worker-released-after-blocked", fmt.Sprintf(release, "worker"), true},
 		{"open-without-release", ``, false},
 		{"released-by-someone-else", fmt.Sprintf(release, "intruder"), false},
+		{"finished-then-released", `INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(6,'repo-test',5,'worker','T','done','done T','[]','normal'),(7,'repo-test',5,'worker','T','release','released T (done)','[]','normal')`, false},
 		{"release-before-blocked", `INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(0,'repo-test',1,'worker','T','release','early','[]','normal')`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

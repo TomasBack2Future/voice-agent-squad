@@ -95,6 +95,13 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 			if n == 0 {
 				return fmt.Errorf("canonical item must remain blocked")
 			}
+			// `done` posts a release too; a finished item is never partial delivery.
+			if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE repo_id=? AND thread=? AND kind='done' AND agent_id=? AND id>?`, s.repoID, current.CanonicalItemID, worker, q.BlockedOutcome).Scan(&n); e != nil {
+				return e
+			}
+			if n != 0 {
+				return fmt.Errorf("canonical item was finished by its Worker; not a partial delivery")
+			}
 		}
 		if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.processed_at=0
  AND (e.kind!='decision-resolved' OR NOT EXISTS(SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=e.repo_id AND d.reservation_key=e.reservation_key AND d.generation=e.generation AND d.item_id=e.item_id AND d.outcome_id!=e.outcome_id))`, s.repoID, current.ItemID, current.Generation, current.WorkerThreadID).Scan(&n); e != nil {
