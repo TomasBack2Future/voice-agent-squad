@@ -190,7 +190,7 @@ never rewritten, and the use is audited as `partial-retirement-receipt` with the
 original recipient. A Worker that published `blocked` and then released its claim
 leaves the item `open`; retirement accepts that only when the same Worker's
 `release` message follows the blocked outcome and nobody has reclaimed the item.
-A merely `open` item without that evidence, or a `done` item, is refused.
+A Worker `done` after the blocked outcome, an `open` item without that evidence, or a `done` item is refused.
 It does not close the Issue or invent a done
 item. A new authorized continuation of the same Issue can use existing reserve/attach/bind with
 next generation and the same canonical item, under the reservation owner; it never reuses a retired session for a different
