@@ -1091,7 +1091,16 @@ blocks acceptance without freezing a successor that only needed the checks to
 have run. The claimant Worker's record also publishes a `phase-result` event to
 the reservation owner; the owner may record a result it has verified, without
 an event. An older outcome cannot replace a newer one. A phase result is never
-Issue closure or acceptance authority. MCP: `squad_terminal_phase_result`.
+Issue closure or acceptance authority.
+
+A result is keyed by reservation and phase, not by generation: it stays
+evidence of the named checks across a handoff or re-reservation, and the
+generation is reported as provenance. Only the reservation's current
+generation and Worker can record, so an earlier custody cannot write. The
+phase name identifies what was checked: name a later candidate's or attempt's
+checks distinctly (`acceptance:s7`, `merge:pr1972`); a wait on a reused name
+that already has a result is refused as `wait-already-satisfied`, never
+released by the older result. MCP: `squad_terminal_phase_result`.
 
 Acknowledging a `phase-result` event is refused with `phase-result-unconsumed`
 while a live hold that cites it has every wait satisfied: publish each such

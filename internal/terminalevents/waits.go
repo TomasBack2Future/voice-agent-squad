@@ -117,8 +117,8 @@ func waitSatisfied(ctx context.Context, q querier, repo string, w Wait) (bool, s
 		return false, "", nil
 	}
 	var checks, verdict string
-	var outcome int64
-	err := q.QueryRowContext(ctx, `SELECT checks,verdict,outcome_id FROM dispatch_phase_results WHERE repo_id=? AND reservation_key=? AND phase=?`, repo, w.Reservation, w.Phase).Scan(&checks, &verdict, &outcome)
+	var outcome, generation int64
+	err := q.QueryRowContext(ctx, `SELECT checks,verdict,outcome_id,generation FROM dispatch_phase_results WHERE repo_id=? AND reservation_key=? AND phase=?`, repo, w.Reservation, w.Phase).Scan(&checks, &verdict, &outcome, &generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, "", nil
 	}
@@ -129,7 +129,9 @@ func waitSatisfied(ctx context.Context, q querier, repo string, w Wait) (bool, s
 	if !ok {
 		return false, "", nil
 	}
-	return true, fmt.Sprintf("phase %s checks=%s verdict=%s outcome %d", w.Phase, checks, verdict, outcome), nil
+	// A result is evidence of the named checks, whoever ran them; the generation
+	// is provenance, not identity. The phase name identifies what was checked.
+	return true, fmt.Sprintf("phase %s checks=%s verdict=%s outcome %d, generation %d", w.Phase, checks, verdict, outcome, generation), nil
 }
 
 func waitStatuses(ctx context.Context, q querier, repo string, waits []Wait) ([]WaitStatus, error) {
@@ -221,7 +223,7 @@ func checkWaitGraph(ctx context.Context, tx *sql.Tx, repo, self string, q Decisi
 			return err
 		}
 		if ok {
-			return &Rejection{Condition: "wait-already-satisfied", Repair: fmt.Sprintf("%s is already satisfied (%s); consume that result and publish the next decision instead of waiting on it", describeWait(w), ev)}
+			return &Rejection{Condition: "wait-already-satisfied", Repair: fmt.Sprintf("%s is already satisfied (%s); consume that result and publish the next decision instead of waiting on it; to wait on a later candidate or attempt, use a candidate-specific phase name (for example acceptance:s7 or merge:pr1972)", describeWait(w), ev)}
 		}
 	}
 	holds, err := currentHolds(ctx, tx, repo)
