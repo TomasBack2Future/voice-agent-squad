@@ -441,3 +441,43 @@ class ClaudeModelEndpointTests(unittest.TestCase):
         self.settings(self.LEGACY)
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(launcher.ValidationError):
             launcher.resume_environment(self.c, self.worktree, probe=lambda _: True)
+
+    def test_origin_normalization_and_malformed_values(self):
+        n = launcher.normalize_origin
+        self.assertEqual(n('https://RELAY.example.test:443/'), self.HTTPS)
+        self.assertEqual(n('https://relay.example.test:8443'), 'https://relay.example.test:8443')
+        for bad in ('https://relay.example.test?x=1', 'https://relay.example.test#f', 'https://relay.example.test:bad',
+                    'https://relay.example.test//x', 'https://u:p@relay.example.test', 'relay.example.test', ''):
+            self.assertEqual(n(bad), '', bad)
+        self.c['model_endpoint'] = 'https://relay.example.test?x=1'
+        with self.assertRaises(launcher.ValidationError):
+            launcher.check_model_endpoint(self.c, {}, self.worktree, probe=lambda _: True)
+
+    def test_equivalent_spellings_match_and_query_secrets_are_not_echoed(self):
+        self.settings('https://RELAY.example.test:443/')
+        self.assertEqual(self.check({})[1]['status'], 'verified')
+        self.settings('https://h.example.test/v1?api_key=SECRETVALUE')
+        with self.assertRaises(launcher.ValidationError) as caught:
+            self.check({})
+        self.assertNotIn('SECRETVALUE', str(caught.exception))
+        self.assertNotIn('api_key', str(caught.exception))
+
+    def test_probe_treats_5xx_and_network_errors_as_down_and_never_follows_redirects(self):
+        import http.server, threading
+        codes = {'/ok': 404, '/down': 502, '/redir': 302}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                self.send_response(codes.get(self.path, 404))
+                if self.path == '/redir':
+                    self.send_header('Location', 'http://127.0.0.1:1/')
+                self.end_headers()
+            log_message = lambda *a: None
+        server = http.server.HTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        base = f'http://127.0.0.1:{server.server_port}'
+        self.assertTrue(launcher.probe_https(base + '/ok'))
+        self.assertFalse(launcher.probe_https(base + '/down'))
+        self.assertTrue(launcher.probe_https(base + '/redir'))  # the origin answered; the target is never contacted
+        self.assertFalse(launcher.probe_https('https://127.0.0.1:1'))

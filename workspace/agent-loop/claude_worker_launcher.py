@@ -95,8 +95,30 @@ def child_environment(c: dict) -> dict:
     return env
 
 
-def redact_url(value: str) -> str:
-    return re.sub(r'(?i)(https?://)[^\s/@]*@', r'\1[redacted]@', str(value))[:200]
+def normalize_origin(value: str) -> str:
+    """Canonical scheme://host[:port] of a bare origin, or '' when it is anything else."""
+    try:
+        parsed = urllib.parse.urlsplit(str(value).strip())
+        port = parsed.port
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment or parsed.path not in ('', '/')):
+            return ''
+        default = 443 if parsed.scheme == 'https' else 80
+        host = parsed.hostname if ':' not in parsed.hostname else f'[{parsed.hostname}]'
+        return f'{parsed.scheme}://{host}' + (f':{port}' if port and port != default else '')
+    except ValueError:
+        return ''
+
+
+def describe_endpoint(value: str) -> str:
+    """Safe diagnostic: scheme, host and port only; never userinfo, path or query."""
+    try:
+        parsed = urllib.parse.urlsplit(str(value).strip())
+        if parsed.scheme and parsed.hostname:
+            return f'{parsed.scheme}://{parsed.hostname}' + (f':{parsed.port}' if parsed.port else '')
+    except ValueError:
+        pass
+    return '[unparseable address]'
 
 
 def client_settings_endpoint(c: dict, env: dict, worktree: Path) -> tuple[str, str] | None:
@@ -114,35 +136,43 @@ def client_settings_endpoint(c: dict, env: dict, worktree: Path) -> tuple[str, s
     return found
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
 def probe_https(url: str) -> bool:
-    """Reachability only: any HTTP answer proves the TLS endpoint; no credentials or prompts are sent."""
-    request = urllib.request.Request(url, method='HEAD')
+    """TLS reachability of exactly this origin: no redirects, no proxy, no credentials, no prompts.
+
+    Client errors prove a live server; a 5xx (for example a front proxy with a dead
+    tunnel behind it) does not count as reachable.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
     try:
-        urllib.request.urlopen(request, timeout=8).close()
-    except urllib.error.HTTPError:
-        return True
+        opener.open(urllib.request.Request(url, method='HEAD'), timeout=8).close()
+    except urllib.error.HTTPError as error:
+        return error.code < 500
     except (urllib.error.URLError, OSError, ValueError):
         return False
     return True
 
 
 def check_model_endpoint(c: dict, env: dict, worktree: Path, probe=probe_https) -> dict:
-    expected = c.get('model_endpoint')
-    if not expected:
+    configured = c.get('model_endpoint')
+    if not configured:
         return {'status': 'not-configured'}
-    parsed = urllib.parse.urlsplit(expected)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.path not in ('', '/'):
-        raise ValidationError('model_endpoint must be an https origin without credentials or path')
-    expected = expected.rstrip('/')
+    expected = normalize_origin(configured)
+    if not expected.startswith('https://'):
+        raise ValidationError('model_endpoint must be a bare https origin (host and optional port only)')
     layer = client_settings_endpoint(c, env, worktree)
     effective, source = layer if layer else (env.get('ANTHROPIC_BASE_URL', ''), 'process environment')
-    if effective.rstrip('/') != expected:
-        raise ValidationError(f'model endpoint resolves to {redact_url(effective)} from {source}; expected {expected}. '
+    if normalize_origin(effective) != expected:
+        raise ValidationError(f'model endpoint resolves to {describe_endpoint(effective)} from {source}; expected {expected}. '
                               'Fix that setting; the launcher does not fall back or rewrite client settings')
     if not probe(expected):
         raise ValidationError(f'model endpoint {expected} is not reachable over HTTPS')
     return {'status': 'verified', 'effective': expected, 'source': source,
-            'parent_environment_stale': os.environ.get('ANTHROPIC_BASE_URL', expected).rstrip('/') != expected}
+            'parent_environment_stale': normalize_origin(os.environ.get('ANTHROPIC_BASE_URL', expected)) != expected}
 
 
 def binding(assignment: dict, c: dict, env: dict) -> str:
