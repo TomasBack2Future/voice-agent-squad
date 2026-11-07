@@ -73,6 +73,13 @@ stable at admission. Reject a receipt with missing or inconsistent fields.
 - Start the managed review and full deterministic CI concurrently, retain their
   process handles or callbacks, and deterministically join both. An idle terminal
   or anonymous background process is not a joined result.
+- Every pushed head starts this loop again. Before switching to other work or
+  ending a turn, record the exact head, each CI run and attempt, the review
+  attempt, the native background task that will notify you, and the next action
+  for success and for failure. Parallel work is fine; losing the follow-up is
+  not. A `gh run watch` covers one run; on its notification read every required
+  check and the review for the head, confirm the head is still current, then
+  merge or fix. A watch exiting is not a merge.
 - Re-read the PR base/head and hashes before accepting or publishing the result.
   A result belongs only to the exact frozen tuple in its receipt.
 
