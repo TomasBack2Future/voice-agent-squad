@@ -19,7 +19,7 @@ func TestDeliveryProjectsStructuredWaitsAsDrift(t *testing.T) {
 	if _, err := s.db.Exec(`UPDATE dispatch_reservations SET canonical_item_id='T-'||item_id,state='dispatched'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,waits_for,blocks_phase,wait_deadline) VALUES('repo-test','W',1,'T-W',1,1,'hold','after P acceptance','worker','[{"reservation":"P","phase":"s6-acceptance","until":"executed"}]','relaxed-window',1500)`); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,waits_for,blocks_phase,wait_deadline,waits_revision) VALUES('repo-test','W',1,'T-W',1,1,'hold','after P acceptance','worker','[{"reservation":"P","phase":"s6-acceptance","until":"executed"}]','relaxed-window',1500,1)`); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Delivery(ctx, "W", IssueObservation{})

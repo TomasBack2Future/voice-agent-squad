@@ -125,7 +125,7 @@ func (s *Store) Delivery(ctx context.Context, key string, observed IssueObservat
 	}
 	var waits string
 	var deadline int64
-	err = s.db.QueryRowContext(ctx, `SELECT action,condition,worker_agent,waits_for,wait_deadline FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, key, r.Generation, r.CanonicalItemID).Scan(&out.DecisionAction, &out.RemainingCondition, &out.NextOwner, &waits, &deadline)
+	err = s.db.QueryRowContext(ctx, `SELECT action,condition,worker_agent,CASE WHEN waits_revision=revision THEN waits_for ELSE '[]' END,CASE WHEN waits_revision=revision THEN wait_deadline ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, key, r.Generation, r.CanonicalItemID).Scan(&out.DecisionAction, &out.RemainingCondition, &out.NextOwner, &waits, &deadline)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}

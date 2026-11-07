@@ -283,8 +283,8 @@ func TestMigrate_BootstrapsLegacyDBWithoutIntakeColumns(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 28 {
-		t.Fatalf("want version 28 after bootstrap; got %d", maxV)
+	if maxV != 29 {
+		t.Fatalf("want version 29 after bootstrap; got %d", maxV)
 	}
 }
 
@@ -326,8 +326,8 @@ func TestMigrate_BootstrapPreservesWorktreeAndSeedsAllVersions(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM migration_versions`).Scan(&rows); err != nil {
 		t.Fatalf("count migration_versions: %v", err)
 	}
-	if rows != 28 {
-		t.Errorf("migration_versions row count = %d, want 28 (bootstrap missed markers)", rows)
+	if rows != 29 {
+		t.Errorf("migration_versions row count = %d, want 29 (bootstrap missed markers)", rows)
 	}
 }
 
@@ -633,8 +633,8 @@ func TestMigrate_IntakeInterviewIdempotent_From008(t *testing.T) {
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&maxV); err != nil {
 		t.Fatalf("max: %v", err)
 	}
-	if maxV != 28 {
-		t.Fatalf("want max version 28 after 008→028 upgrade; got %d", maxV)
+	if maxV != 29 {
+		t.Fatalf("want max version 29 after 008→029 upgrade; got %d", maxV)
 	}
 }
 
@@ -752,7 +752,7 @@ INSERT INTO execution_authorizations(repo_id,id,item_id,holder,generation,bindin
 	if err := db.QueryRow(`SELECT max(version) FROM migration_versions`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if actor != "old" || generation != 7 || worktree != "/fixture/retained" || pinState != "active" || native != "controller-native" || epoch != 2 || version != 28 {
+	if actor != "old" || generation != 7 || worktree != "/fixture/retained" || pinState != "active" || native != "controller-native" || epoch != 2 || version != 29 {
 		t.Fatalf("upgrade or prior-reader changed custody: %s %d %s %s %s %d %d", actor, generation, worktree, pinState, native, epoch, version)
 	}
 }
