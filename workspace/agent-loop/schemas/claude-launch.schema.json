@@ -192,7 +192,7 @@
     },
     "model_endpoint": {
       "type": "string",
-      "pattern": "^https://[^/@\\s]+/?$"
+      "pattern": "^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$"
     },
     "client_config_directory": {
       "type": "string",
