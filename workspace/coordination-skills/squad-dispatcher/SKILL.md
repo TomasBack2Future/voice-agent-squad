@@ -196,6 +196,29 @@ record the missing capability once in the checkpoint. Never fall back to `say`.
   compare it with the owner's latest result and receipt note; drop a condition
   the owner already satisfied.
 
+## Handoff drift, blockers and repeated failures
+
+In each existing cycle read `dispatch delivery` drift for live assignments:
+`worker-report-without-event`, `decision-request-acknowledged-without-decision`,
+`hold-waits-satisfied` and `hold-time-box-expired` each name a step you own
+(the handoff codes exist when the installed binary lists `dispatch receivers`;
+an older binary reports none of them, which is not proof of no drift).
+Answer them with the effective decision in that cycle; a report you saw only as
+a message is still unanswered until the next decision is published and read back.
+
+Record a blocker in the existing checkpoint as exactly one of: cause unknown
+(with the next discriminating check), access path not found (with the paths
+already checked), new permission required (with the exact failed condition,
+the minimal request and its owner) or implemented and awaiting integration
+(with the PR, head and remaining gate). Before handing a technical problem to a
+person, finish the bounded investigation in scope; an unverified hypothesis is
+never turned into a waiver or authority request. Keep independent work moving
+while a real permission request is open.
+
+For a failure after deployment, first compare the failing revision with the
+original owner's current PR and head, the evidence already produced and the
+changed inputs; route it to that owner instead of dispatching a duplicate repair.
+
 ## Independent review agents and host capacity
 
 An independent review or verification agent you start is your owned process

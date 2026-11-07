@@ -48,6 +48,13 @@ one `decision-request` citing that readback and keep working on what the hold
 does not block (`blocks_phase`). A hold that only blocks one phase (for example
 `merge`) never stops implementation, tests, review or acceptance preparation.
 
+When a phase finishes and the next step belongs to someone else (a merge you
+executed under a release, a CI or review result, an acceptance run), report it
+in the call that wakes that owner: `terminal-events submit --kind phase-result
+--phase NAME --checks all|partial --verdict passed|failed|partial` with the
+report body (or `decision-request` when you need an answer). A plain message is
+not a handoff. Read back the next decision before acting on it.
+
 When a phase finishes and the installed binary lists `terminal-events
 phase-result`, record its result before or with the report (with an older
 binary, put the same fields in the report and the decision request):
