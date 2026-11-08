@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,15 +60,48 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 			return fmt.Errorf("reservation changed; read current identity before retry")
 		}
 		var status, worker, action string
-		if e = tx.QueryRowContext(ctx, `SELECT status FROM items WHERE repo_id=? AND item_id=?`, s.repoID, current.CanonicalItemID).Scan(&status); e != nil || status != "blocked" {
+		if e = tx.QueryRowContext(ctx, `SELECT status FROM items WHERE repo_id=? AND item_id=?`, s.repoID, current.CanonicalItemID).Scan(&status); e != nil || (status != "blocked" && status != "open") {
 			return fmt.Errorf("canonical item must remain blocked")
 		}
 		if e = tx.QueryRowContext(ctx, `SELECT worker_agent,action FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.repoID, current.ItemID, current.Generation, current.CanonicalItemID).Scan(&worker, &action); e != nil || worker == "" || (current.State == "dispatched" && action != "hold") {
 			return fmt.Errorf("original active Worker must be fenced by its current hold decision")
 		}
 		var n int
-		if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e JOIN messages m ON m.id=e.outcome_id AND m.repo_id=e.repo_id WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.recipient=? AND e.item_id=? AND e.kind='blocked' AND e.outcome_id=? AND e.processed_at>0 AND m.agent_id=?`, s.repoID, current.ItemID, current.Generation, current.WorkerThreadID, actor, current.CanonicalItemID, q.BlockedOutcome, worker).Scan(&n); e != nil || n != 1 {
-			return fmt.Errorf("original Worker's blocked outcome must be handled by its owner")
+		// The blocked receipt stays addressed to the Dispatcher that handled it.
+		// After an atomic Handoff its recipient is a retired predecessor; accept
+		// only a predecessor reached from this owner through durable handoff
+		// receipts that were recorded while that predecessor owned the reservation.
+		var recipient string
+		if e = tx.QueryRowContext(ctx, `WITH RECURSIVE owners(actor) AS (
+ SELECT ? UNION
+ SELECT f.actor FROM dispatch_retired_controllers f JOIN owners o ON f.successor=o.actor
+ WHERE f.repo_id=? AND f.retired_at>=? AND EXISTS(SELECT 1 FROM dispatch_handoffs h WHERE h.repo_id=f.repo_id
+  AND json_valid(h.receipt) AND json_extract(h.receipt,'$.old_actor')=f.actor AND json_extract(h.receipt,'$.new_actor')=f.successor))
+ SELECT e.recipient FROM terminal_event_receipts e JOIN messages m ON m.id=e.outcome_id AND m.repo_id=e.repo_id
+ WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.recipient IN (SELECT actor FROM owners) AND e.item_id=? AND e.kind='blocked' AND e.outcome_id=? AND e.processed_at>0 AND m.agent_id=?`,
+			actor, s.repoID, current.ReservedAt, s.repoID, current.ItemID, current.Generation, current.WorkerThreadID, current.CanonicalItemID, q.BlockedOutcome, worker).Scan(&recipient); e != nil {
+			if errors.Is(e, sql.ErrNoRows) {
+				return fmt.Errorf("original Worker's blocked outcome must be handled by its owner")
+			}
+			return e
+		}
+		if status == "open" {
+			// A Worker that blocked and then released its claim leaves the item open.
+			// Accept that only when the same Worker's later release is recorded and
+			// the item has not been reclaimed since.
+			if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE repo_id=? AND thread=? AND kind='release' AND agent_id=? AND id>?`, s.repoID, current.CanonicalItemID, worker, q.BlockedOutcome).Scan(&n); e != nil {
+				return e
+			}
+			if n == 0 {
+				return fmt.Errorf("canonical item must remain blocked")
+			}
+			// `done` posts a release too; a finished item is never partial delivery.
+			if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE repo_id=? AND thread=? AND kind='done' AND agent_id=? AND id>?`, s.repoID, current.CanonicalItemID, worker, q.BlockedOutcome).Scan(&n); e != nil {
+				return e
+			}
+			if n != 0 {
+				return fmt.Errorf("canonical item was finished by its Worker; not a partial delivery")
+			}
 		}
 		if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.worker_session=? AND e.processed_at=0
  AND (e.kind!='decision-resolved' OR NOT EXISTS(SELECT 1 FROM dispatch_decisions d WHERE d.repo_id=e.repo_id AND d.reservation_key=e.reservation_key AND d.generation=e.generation AND d.item_id=e.item_id AND d.outcome_id!=e.outcome_id))`, s.repoID, current.ItemID, current.Generation, current.WorkerThreadID).Scan(&n); e != nil {
@@ -91,6 +125,12 @@ func (s *Store) RetirePartial(ctx context.Context, actor string, q PartialRetire
 		}
 		if _, e = tx.ExecContext(ctx, `INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?,'partial-retirement',?,'[]','normal')`, s.repoID, now, actor, current.CanonicalItemID, string(body)); e != nil {
 			return e
+		}
+		if recipient != actor {
+			used, _ := json.Marshal(map[string]any{"reservation": current.ItemID, "generation": current.Generation, "worker_thread_id": current.WorkerThreadID, "blocked_outcome": q.BlockedOutcome, "original_recipient": recipient, "current_owner": actor, "item_status": status})
+			if _, e = tx.ExecContext(ctx, `INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,?,'partial-retirement-receipt',?,'[]','normal')`, s.repoID, now, actor, current.CanonicalItemID, string(used)); e != nil {
+				return e
+			}
 		}
 		if q.Coverage != "" {
 			cov, _ := json.Marshal(map[string]any{"reservation": current.ItemID, "generation": current.Generation, "coverage": q.Coverage, "ref": q.CoverageRef})
