@@ -12,6 +12,9 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 import terminal_receiver
 from claude_workspace_trust import workspace_trust
@@ -85,7 +88,91 @@ def child_environment(c: dict) -> dict:
         # Local squad-coordination -> squad-codex may require these even for Claude.
         # Derive both from the assigned child; never inherit the Dispatcher id.
         env.update(CODEX_THREAD_ID=c['native_session_id'], CODEX_SESSION_ID=c['native_session_id'])
+    if c.get('model_endpoint'):
+        # The runtime configuration names the endpoint; a parent shell started
+        # before a cutover must not carry a stale address into a launch or resume.
+        env['ANTHROPIC_BASE_URL'] = c['model_endpoint']
     return env
+
+
+def normalize_origin(value: str) -> str:
+    """Canonical scheme://host[:port] of a bare origin, or '' when it is anything else."""
+    try:
+        parsed = urllib.parse.urlsplit(str(value).strip())
+        port = parsed.port
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment or parsed.path not in ('', '/')):
+            return ''
+        default = 443 if parsed.scheme == 'https' else 80
+        host = parsed.hostname if ':' not in parsed.hostname else f'[{parsed.hostname}]'
+        return f'{parsed.scheme}://{host}' + (f':{port}' if port and port != default else '')
+    except ValueError:
+        return ''
+
+
+def describe_endpoint(value: str) -> str:
+    """Safe diagnostic: scheme, host and port only; never userinfo, path or query."""
+    try:
+        parsed = urllib.parse.urlsplit(str(value).strip())
+        if parsed.scheme and parsed.hostname:
+            return f'{parsed.scheme}://{parsed.hostname}' + (f':{parsed.port}' if parsed.port else '')
+    except ValueError:
+        pass
+    return '[unparseable address]'
+
+
+def client_settings_endpoint(c: dict, env: dict, worktree: Path) -> tuple[str, str] | None:
+    """Last base URL the client's settings layers set; they override inherited env."""
+    config = Path(env.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude')
+    found = None
+    for path in (config / 'settings.json', worktree / '.claude' / 'settings.json',
+                 worktree / '.claude' / 'settings.local.json'):
+        try:
+            value = json.loads(path.read_text()).get('env', {}).get('ANTHROPIC_BASE_URL')
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(value, str) and value:
+            found = (value, str(path))
+    return found
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def probe_https(url: str) -> bool:
+    """TLS reachability of exactly this origin: no redirects, no proxy, no credentials, no prompts.
+
+    Client errors prove a live server; a 5xx (for example a front proxy with a dead
+    tunnel behind it) does not count as reachable.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    try:
+        opener.open(urllib.request.Request(url, method='HEAD'), timeout=8).close()
+    except urllib.error.HTTPError as error:
+        return error.code < 500
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return True
+
+
+def check_model_endpoint(c: dict, env: dict, worktree: Path, probe=probe_https) -> dict:
+    configured = c.get('model_endpoint')
+    if not configured:
+        return {'status': 'not-configured'}
+    expected = normalize_origin(configured)
+    if not expected.startswith('https://'):
+        raise ValidationError('model_endpoint must be a bare https origin (host and optional port only)')
+    layer = client_settings_endpoint(c, env, worktree)
+    effective, source = layer if layer else (env.get('ANTHROPIC_BASE_URL', ''), 'process environment')
+    if normalize_origin(effective) != expected:
+        raise ValidationError(f'model endpoint resolves to {describe_endpoint(effective)} from {source}; expected {expected}. '
+                              'Fix that setting; the launcher does not fall back or rewrite client settings')
+    if not probe(expected):
+        raise ValidationError(f'model endpoint {expected} is not reachable over HTTPS')
+    return {'status': 'verified', 'effective': expected, 'source': source,
+            'parent_environment_stale': normalize_origin(os.environ.get('ANTHROPIC_BASE_URL', expected)) != expected}
 
 
 def binding(assignment: dict, c: dict, env: dict) -> str:
@@ -246,7 +333,8 @@ def check_launch(assignment: dict, config_path: Path) -> dict:
     state = binding(assignment, c, env)
     resources = check_resources(assignment, c, env)
     check_heartbeat_runtime(c, env)
-    return {'status': 'launch-checked', 'role': assignment['role']['id'], 'runtime_identity': runtime_identity(c, env), 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
+    endpoint = check_model_endpoint(c, env, Path(assignment['worktree']))
+    return {'status': 'launch-checked', 'model_endpoint': endpoint, 'role': assignment['role']['id'], 'runtime_identity': runtime_identity(c, env), 'native_qualified': False, 'execution_fence': 'unavailable', 'binding': state, 'coordination_access': 'verified', 'claim_heartbeat': 'supervised',
             'environment': 'identity-sanitized', 'resources': resources, 'coordination_mode': c['coordination_mode'],
             'config_sha256': hashlib.sha256(config_path.read_bytes()).hexdigest(),
             'runtime_approval': 'not_checked', 'model_launch': 'not_performed',
@@ -373,6 +461,12 @@ def resume_arguments(c, effective):
             *selection_arguments(c)]
 
 
+def resume_environment(c: dict, worktree: Path, probe=probe_https) -> tuple[dict, dict]:
+    """Environment and verified endpoint for resuming the SAME native session."""
+    env = child_environment(c)
+    return env, check_model_endpoint(c, env, worktree, probe=probe)
+
+
 def check_resume_effective(selected, effective):
     """Reject a resumed session whose effective selection drifted."""
     for name in ('model', 'effort'):
@@ -402,6 +496,7 @@ def main() -> int:
             check_deployer_launch_inputs(a, c)
         authorization(c, a)
         env = child_environment(c)
+        check_model_endpoint(c, env, Path(a['worktree']))
         check_resources(a, c, env)
         wait_for_binding(a, c, env, args.wait_seconds)
         check_profile(a)

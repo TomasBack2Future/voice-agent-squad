@@ -361,3 +361,123 @@ class ClaudeResumeTests(unittest.TestCase):
         with self.assertRaises(launcher.ValidationError):
             launcher.check_resume_effective({'model': 'm', 'effort': 'high'},
                                             {'model': 'other', 'effort': 'high'})
+
+
+class ClaudeModelEndpointTests(unittest.TestCase):
+    """The configured HTTPS model endpoint must be what the client really uses."""
+    HTTPS = 'https://relay.example.test'
+    LEGACY = 'http://127.0.0.1:18317'
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__('shutil').rmtree(self.tmp, ignore_errors=True))
+        self.config_dir = self.tmp / 'claude'
+        self.config_dir.mkdir()
+        self.worktree = self.tmp / 'wt'
+        self.worktree.mkdir()
+        self.c = {'native_session_id': '00000000-0000-4000-8000-000000000123', 'agent_id': 'w',
+                  'ledger_directory': str(self.tmp), 'coordination_mode': 'native',
+                  'client_config_directory': str(self.config_dir), 'model_endpoint': self.HTTPS}
+
+    def settings(self, url):
+        (self.config_dir / 'settings.json').write_text(json.dumps({'env': {'ANTHROPIC_BASE_URL': url}}))
+
+    def check(self, parent_env, reachable=True):
+        probed = []
+        with patch.dict(os.environ, parent_env, clear=True):
+            env = launcher.child_environment(self.c)
+            result = launcher.check_model_endpoint(self.c, env, self.worktree,
+                                                   probe=lambda url: probed.append(url) or reachable)
+        return env, result, probed
+
+    def test_stale_parent_ssh_address_never_reaches_cold_start_or_resume_child(self):
+        env, result, probed = self.check({'ANTHROPIC_BASE_URL': self.LEGACY})
+        self.assertEqual(env['ANTHROPIC_BASE_URL'], self.HTTPS)
+        self.assertTrue(result['parent_environment_stale'])
+        self.assertEqual(result['effective'], self.HTTPS)
+        self.assertEqual(probed, [self.HTTPS])
+
+    def test_legacy_address_in_effective_client_settings_is_refused_with_diagnostic(self):
+        self.settings(self.LEGACY)
+        with self.assertRaisesRegex(launcher.ValidationError, r'127\.0\.0\.1:18317.*settings\.json.*expected https://relay\.example\.test'):
+            self.check({})
+
+    def test_project_settings_override_user_settings(self):
+        self.settings(self.HTTPS)
+        (self.worktree / '.claude').mkdir()
+        (self.worktree / '.claude' / 'settings.local.json').write_text(json.dumps({'env': {'ANTHROPIC_BASE_URL': self.LEGACY}}))
+        with self.assertRaises(launcher.ValidationError):
+            self.check({})
+
+    def test_unreachable_https_endpoint_is_refused_not_replaced(self):
+        with self.assertRaisesRegex(launcher.ValidationError, 'not reachable'):
+            self.check({}, reachable=False)
+
+    def test_non_https_configuration_is_rejected_and_unconfigured_is_unchanged(self):
+        self.c['model_endpoint'] = self.LEGACY
+        with self.assertRaises(launcher.ValidationError):
+            launcher.check_model_endpoint(self.c, {}, self.worktree, probe=lambda _: True)
+        del self.c['model_endpoint']
+        with patch.dict(os.environ, {'ANTHROPIC_BASE_URL': self.LEGACY}, clear=True):
+            env = launcher.child_environment(self.c)
+        self.assertEqual(env['ANTHROPIC_BASE_URL'], self.LEGACY)
+        self.assertEqual(launcher.check_model_endpoint(self.c, env, self.worktree)['status'], 'not-configured')
+
+    def test_credentials_in_url_are_not_echoed(self):
+        self.settings('http://user:secret@127.0.0.1:18317')
+        with self.assertRaises(launcher.ValidationError) as caught:
+            self.check({})
+        self.assertNotIn('secret', str(caught.exception))
+
+    def test_resume_of_original_session_uses_verified_https_and_same_arguments(self):
+        self.c.update(permission_mode='bypassPermissions', model='m', effort='high')
+        with patch.dict(os.environ, {'ANTHROPIC_BASE_URL': self.LEGACY}, clear=True):
+            env, result = launcher.resume_environment(self.c, self.worktree, probe=lambda _: True)
+        self.assertEqual(env['ANTHROPIC_BASE_URL'], self.HTTPS)
+        self.assertEqual(result['status'], 'verified')
+        self.assertEqual(launcher.resume_arguments(self.c, {'model': 'm', 'effort': 'high'})[:2],
+                         ['--resume', self.c['native_session_id']])
+        self.settings(self.LEGACY)
+        with patch.dict(os.environ, {}, clear=True), self.assertRaises(launcher.ValidationError):
+            launcher.resume_environment(self.c, self.worktree, probe=lambda _: True)
+
+    def test_origin_normalization_and_malformed_values(self):
+        n = launcher.normalize_origin
+        self.assertEqual(n('https://RELAY.example.test:443/'), self.HTTPS)
+        self.assertEqual(n('https://relay.example.test:8443'), 'https://relay.example.test:8443')
+        for bad in ('https://relay.example.test?x=1', 'https://relay.example.test#f', 'https://relay.example.test:bad',
+                    'https://relay.example.test//x', 'https://u:p@relay.example.test', 'relay.example.test', ''):
+            self.assertEqual(n(bad), '', bad)
+        self.c['model_endpoint'] = 'https://relay.example.test?x=1'
+        with self.assertRaises(launcher.ValidationError):
+            launcher.check_model_endpoint(self.c, {}, self.worktree, probe=lambda _: True)
+
+    def test_equivalent_spellings_match_and_query_secrets_are_not_echoed(self):
+        self.settings('https://RELAY.example.test:443/')
+        self.assertEqual(self.check({})[1]['status'], 'verified')
+        self.settings('https://h.example.test/v1?api_key=SECRETVALUE')
+        with self.assertRaises(launcher.ValidationError) as caught:
+            self.check({})
+        self.assertNotIn('SECRETVALUE', str(caught.exception))
+        self.assertNotIn('api_key', str(caught.exception))
+
+    def test_probe_treats_5xx_and_network_errors_as_down_and_never_follows_redirects(self):
+        import http.server, threading
+        codes = {'/ok': 404, '/down': 502, '/redir': 302}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                self.send_response(codes.get(self.path, 404))
+                if self.path == '/redir':
+                    self.send_header('Location', 'http://127.0.0.1:1/')
+                self.end_headers()
+            log_message = lambda *a: None
+        server = http.server.HTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        base = f'http://127.0.0.1:{server.server_port}'
+        self.assertTrue(launcher.probe_https(base + '/ok'))
+        self.assertFalse(launcher.probe_https(base + '/down'))
+        self.assertTrue(launcher.probe_https(base + '/redir'))  # the origin answered; the target is never contacted
+        self.assertFalse(launcher.probe_https('https://127.0.0.1:1'))
