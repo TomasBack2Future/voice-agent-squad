@@ -29,6 +29,9 @@ reserve, dispatch, or start another Issue.
 Read workspace `AGENTS.md`, repository instructions, the live GitHub Issue, and
 [references/lifecycle.md](references/lifecycle.md) before mutation. Read
 [references/staging.md](references/staging.md) before acquiring an environment.
+For capacity probes, follow its [EKlet scheduling and event-chain checks](references/staging.md#capacity-probes-and-eklet-scheduling):
+match the target workload's scheduling contract and distinguish scheduling,
+post-assignment quota and image-pull failures before reporting a capacity blocker.
 Do not create a goal unless the user explicitly requests one.
 The assigned mode and role determine who owns final acceptance, not whether it
 is required. Ordinary Workers must not end merely because a PR is open or ENV
