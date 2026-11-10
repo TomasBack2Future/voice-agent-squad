@@ -69,8 +69,11 @@ FailedScheduling, assignment to a node, sandbox/container creation, image pull,
 and Running/Ready. Distinguish an initial missing toleration from a later failure:
 if the cluster injects the toleration and assigns the Pod to an EKlet node, then
 `QuotaMaxClusterPodsLimit` is evidence of a subsequent cluster Pod quota blocker.
-Fixing the probe's scheduling configuration alone does not resolve that quota
-error. Conversely, Pending or a timeout alone does not establish exhausted
+Do not assume a scheduling correction resolves that quota error, or that a past
+quota error predetermines the outcome of an explicitly authorized corrected
+probe. Report the actual retry result; a later pass establishes capacity for that
+attempt, not that affinity was the sole cause (available capacity may also change).
+Conversely, Pending or a timeout alone does not establish exhausted
 capacity; record the actual failed condition and remaining uncertainty. Repeated
 event counts are not counts of distinct failed Pods or a measured quota deficit.
 Keep the raw error code/message and its scope, for example
