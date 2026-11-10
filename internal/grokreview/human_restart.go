@@ -34,6 +34,14 @@ type restartController struct {
 	Native string `json:"native_session"`
 	Epoch  int64  `json:"epoch"`
 }
+type restartDelegation struct {
+	AuthorizingWorkerNative string `json:"authorizing_worker_native"`
+	AuthorizingWorkerActor  string `json:"authorizing_worker_actor"`
+}
+type restartTimeoutOverride struct {
+	FromMS int64 `json:"from_ms"`
+	ToMS   int64 `json:"to_ms"`
+}
 type restartScope struct {
 	Issue     int    `json:"issue"`
 	Repo      string `json:"repo"`
@@ -55,18 +63,20 @@ type restartScope struct {
 	PatchPath string `json:"complete_patch_path"`
 }
 type restartDirective struct {
-	SchemaVersion       string            `json:"schema_version"`
-	Source              string            `json:"source"`
-	HumanMessageID      string            `json:"human_message_id"`
-	HumanThread         string            `json:"human_thread"`
-	HumanTurn           string            `json:"human_turn"`
-	HumanMessageHash    string            `json:"human_message_sha256"`
-	HumanEvidencePath   string            `json:"human_evidence_path"`
-	Controller          restartController `json:"controller"`
-	Scope               []restartScope    `json:"scope"`
-	Allowance           string            `json:"allowance"`
-	Requires            string            `json:"requires"`
-	ProductionUnchanged bool              `json:"production_scope_unchanged"`
+	SchemaVersion       string                  `json:"schema_version"`
+	Source              string                  `json:"source"`
+	HumanMessageID      string                  `json:"human_message_id"`
+	HumanThread         string                  `json:"human_thread"`
+	HumanTurn           string                  `json:"human_turn"`
+	HumanMessageHash    string                  `json:"human_message_sha256"`
+	HumanEvidencePath   string                  `json:"human_evidence_path"`
+	Controller          restartController       `json:"controller"`
+	Delegation          *restartDelegation      `json:"delegation,omitempty"`
+	TimeoutOverride     *restartTimeoutOverride `json:"timeout_override,omitempty"`
+	Scope               []restartScope          `json:"scope"`
+	Allowance           string                  `json:"allowance"`
+	Requires            string                  `json:"requires"`
+	ProductionUnchanged bool                    `json:"production_scope_unchanged"`
 }
 type humanMessageEvidence struct {
 	Source  string `json:"source"`
@@ -103,7 +113,7 @@ func (a *Admission) ImportHumanRestart(path string, owner ReviewOwner) error {
 	}
 	var d restartDirective
 	directiveRaw, err := readBoundedJSON(g.DirectivePath, &d)
-	if err != nil || receiptHash(directiveRaw) != g.DirectiveSHA256 || d.SchemaVersion != "squad.human-review-restart.directive.v1" || d.HumanMessageID != g.HumanMessageID || !contentHashValid(d.HumanMessageHash) || d.Controller.Native != d.HumanThread || !d.ProductionUnchanged {
+	if err != nil || receiptHash(directiveRaw) != g.DirectiveSHA256 || d.SchemaVersion != "squad.human-review-restart.directive.v1" || d.HumanMessageID != g.HumanMessageID || !contentHashValid(d.HumanMessageHash) || !validRestartDelegation(d, owner) || !validRestartTimeoutOverride(d, g.Settings) || !d.ProductionUnchanged {
 		return fmt.Errorf("attributable operator human directive missing or changed")
 	}
 	var evidence humanMessageEvidence
@@ -181,7 +191,7 @@ func (a *Admission) startHumanRestart(ctx context.Context, bundle []byte, identi
 	if err != nil {
 		return err
 	}
-	if !prior.Joined || prior.Verdict != VerdictError || prior.FailureStage != "sampling" || prior.FailureKind != CLIFailureTimeout || prior.CompletedAt <= 0 || prior.Publication.CheckRunID != h.Scope.Check || prior.Publication.Conclusion != "failure" || prior.Settings != a.settings || prior.Identity != identity || (prior.OwnerActor != "" && prior.OwnerActor != h.Grant.Custody.Owner.Actor) || (prior.OwnerNative != "" && prior.OwnerNative != h.Grant.Custody.Owner.Native) {
+	if !prior.Joined || prior.Verdict != VerdictError || prior.FailureStage != "sampling" || prior.FailureKind != CLIFailureTimeout || prior.CompletedAt <= 0 || prior.Publication.CheckRunID != h.Scope.Check || prior.Publication.Conclusion != "failure" || !validRestartSettings(prior.Settings, a.settings, h.Directive.TimeoutOverride) || prior.Identity != identity || (prior.OwnerActor != "" && prior.OwnerActor != h.Grant.Custody.Owner.Actor) || (prior.OwnerNative != "" && prior.OwnerNative != h.Grant.Custody.Owner.Native) {
 		return fmt.Errorf("actual joined old timeout/input/settings required")
 	}
 	oldLineage := strings.Split(h.Scope.Old, "/")
@@ -256,4 +266,29 @@ func (a *Admission) startHumanRestart(ctx context.Context, bundle []byte, identi
 		a.frozenBundle = append([]byte(nil), bundle...)
 	}
 	return err
+}
+
+func validRestartDelegation(d restartDirective, owner ReviewOwner) bool {
+	if d.Delegation == nil {
+		return d.Controller.Native == d.HumanThread && d.TimeoutOverride == nil
+	}
+	return d.TimeoutOverride != nil && d.Controller.Native != d.HumanThread && d.HumanThread != "" && d.Delegation.AuthorizingWorkerNative == d.HumanThread && d.Delegation.AuthorizingWorkerNative == owner.Native && d.Delegation.AuthorizingWorkerActor == owner.Actor
+}
+
+func validRestartTimeoutOverride(d restartDirective, current ReviewSettings) bool {
+	if d.TimeoutOverride == nil {
+		return true
+	}
+	return d.Delegation != nil && d.TimeoutOverride.FromMS == 20*60*1000 && d.TimeoutOverride.ToMS > d.TimeoutOverride.FromMS && d.TimeoutOverride.ToMS <= 40*60*1000 && current.TimeoutMS == d.TimeoutOverride.ToMS
+}
+
+func validRestartSettings(prior, current ReviewSettings, override *restartTimeoutOverride) bool {
+	if override == nil {
+		return prior == current
+	}
+	if prior.TimeoutMS != override.FromMS || current.TimeoutMS != override.ToMS {
+		return false
+	}
+	prior.TimeoutMS = current.TimeoutMS
+	return prior == current
 }
