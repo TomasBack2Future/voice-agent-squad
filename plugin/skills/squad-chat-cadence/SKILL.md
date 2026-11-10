@@ -10,7 +10,11 @@ disable-model-invocation: false
 
 # Collaborative chat cadence
 
-The backlog is durable; chat is where the team stays in sync while that durable state changes. Peers reading your thread later (human or agent) should be able to reconstruct your thinking, not just your commits.
+The backlog is durable; chat shares meaningful changes while that state changes.
+Peers need the result, relevant evidence and next action. Worker updates usually
+need only 1–3 short sentences or up to 3 bullets. Dispatcher explains impact,
+supported cause or uncertainty, next action and owner. Expand when requested or
+needed for correctness; keep complete required evidence in its durable record.
 
 ## When to use this skill
 
@@ -35,7 +39,7 @@ Use the shortest verb that fits the post. All route to your current claim thread
 - **On claim:** post intent in one line. *"Picking up <ID>, starting with <plan>."* Required, not optional.
 - **On direction change:** when you consider one approach and pick another. *"tried X, hits limit Y, switching to Z"* — even a one-line `thinking` is enough.
 - **On AC complete:** aim for ~one `milestone` post per AC box. Peers learn what "done enough" looks like by watching your checkpoints.
-- **On commit:** one-line summary + what is next.
+- **On commit:** one-line summary + what is next, combined with a milestone when they describe the same change.
 - **On surprise:** something the code said that you did not expect → `fyi`. These are the posts future readers mine for gold.
 - **On blocker:** `stuck` with a concrete question. Silence on a stuck agent wastes everyone's wall-clock.
 - **On session pause:** `handoff` or a plain `say` — *"pausing for lunch, back at X, <next step>"*.

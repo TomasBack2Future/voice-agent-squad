@@ -5,6 +5,9 @@ description: Execute exactly one assigned engineering work item from a bounded a
 
 # Worker
 
+Read [role communication](../../communication.md) at startup and resume. Apply
+the concise Worker standard to human updates; retain complete structured evidence.
+
 Apply [runtime-independent roles](../../runtime-compatibility.md) at startup and
 resume. Muse, Claude and Codex share this Worker contract; qualify the selected
 execution surface and preserve the exact assignment.
