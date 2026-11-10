@@ -35,16 +35,53 @@ selection and tolerations into the probe rather than relying on later automatic
 injection. Keep probe labels distinct from application Service selectors. A
 smaller or differently scheduled probe does not prove rollout capacity.
 
+When the Studio assignment requires explicit EKlet node affinity, include this
+under the Pod `spec` (a Deployment uses `spec.template.spec`):
+
+```yaml
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values:
+                - eklet
+```
+
+A matching `nodeSelector`, a toleration, preferred affinity or an eventual EKlet
+node assignment does not prove this explicit required-affinity field exists.
+Preserve compatible existing constraints; do not append an OR alternative that
+allows non-EKlet nodes or overwrite unrelated affinity rules. Compare the exact
+candidate's rendered workload templates, server-side dry-run results and actual
+created Pod specs separately. Dry-run success is not evidence of a running Pod.
+Check every affected component, including execution-worker a/b and Stateful
+Interceptor; API/frontend affinity does not establish their configuration.
+Record any gap between the probe and the release templates. A probe-only change
+does not fix the chart or prove the next deployment will carry the field; route
+required template changes through the source/review/release contract without
+silently mutating a frozen candidate or the live workloads.
+
 Retain the submitted and admitted scheduling fields and the timestamped events
 for each owned probe Pod UID before cleanup. Follow the full sequence: admission,
 FailedScheduling, assignment to a node, sandbox/container creation, image pull,
 and Running/Ready. Distinguish an initial missing toleration from a later failure:
 if the cluster injects the toleration and assigns the Pod to an EKlet node, then
 `QuotaMaxClusterPodsLimit` is evidence of a subsequent cluster Pod quota blocker.
-Fixing the probe's scheduling configuration alone does not resolve that quota
-error. Conversely, Pending or a timeout alone does not establish exhausted
+Do not assume a scheduling correction resolves that quota error, or that a past
+quota error predetermines the outcome of an explicitly authorized corrected
+probe. Report the actual retry result; a later pass establishes capacity for that
+attempt, not that affinity was the sole cause (available capacity may also change).
+Conversely, Pending or a timeout alone does not establish exhausted
 capacity; record the actual failed condition and remaining uncertainty. Repeated
 event counts are not counts of distinct failed Pods or a measured quota deficit.
+Keep the raw error code/message and its scope, for example
+`FailedCreatePodSandBox` with `UnsupportedOperation.QuotaMaxClusterPodsLimit`;
+do not derive a quota increase from apparently conflicting limit fields alone.
+An explicit one-time retry authorizes only that attempt: record the changed
+configuration, actual Pod readback, runtime result and cleanup, not just dry-run
+success, and do not turn it into automatic repeated retries.
 
 On failure, clean up only owned probe resources and verify their removal. Release
 ENV only when no protected operation remains; report whether deployment actually
