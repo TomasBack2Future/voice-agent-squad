@@ -23,6 +23,40 @@ If documented local/workflow access is unavailable or mismatched, report the
 specific failed check and ask only for a missing path/context or access action,
 never secret values. Do not keep rediscovering access on every operation.
 
+## Capacity probes and EKlet scheduling
+
+Before a capacity probe, compare its scheduling requirements with the target
+workload's reviewed Pod template and the live admitted Pod spec: routing labels
+and annotations, node selectors/affinity, tolerations, resource requests and the
+required concurrent Pod count. Use the intended workload's supported scheduling
+contract; do not invent a `fargate` label or infer the execution path from its
+absence. For a workload intended for EKlet, explicitly carry its required EKlet
+selection and tolerations into the probe rather than relying on later automatic
+injection. Keep probe labels distinct from application Service selectors. A
+smaller or differently scheduled probe does not prove rollout capacity.
+
+Retain the submitted and admitted scheduling fields and the timestamped events
+for each owned probe Pod UID before cleanup. Follow the full sequence: admission,
+FailedScheduling, assignment to a node, sandbox/container creation, image pull,
+and Running/Ready. Distinguish an initial missing toleration from a later failure:
+if the cluster injects the toleration and assigns the Pod to an EKlet node, then
+`QuotaMaxClusterPodsLimit` is evidence of a subsequent cluster Pod quota blocker.
+Fixing the probe's scheduling configuration alone does not resolve that quota
+error. Conversely, Pending or a timeout alone does not establish exhausted
+capacity; record the actual failed condition and remaining uncertainty. Repeated
+event counts are not counts of distinct failed Pods or a measured quota deficit.
+
+On failure, clean up only owned probe resources and verify their removal. Release
+ENV only when no protected operation remains; report whether deployment actually
+started and the verified running revision. Preserve applicable image prefetch,
+frozen-candidate and preflight evidence, rechecking time-sensitive capacity before
+retrying. Send the result through the existing formal Dispatcher event route with
+the scheduling defect and quota blocker separated, the quota/environment owner,
+next action and recovery condition. If that owner has not accepted the handoff,
+report it as pending, not resolved. Do not repeat the unchanged probe, increase
+quota, alter shared scheduling or delete other workloads without the applicable
+authority and evidence of a changed condition.
+
 ## Studio database environment
 
 Before direct database access or a deployment configuration change, read the
