@@ -222,6 +222,16 @@ custody and no retained claims or active execution. It only reconciles that rece
 no new delivery, work decision, reservation reopen or controller impersonation is
 allowed. Unrelated failures, stale holds and successor generations remain refused.
 
+A partial-retired execution remains unfinished delivery. The projection already
+reports `execution_disposition: partial`, `continuation: partial-retired` and the
+reservation owner as `next_owner`; this names the reconciliation responsibility,
+not proof that a successor was assigned. Consumers monitoring an authorized batch
+must retain these Issues even after the client exits. Join the existing batch's
+Issue set with unfiltered reservation reads and fresh Issue observations, then
+inspect each relevant `delivery` result. Active-session filtering loses this work;
+unknown Issue state must not be treated as closure. Continuation planning belongs
+in the existing owner checkpoint, not a second mutable delivery ledger.
+
 ## Finished-client retirement
 
 Task completion, client exit and workspace color are three recorded results.

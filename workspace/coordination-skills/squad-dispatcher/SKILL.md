@@ -260,6 +260,16 @@ cannot represent safe partial retirement/continuation, record that capability
 gap and retained ownership rather than inventing a state, force-releasing WIP,
 or silently relabelling partial delivery as completion.
 
+Partial retirement ends an execution, not the Dispatcher's responsibility for
+its unfinished Issue. Before retaining that disposition, record the remaining
+assertions and a concrete continuation owner/action, or an evidenced external
+prerequisite and next check time/event, in the existing checkpoint. No successor
+is launched until custody and authority qualify. Reconcile that record in every
+existing cycle even when the old session has exited; follow
+[convergence supervision](references/dispatch-reliability.md#convergence-supervision).
+Do not substitute "a new owner later" for an actual continuation plan or ask a
+retired Worker to resume from a message alone.
+
 A release assignment (`release:<ref>` source) is complete only when its delivery
 projection shows a `complete` release verdict; a completed reservation, an exited
 Deployer or a released ENV is not acceptance. Read the projection's `release.state`
