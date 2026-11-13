@@ -112,6 +112,18 @@ in lexicographic item-ID order. Never bypass a detected cycle or automatically
 release protected ownership. Installing policy or migrating active tasks is a
 separate operation from editing source.
 
+## Outcome continuity
+
+A failed original acceptance assertion, omitted requirement or implementation
+regression stays on its canonical Issue. Prefer its current owner or a suitable
+existing owner before creating another execution. Distinguish tracking a genuinely
+independent finding from assigning a new Worker; check existing/withdrawn work
+first. Amend roles and related obligations through the responsible Dispatcher's
+effective decision and supported custody route, never by a second native binding
+or an informal prompt. Preserve one primary identity, real access boundaries,
+frozen candidates and per-Issue acceptance. Read the Dispatcher's session-continuity
+reference for the supported routes and already-filed repair reconciliation.
+
 ## Flow audits and instruction adoption
 
 A workflow retrospective directly repairs authorized skills and working

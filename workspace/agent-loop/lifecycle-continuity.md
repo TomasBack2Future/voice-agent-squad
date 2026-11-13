@@ -103,6 +103,13 @@ separately. Instructions alone do not qualify an unattended recovery capability.
 
 ## Phase completion and changed inputs
 
+Before treating a discovered defect as another assignment, apply
+[outcome-local repair and existing-owner routing](../coordination-skills/squad-dispatcher/references/session-continuity.md#repair-the-assigned-outcome-before-admitting-another-issue).
+An original acceptance failure continues under its owner and canonical Issue;
+a related Issue reference alone does not change binding or authority. An admitted
+scope amendment needs durable decision, actual fence compatibility and owner
+readback, then evidence of the next action. Installation alone changes none of them.
+
 A phase ending advances to its prepared, authorized successor without requesting
 unchanged authorization, and the same Worker and native session keep the Issue;
 only a planned role boundary, an unrecoverable owner or a human reassignment
