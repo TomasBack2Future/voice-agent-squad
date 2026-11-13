@@ -71,17 +71,49 @@ These instructions reduce recurrence but do not implement API-level idempotency.
 
 ## Convergence supervision
 
-Track meaningful state changes and their cause, not presence messages. A confirmed
-user pause or host-offline interval is not an execution fault; an unclassified
-quiet interval stays unknown. When an existing heartbeat observes a stalled
-required preparation stage, repeated companion amendments, or two verified
-findings in one behavior family, reconcile the owner checkpoint once. Request a
-bounded recovery/design sweep only when evidence shows a correctness or scope
-risk. Do not routinely interrupt active Workers or invent another monitor.
+The supervision set is the unfinished work in the authorized batch, not the set
+of live sessions. Keep partially retired and unassigned Issues in that set until
+acceptance and cleanup are complete, or the user explicitly removes them from
+scope. Build the set from the existing batch/checkpoint and current Issue state;
+`dispatch list` without an active-state filter and `dispatch delivery KEY` can
+reconcile known reservations, including `partial-retired` and `awaiting-owner`.
+Use a fresh matching Issue observation when available; unknown is not closed.
+An Issue without a reservation is still preparation/admission work. These reads
+do not implement scheduling, grant authority or reopen a retired assignment.
+
+In the existing checkpoint, retain each unfinished Issue's remaining assertion,
+relevant component revision, next owner/action, last meaningful progress and
+specific prerequisite with its next check time or event. Preserve these across
+session retirement. A newly read timestamp, message, ACK or process exit is not
+acceptance progress. Query changes within this retained set; an empty message
+cursor is not proof that no work is ready.
+
+Assess waiting per Issue and phase. A verified in-flight operation within its
+bound, a user pause or a human-only prerequisite explains only that phase's wait.
+It cannot exempt other Issues or independent preparation. After two existing
+cycles without new acceptance, resolved blockers, delivery or effective handoff,
+and without such a verified wait, investigate once and record a concrete action
+through the responsible Dispatcher. A `blocked` label or a proposed future owner
+alone must not reset the progress clock. An evidenced missing handoff or satisfied
+prerequisite needs reconciliation in the current cycle, without waiting for two.
+
+After deployment, compare each waiting assertion with the actual component
+revision it needs; an API rollout does not update an external Worker. Release
+only satisfied dependencies through the current decision/readback contract.
+Before ending a cycle, reconcile ready continuation and preparation against the
+actual WIP limit. Unused capacity is valid when its reasons are evidenced, not
+because only existing sessions were considered. Do not invent work to fill it.
+
+Keep a recurring prompt focused on these stable duties and checkpoint locations;
+update current facts in the checkpoint instead of appending historical waits and
+version snapshots to the prompt. Report what advanced, what remains and who owns
+the next action. An outside supervisor checks this chain through the existing
+Dispatcher; it does not become a second scheduler or repeat the acceptance.
 
 Use [session continuity](session-continuity.md) for behavioral health checks and
-cross-provider/model takeover. It owns the writer, callback and reservation
-closure protocol; quiet time alone never triggers replacement.
+cross-provider/model takeover. Quiet time alone never triggers replacement.
+Preserve custody, human pauses and bounded observation windows; use the existing
+event/heartbeat cycle, never a new poller or routine Worker reminders.
 
 ## Shared failure reconciliation
 

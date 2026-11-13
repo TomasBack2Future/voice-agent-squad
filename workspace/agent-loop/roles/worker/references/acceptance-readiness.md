@@ -23,6 +23,14 @@ is evidence selection within the existing contract, not another approval: ask
 only when changing a required criterion or its accepted evidence would change
 scope. Do not discover the closure standard at the final report.
 
+When a new test or tooling gap appears, trace it to the original required
+assertion before adding a dependency. Distinguish the required behavior/evidence
+from a preferred way to collect it: use an equivalent qualified real-target path
+when it proves that assertion, and track optional tooling separately. If no
+permitted path can prove a required assertion, keep it open with the precise
+missing capability and owner; do not waive the assertion or silently add a new
+product feature to its completion criteria.
+
 Bind the plan to the configured API origin/Project and candidate/fixture provenance.
 Check execution and ephemeral-cleanup scope separately, including the actual supported
 cleanup method; credential presence is not sufficient. A retained fixture needs a

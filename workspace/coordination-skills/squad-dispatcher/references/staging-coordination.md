@@ -15,6 +15,22 @@ this is not a claim that a new batch CLI/schema has been implemented. Keep these
 fields out of strict assignment-envelope schemas; use referenced admission or
 coordination metadata.
 
+For each member's required live assertion, finish the executable acceptance
+preparation before admitting it to the verification window: supported trigger,
+fixture/Suite and model binding, qualified access, bounded calls including retries,
+observable result and cleanup. Prepare shared fixture definitions outside ENV;
+create or change them only through the legitimate ENV writer. Reuse one qualified
+run across compatible assertions. A source-ready member can ride the deployment
+while its acceptance is blocked, but keep its missing preparation, owner and
+next step explicit; do not describe the whole batch as acceptance-ready.
+
+A required assertion with no matching event is `not-triggered`, not passed.
+Arrange a minimal controlled trigger within existing authority, or a bounded
+natural-event window with an owner and a fallback at expiry. Missing access or
+trigger capability needs scoped preparation or a concrete external request;
+"wait for natural traffic" without a bound does not complete the plan. Do not
+induce unsafe failures or spend outside the granted budget to obtain a sample.
+
 Verify the combined candidate, including route/configuration/schema conflicts;
 independent green PRs do not prove integration. Reuse exact candidate CI and
 one deployment receipt across covered Issues. Separate release trains may have
