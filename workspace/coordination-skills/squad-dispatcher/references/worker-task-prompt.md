@@ -104,9 +104,12 @@ For a Studio Worker, include:
 - a requirement to report terminal evidence in Squad and the task response;
 - “Do not discover, reserve, dispatch, or start another Issue.”
 
-Assignments name exactly one Issue and open a new session for it; they never reuse a
-completed Worker for another Issue and never frame same-Issue follow-up as a handoff
-to a completed session. A Squad-tool repair assignment is valid only with the user's
+A fresh assignment names one canonical Issue and primary item. Before creating it,
+apply [existing-owner routing](session-continuity.md#existing-owners-and-supported-assignment-routes):
+an authorized linked obligation may stay with a suitable live owner under its
+existing primary binding. A genuinely different Issue keeps its own tracking identity.
+Do not rewrite the initial prompt or bind a native twice. Never frame same-Issue
+follow-up as a handoff to a completed session. A Squad-tool repair assignment is valid only with the user's
 current designation of that maintenance agent; business or production authorization
 never substitutes for it. The Worker keeps this Issue through waits and phases
 (`phase-complete` and `waiting` emit no terminal event); a confirmed shared cause has one

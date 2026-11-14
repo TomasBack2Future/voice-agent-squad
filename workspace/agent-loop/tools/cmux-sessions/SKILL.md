@@ -87,7 +87,10 @@ Create a new workspace with an owned worktree and a reviewed launcher:
 Read the returned identifiers or resolve them once with `tree --all --json`.
 Persist the workspace UUID, surface UUID and native agent session ID with the
 matching dispatch reservation. The Worker title prefix and assignment identity
-must agree. Never reuse another Issue's workspace or native session.
+must agree. Never bind a native to two reservations or relabel a workspace to
+imitate reassignment. An authorized related-work amendment retains the current
+primary identity and follows the Dispatcher's existing-owner routing; cmux input
+alone cannot transfer assignment authority.
 
 For terminal notifications, record a runtime-tagged callback route at launch:
 cmux workspace UUID, surface UUID, native session id and Squad agent id, or an

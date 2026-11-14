@@ -62,6 +62,89 @@ session or stealing locks. An explicit user takeover request still requires
 custody verification. Compare providers using comparable evidence; record
 handoff overhead separately rather than attributing all delay to a model.
 
+## Repair the assigned outcome before admitting another Issue
+
+An omitted original requirement, failed original acceptance assertion or regression
+introduced by its implementation remains repair work on that canonical Issue.
+Use another PR on the same Issue when needed. A new symptom, implementation phase,
+source change or release wait does not by itself create a new user outcome.
+Before filing, compare the requirement and failing revision with open and closed
+Issues, the current owner's PR/head and any merged fix, plus human pauses and
+withdrawn work. Record this disposition in the existing item/checkpoint, not a new
+tracking system. A genuinely independent outcome, shared component defect with a
+separate contract, or operational target can have its own Issue; state that reason
+and do not make it a gate on unrelated acceptance.
+
+Choose the executor separately from the tracking identity. Prefer the current
+owner, then a suitable existing owner with relevant context, capacity and a safe
+phase boundary. Inspect its actual work, role, allowed writes, repository, paths,
+claims, external operations and receiver before changing responsibility. WIP
+availability alone is not a reason to launch a fresh Worker. Record the concrete
+reason when existing owners cannot safely do the work (for example an incompatible
+role/access boundary, conflicting in-flight custody or an unrecoverable client).
+Do not preserve a client indefinitely when no authorized useful work is possible;
+retain the unfinished outcome and its concrete continuation route instead.
+
+For a read-only acceptance owner, send one decision request identifying the failed
+original assertion and smallest repair. The Dispatcher can authorize an in-scope
+implementation phase on that same Issue if existing human authority covers it;
+update the effective decision and any actual assignment/fence inputs, verify the
+owner's readback, then proceed. A decision never overrides a stricter tool fence
+or grants production authority. Do not retire the owner merely to perform this
+phase change, and do not add another human approval for already-authorized work.
+
+For already-filed repair Issues, inspect active and merged work first. Reuse the
+fix, tests and review; never reimplement to make the ledger look simpler. Fold a
+redundant repair into the original outcome with explicit evidence links and a
+single remaining acceptance list. Reconcile its existing owner, claims, events
+and custody before marking it duplicate/superseded; do not label an unperformed
+acceptance complete. Independent child Issues keep their distinct requirements.
+A release record tracks execution and is not another product defect. Report new
+requirements, newly discovered defects, repair splits, release records and
+cancelled/duplicate records separately from delivered outcomes.
+
+### Existing owners and supported assignment routes
+
+Keep one canonical primary binding per native session. There are three different
+routes; none is permission for a Worker to select its own next Issue:
+
+- **Same outcome, same Issue:** amend its bounded phase through the existing
+  decision/readback route and preserve the reservation/native. `dispatch continue`
+  only changes a completed primary item within that same source assignment; it
+  does not retarget the reservation's source to another Issue.
+- **Related work integrated into a live assignment:** the Dispatcher explicitly
+  admits the linked obligations into the current owner's outcome, with exact
+  Issues, paths, allowed operations, acceptance, closure owner and exclusions.
+  Preserve the primary binding and record each linked Issue's disposition; do not
+  bind the native a second time or manufacture a child event under the parent.
+  Where another writer owns the contribution, use the existing
+  [audited transfer](../../studio-issue-worker/references/batch-delivery.md#audited-transfer-without-claiming-every-child),
+  explicitly adopted for this bounded contribution, and verify its release plus
+  the recipient's acceptance before edits. This does not activate batch deployment
+  mode or transfer any environment or production authority. An already
+  retired donor's retained custody must be reconciled by its legitimate owner;
+  it cannot acknowledge a new handoff. If the installed fences cannot represent
+  the admitted scope or closeout, report the specific gap to the maintenance
+  owner; a prose amendment is not a transfer or an execution capability.
+- **Different independent assignment:** use a qualified atomic reassignment only
+  if the installed tools support the full binding, claims, pending events and
+  receiver transition. The current `dispatch bind` rejects a native already bound to
+  another reservation, including a completed one; `dispatch continue` is not a
+  bypass. Do not edit SQLite, rename identities, copy authority or start a second
+  client on the same native. Record the unsupported transition and retain valid
+  work; the Dispatcher may select another suitable live integration owner or
+  record why a fresh session is necessary. User authority permits developing the
+  missing capability, not pretending it exists.
+
+After an admitted change, verify the first actual repair/reused-evidence or
+acceptance action and its result. Broadcast, delivery and readback alone do not
+prove the policy is effective. Preserve frozen release candidates for unaffected
+work. A fix outside the cutoff gets a named next-release/acceptance owner unless
+it is required to resolve an evidenced blocker of the current release; that case
+follows the existing reviewed candidate-replacement or tooling-only recovery
+contract. Neither path requires duplicate implementation or an unbounded chain
+of replacement Workers.
+
 ## Continuous ownership
 
 One Issue keeps one reservation, one primary item and one native session until its
@@ -71,9 +154,9 @@ not end the reservation, start a Worker or change the owner; resume the same
 native from the current checkpoint. Release `ENV-*` and other shared resources
 at their safe boundary while ownership stays, and keep counting the assignment
 in WIP until its terminal reconciliation. A user pause or HOLD is never lifted by
-this rule. A different Issue always gets a new reservation, item and native;
-`dispatch bind` rejects a native already bound to another reservation, so a
-finished or idle session cannot be reassigned to save launch time.
+this rule. A linked obligation admitted through the routes above need not create
+another execution. A separate reservation still needs its own qualified binding;
+never reinterpret an idle session as available custody.
 
 ## Shared causes: one repair owner, many acceptance owners
 

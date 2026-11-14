@@ -104,7 +104,11 @@ perpetual loop, role or restart existing Workers to satisfy this rule.
 Persist explicit user authorization to create/update Issues in the local dispatch
 policy with its repository and goal scope. Reuse that authorization on later
 cycles; do not ask again for each defect, split or follow-up within it. Before
-creating, check current Issues for duplicates. Record the originating requirement,
+creating or launching, apply [outcome-local repair and existing-owner routing](references/session-continuity.md#repair-the-assigned-outcome-before-admitting-another-issue):
+original acceptance failures stay on their original Issue, and tracking a genuinely
+separate defect does not automatically require a new Worker. Check open and closed
+Issues, PRs, merged fixes and human withdrawals; prefer an eligible existing owner.
+Record the reason for a separate Issue and, independently, a fresh execution. Record the originating requirement,
 user outcome, boundaries, dependencies and acceptance; preserve unrelated content
 when updating. Issue creation does not itself authorize broader product changes,
 production operations or another repository. If scope is not authorized, prepare
@@ -359,9 +363,9 @@ can start a new turn or steer an active Worker.
   generation, then send at most one narrowly scoped wake-up for that exact
   transition. Never send it after the task has become active, and never repeat
   it on later heartbeat cycles.
-- Keep messages issue-local. Another Issue may be named only as a dependency and
-  state; do not inject its acceptance actions, test data, implementation details,
-  or user questions into the current Worker.
+- Keep routine messages issue-local. A human-authorized related-work amendment
+  uses the explicit existing-owner route in session continuity, including scope,
+  ownership and readback; a dependency mention or progress ping cannot assign it.
 - Never ask a Worker to request human confirmation for lifecycle actions already
   covered by its standing authorization. A real credential, user-only
   interaction, new sensitive-data disclosure, production mutation, or material
@@ -464,9 +468,11 @@ Never wait for Worker termination to answer its blocking design question.
    Omit model/reasoning overrides unless the scheduler prompt explicitly set
    them. Use the saved project worktree for Git repositories.
 
-   **Identity and repair ownership.** Every different Issue gets its own new
-   reservation, canonical item and native session; a completed or idle session is
-   retired, never reassigned or woken for another Issue. Repair of Squad tools,
+   **Identity and repair ownership.** Before a new execution, apply the
+   existing-owner routes in session continuity. An admitted linked obligation
+   keeps the current primary binding; a genuinely separate reservation needs a
+   qualified distinct native unless a supported reassignment exists. Do not retire
+   an idle owner merely to change phase or create a duplicate repair. Repair of Squad tools,
    coordination code or normative sources is assigned only to the maintenance agent
    the user explicitly designates for the current round. Never derive that
    assignment from business, staging or production authorization, from an earlier

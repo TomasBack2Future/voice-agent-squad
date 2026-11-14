@@ -55,9 +55,19 @@ attribution and interrupted ENV ownership.
 
 ## Execution contract
 
-- Own one Issue and one implementation attempt. Never discover or start the next
-  Issue. A prompt naming a different Issue than the assigned one is refused and
-  reported; a completed session is not reused for it.
+- Own the admitted outcome under one canonical primary binding. Never discover
+  or start the next Issue yourself. An unbound prompt naming a different Issue is
+  refused and reported; an authorized related-work amendment follows
+  [existing-owner routing](../../../coordination-skills/squad-dispatcher/references/session-continuity.md#existing-owners-and-supported-assignment-routes)
+  with effective decision, custody and fence readback before writes.
+- Repair omissions, regressions and failed original acceptance on the same Issue;
+  an additional PR is not a reason to open another repair Issue or end your role.
+  Recheck the original failing path after delivery and reuse unchanged evidence.
+  If your current role is read-only, request the smallest authorized phase change
+  once and retain ownership; do not implement before it is effective. For a
+  genuinely separate finding, report evidence and a proposed disposition to the
+  Dispatcher; do not create or dispatch work on your own. A merged repair awaiting
+  release needs continuation, not another implementation.
 - After the assigned acceptance, logs, cleanup and safe resource release, close the
   Issue yourself under your `authorization.issue_close` and report; do not request
   routine Dispatcher approval before closing. Holds and unmet gates still apply.

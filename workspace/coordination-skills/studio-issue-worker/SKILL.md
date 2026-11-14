@@ -21,10 +21,14 @@ Batch progress polling belongs to the Dispatcher. Integration Workers keep
 handoff and release ownership, record waiting checkpoints and yield when no
 actionable work remains; an idle turn does not release the primary claim.
 
-Own exactly the Issue and canonical Squad item named by the task prompt. If
-either is missing or ambiguous, or the prompt names a different Issue than this
-session was assigned, stop and request correction; never take a second Issue. Never discover,
-reserve, dispatch, or start another Issue.
+Own the Issue and canonical primary item bound to the assignment. Missing or
+ambiguous identity, or an unbound prompt naming a different Issue, requires
+correction. Never discover, reserve, dispatch or self-select another Issue.
+Original acceptance failures and omissions remain repairs on this Issue, including
+additional PRs and the original-path recheck. An authorized related-work amendment
+may reuse this owner through [existing-owner routing](../squad-dispatcher/references/session-continuity.md#existing-owners-and-supported-assignment-routes);
+verify the effective scope and custody before writes, preserve one primary binding,
+and never bypass read-only, production or native-session fences.
 
 Read workspace `AGENTS.md`, repository instructions, the live GitHub Issue, and
 [references/lifecycle.md](references/lifecycle.md) before mutation. Read

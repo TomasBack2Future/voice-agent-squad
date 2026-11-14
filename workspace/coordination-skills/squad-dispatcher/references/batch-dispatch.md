@@ -10,7 +10,10 @@ Freeze the manifest, integration branch, exact primary release item, CI/policy
 evidence revision, at most two development roles plus one integration role,
 allowed paths, dependencies, and final acceptance owner. Pass `delivery-mode:
 batch-v1` plus that exact manifest and role to each new Worker. Do not convert
-active nonbatch Workers. Missing READY/policy/CI proof leaves the hold intact.
+active nonbatch Workers into this batch mode. A bounded contribution transfer
+under session-continuity's existing-owner route uses only the audited transfer
+section; it does not activate this batch mode or bypass its gates.
+Missing READY/policy/CI proof leaves the hold intact.
 A00 READY is distinct from A00 Issue closure; A14 waits for applicable
 implementations/evidence, not child closure. Preserve actual functional and
 shared-path dependency gates. Use the three Epic793 boundaries in the contract.

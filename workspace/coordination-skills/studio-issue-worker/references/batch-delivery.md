@@ -2,7 +2,10 @@
 
 Read only for a prompt explicitly assigning `delivery-mode: batch-v1`. Ordinary
 single-Issue Workers keep their existing lifecycle. An Epic link, shared branch,
-label, or this file alone never opts a running Worker into batch mode.
+label, or this file alone never opts a running Worker into batch mode. The audited
+transfer section also supports an explicitly admitted bounded related contribution
+between existing owners, as described there; that exception does not activate
+this document's batch deployment, branch or role contract.
 
 ## Admission and roles
 
@@ -45,6 +48,19 @@ goes back to the child's sole writer. After acceptance, the integration owner
 fixes it, or performs the reverse explicit handoff before a developer resumes.
 
 ## Audited transfer without claiming every child
+
+For a bounded related-work amendment outside `batch-v1`, the Dispatcher first
+records the exact donor/recipient actors, native/reservation generations, current
+primary item, Issue obligations, paths/head, remaining acceptance/closure owner,
+allowed writes and exclusions in the existing decisions/checkpoint. Both owners
+read back that same amendment. Use that revision in place of the batch/manifest
+identity below, and mark the released child `integration-owned` instead of
+`batch-owned`. The recipient's current primary remains unchanged; no integration
+branch, new role, batch launch, ENV or production permission is implied. The
+ordinary review/merge rules of the recipient's assignment remain in force. Every
+offer/acknowledgement/release/acceptance and custody check below still applies.
+A retired donor cannot participate: its legitimate controller must reconcile
+retained custody first, and any unsupported transfer stays blocked.
 
 The installed CLI has atomic `claim`; `reassign` releases and mentions and is
 not an atomic ownership transfer. Never describe it as compare-and-swap. Use
