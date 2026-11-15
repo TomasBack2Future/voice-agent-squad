@@ -175,12 +175,13 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 // replace a newer decision even when their message was posted later.
 func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Decision, error) {
 	var d Decision
-	if err := s.precheck(ctx, q); err != nil {
+	facts, err := s.precheck(ctx, q)
+	if err != nil {
 		return d, err
 	}
-	err := store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
+	err = store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
 		var e error
-		d, e = s.decideTx(ctx, tx, actor, q)
+		d, e = s.decideTx(ctx, tx, actor, q, facts)
 		return e
 	})
 	if err == nil {
@@ -191,28 +192,31 @@ func (s Store) Decide(ctx context.Context, actor string, q DecisionRequest) (Dec
 
 // precheck validates a request and verifies live PR facts outside any
 // transaction; decideTx re-checks everything that depends on the ledger.
-func (s Store) precheck(ctx context.Context, q DecisionRequest) error {
+func (s Store) precheck(ctx context.Context, q DecisionRequest) (PRFacts, error) {
+	var facts PRFacts
 	if q.MergePolicy != "" && q.MergePolicy != "standing" && q.MergePolicy != "release-required" {
-		return ErrInvalidEvent
+		return facts, ErrInvalidEvent
 	}
 	if q.MergeRelease != nil {
 		if q.Action != "proceed" {
-			return &Rejection{Condition: "invalid-merge-release", Repair: "a merge release can only accompany a proceed decision"}
+			return facts, &Rejection{Condition: "invalid-merge-release", Repair: "a merge release can only accompany a proceed decision"}
 		}
 		if err := q.MergeRelease.validate(time.Now()); err != nil {
-			return err
+			return facts, err
 		}
-		if err := q.MergeRelease.verify(ctx, s.PRFacts); err != nil {
-			return err
+		var err error
+		facts, err = q.MergeRelease.verify(ctx, s.PRFacts)
+		if err != nil {
+			return facts, err
 		}
 	}
 	if q.ExpectedRevision < 0 || (q.Action != "proceed" && q.Action != "hold") || len(q.Condition) > 500 || (q.Action == "hold" && strings.TrimSpace(q.Condition) == "") {
-		return ErrInvalidEvent
+		return facts, ErrInvalidEvent
 	}
-	return validateWaits(q, q.Reservation, time.Now())
+	return facts, validateWaits(q, q.Reservation, time.Now())
 }
 
-func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q DecisionRequest) (Decision, error) {
+func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q DecisionRequest, facts PRFacts) (Decision, error) {
 	var d Decision
 	err := func() error {
 		var item string
@@ -228,6 +232,19 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 		if err != nil {
 			return err
 		}
+		if q.MergeRelease != nil {
+			var body string
+			if err = tx.QueryRowContext(ctx, `SELECT m.body FROM messages m WHERE m.repo_id=? AND m.id=? AND m.thread=? AND m.agent_id=? AND m.ts>=(SELECT reserved_at FROM dispatch_reservations WHERE repo_id=? AND item_id=? AND generation=?)`, s.Repo, q.MergeRelease.EvidenceOutcome, item, actor, s.Repo, q.Reservation, q.Generation).Scan(&body); errors.Is(err, sql.ErrNoRows) {
+				return &Rejection{Condition: "invalid-merge-release", Repair: "evidence_outcome must be your own message on the canonical item thread, posted after this assignment started"}
+			}
+			if err != nil {
+				return err
+			}
+			if err = q.MergeRelease.verifyDisputes(body, facts.AdvisoryFailures); err != nil {
+				return err
+			}
+		}
+
 		var old Decision
 		oldWaits := "[]"
 		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy,CASE WHEN waits_revision=revision THEN waits_for ELSE '[]' END,CASE WHEN waits_revision=revision THEN blocks_phase ELSE '' END,CASE WHEN waits_revision=revision THEN wait_deadline ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy, &oldWaits, &old.BlocksPhase, &old.WaitDeadline)
@@ -258,7 +275,7 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 				if e != nil {
 					return e
 				}
-				if rel == nil || rel.PRRepo != q.MergeRelease.PRRepo || rel.PRNumber != q.MergeRelease.PRNumber || rel.HeadSHA != q.MergeRelease.HeadSHA || rel.BaseSHA != q.MergeRelease.BaseSHA {
+				if rel == nil || rel.PRRepo != q.MergeRelease.PRRepo || rel.PRNumber != q.MergeRelease.PRNumber || rel.HeadSHA != q.MergeRelease.HeadSHA || rel.BaseSHA != q.MergeRelease.BaseSHA || rel.EvidenceOutcome != q.MergeRelease.EvidenceOutcome {
 					return ErrStaleDecision
 				}
 			}
@@ -284,13 +301,6 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 			return err
 		}
 		if q.MergeRelease != nil {
-			var evidence int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM messages m WHERE m.repo_id=? AND m.id=? AND m.thread=? AND m.agent_id=? AND m.ts>=(SELECT reserved_at FROM dispatch_reservations WHERE repo_id=? AND item_id=? AND generation=?)`, s.Repo, q.MergeRelease.EvidenceOutcome, item, actor, s.Repo, q.Reservation, q.Generation).Scan(&evidence); err != nil {
-				return err
-			}
-			if evidence != 1 {
-				return &Rejection{Condition: "invalid-merge-release", Repair: "evidence_outcome must be your own message on the canonical item thread, posted after this assignment started"}
-			}
 			r := q.MergeRelease
 			if _, err = tx.ExecContext(ctx, `INSERT INTO dispatch_merge_releases(repo_id,reservation_key,generation,item_id,decision_revision,pr_repo,pr_number,head_sha,base_sha,evidence_outcome,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, s.Repo, q.Reservation, q.Generation, item, d.Revision, r.PRRepo, r.PRNumber, r.HeadSHA, r.BaseSHA, r.EvidenceOutcome, r.ExpiresAt); err != nil {
 				return err

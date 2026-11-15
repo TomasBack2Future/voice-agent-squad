@@ -1275,6 +1275,59 @@ except exactly `gh pr merge N --repo OWNER/REPO --squash|--merge|--rebase
 Claude PreToolUse hook only; workers on other runtimes, sessions started without the hook, and
 merges built by scripts or interpreters are not intercepted, and review/CI are verified
 at issue time, not at merge time.
+Merge-check reads include both branch protection and active branch rules, all
+rollup pages (at most 1,000 checks), each Check Run's head and publisher, and
+requiredness. Missing required checks, unreadable policy or metadata, and
+pending/failing ordinary checks refuse issuance. Check contexts remain App-pinned
+where the host policy specifies an integration. All ordinary rollup checks retain
+the existing success/skipped/neutral rule; this does not waive assignment-level
+CI or review requirements that are stricter than hosting settings.
+
+A `grok-review-shadow` **blocking finding** is advisory only when it is not
+required by either host policy surface and its App ID matches the installed
+review configuration (`SQUAD_GROK_REVIEW_CONFIG`, otherwise the platform user-config
+`squad/grok-review.json`). Only the App ID is read; no key is loaded or token
+minted. Unknown review modes, wrong/missing publishers, enforced `grok-review`,
+pending reviews and review-tool errors cannot use the exception. A private App
+redacted from GraphQL is resolved via the same Check Run's REST metadata, with
+identity and result consistency checks; an unreadable publisher fails closed.
+
+To release over such a failed advisory finding, `--merge-evidence` must point to
+an existing Dispatcher-authored canonical-thread message whose **entire body**
+is JSON of this form (ordinary successful-check releases still accept prose):
+
+```json
+{
+  "schema": "squad.merge-review-disputes.v1",
+  "repository": "owner/repository",
+  "pr": 7,
+  "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "disputes": [{
+    "check_run_id": 42,
+    "app_id": 123,
+    "app_slug": "review-app",
+    "external_id": "local-grok-attempt:ATTEMPT:INPUT_HASH",
+    "mode": "shadow",
+    "verdict": "disproved",
+    "finding": "Original finding reference",
+    "evidence": "Source and regression evidence references",
+    "reason": "Why the alleged failure is unreachable under the actual contract"
+  }]
+}
+```
+
+Supply exactly one verified dispute for each live failed advisory publication.
+The repository, PR, head, current base tip, Check Run, App and attempt identity
+must match. This is the responsible Dispatcher's evidence-backed attestation,
+not automatic proof that the model is wrong. The check and original finding are
+preserved; there is no admin bypass or re-sampling. The message author, canonical
+thread, assignment age and dispute contents are checked inside the existing
+atomic decision transaction, including idempotent retries and `decision-reorder`.
+No new ledger or installation is created. MCP decision writes still do not
+expose merge release issuance; this exception uses the same CLI-only release
+route as ordinary releases.
+
 Each hook observation also records the `binary` (`version`, resolved `path`, executable
 `sha256`) of the squad executable that served that tool call. `worker-native-hook-get
 NATIVE` therefore shows which installed version the real native's most recent tool call
