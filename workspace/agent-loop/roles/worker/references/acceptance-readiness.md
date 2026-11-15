@@ -89,6 +89,30 @@ implementation, not after rollout.
 
 ## Design verification from behavior, not from the patch
 
+Before calling a repair ready for review/merge, bind its critical failure
+conditions to executable evidence in the existing acceptance mapping:
+
+- **Original failing state:** old persisted data, partial completion, ambiguous
+  writes, repeats or concurrent events that caused the defect. Prove the failure
+  on the relevant old revision and recheck that path on the fix where feasible;
+  a fresh successful object alone does not prove a repair of historical state.
+- **Relevant maximum scale:** use the known largest supported fixture's counts,
+  byte sizes and fan-out, with provenance. A sanitized synthetic fixture may
+  reproduce those properties; a small sample only qualifies setup. For resource
+  failures, measure process memory/work as well as logical counters. Keep bounded
+  isolation and abort limits; do not deliberately exhaust a shared environment.
+- **Producer-to-consumer contract:** exercise the real implementations at the
+  changed boundary with the actual serialized shape, version and error response.
+  Test doubles may control faults; they cannot establish that a real producer's
+  response is accepted and completed by its consumer. Validate the double against
+  that contract before using its verdict to change product code.
+
+Apply only the conditions relevant to the original defect and name the evidence
+for each. Missing required evidence is a concrete readiness gap, not a green
+claim. Use authorized local/isolated execution for source gates; keep separately
+required deployed/production checks in their assigned phase. This does not grant
+production access or turn every local check into another environment approval.
+
 Derive checks from the user-visible behavior and state transitions the change
 promises, then from the first symptom. For retries, idempotency, persistence
 and version compatibility, cover by risk: data written by the old code read by
@@ -104,6 +128,39 @@ When an acceptance check fails, first try to disprove the failing assertion
 with the smallest discriminating check before changing code, schema, DDL or
 asking for permissions. Commit a regression only when it guards lasting
 behavior; keep valid evidence and repeat only checks a change actually affects.
+
+## Dispose of a failed assertion before rerunning
+
+Update the existing failed assertion with its target/revision, operation/trace,
+expected versus actual result, and one evidenced disposition:
+
+- **Product:** the required behavior failed with valid inputs and a qualified
+  observation. The same repair owner fixes the cause and adds the discriminating
+  regression; keep the original Issue open.
+- **Acceptance tool or fixture:** the request, protocol fixture, observation or
+  assertion does not represent the original criterion. Correct that specific
+  path and verify it against the real contract. Mark the old attempt invalid;
+  do not turn it into PASS or change the criterion to fit the result.
+- **External:** identify the actual dependency and failed condition, such as
+  expired credentials or unavailable service, with bounded recovery evidence.
+  Resume only after that condition changes or a supported transient retry applies.
+- **Unknown:** perform one bounded discriminating check that separates the
+  plausible causes; do not classify the product from a tool error alone.
+
+Before the next attempt, name what changed and the exact assertions invalidated
+by that change. Retain the other evidence with its applicability. An unchanged
+deterministic failure is not another full acceptance run; existing safe transient
+retry limits and required final CI/review gates still apply. Use this disposition
+inside the admitted execution scope without asking for routine permission.
+
+At closeout, compare each original required criterion with the actual evidence
+and required environment. Use passed, failed, not-executed, or not-applicable
+with the requirement-based reason. An unavailable fixture, omitted diagnostic or
+unconstructible live failure is not not-applicable and does not authorize a weaker
+evidence layer. Keep the Issue open for the specific gap and owner. A required
+criterion changes only through the existing explicit scope-decision route; never
+request a waiver merely to improve closure counts. Preserve valid evidence when
+correcting an earlier closure.
 
 ## Choose the shortest authorized verification path
 
