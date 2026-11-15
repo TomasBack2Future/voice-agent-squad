@@ -52,7 +52,13 @@ The review costs less than a minute of wall-clock. A production incident costs h
 
 ## How to handle findings
 
-- **If correct:** fix the code, re-run the verification gates, paste the new green output, then proceed to commit.
+- **If correct:** a bound Agent Loop Worker first reads its installed role's
+  `references/review-readiness.md` blocking-finding repair protocol: the authorized
+  implementer-model transition, original/affected-invariant coverage and recurrence
+  reassessment. A standalone plugin session follows its own repository/workspace
+  model policy without requiring an Agent Loop installation or Dispatcher. Keep
+  the reviewer independent. Fix, rerun relevant gates and the required complete-diff
+  review before delivery; retain actual evidence and consumed attempts.
 - **If wrong or based on a misreading:** push back with evidence. Cite the actual code, the test that covers it, or the documentation. Do not silently rewrite to placate.
 - **If real but out of scope:** file a new BUG/DEBT item, link via `relates-to`, address only the in-scope portion in this commit.
 - **If the reviewer found the bug does not reproduce:** reclassify the item per `squad-premise-validation` and the squad-loop close-out.

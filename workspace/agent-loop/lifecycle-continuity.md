@@ -38,7 +38,11 @@ default. Pass the chosen mode explicitly on new sessions and supported resume.
 Claude `auto` is not `bypassPermissions`; Muse YOLO and Codex full-access/never
 are runtime-specific choices, not interchangeable command-line flags. Read the
 installed CLI contract and verify both process configuration and actual runtime
-state. Preserve model and effort. Do not infer a child's mode from its parent.
+state. Preserve model and effort unless an explicit current user/workspace model
+policy requires a qualified transition (including the Worker's
+[blocking-finding protocol](roles/worker/references/review-readiness.md#repair-after-a-blocking-finding));
+that transition preserves effort and permissions. Do not infer a child's mode
+from its parent.
 
 A mismatch is a launch/continuation defect: correct it using existing human
 permission at an owned safe boundary, preserve the native session and custody,

@@ -62,6 +62,33 @@ session or stealing locks. An explicit user takeover request still requires
 custody verification. Compare providers using comparable evidence; record
 handoff overhead separately rather than attributing all delay to a model.
 
+## Review-failure model transition
+
+Apply the Worker's [blocking-finding repair protocol](../../../agent-loop/roles/worker/references/review-readiness.md#repair-after-a-blocking-finding)
+within the continuing canonical assignment. Verify the finding, exact review
+tuple, current effective implementation model and user/workspace-selected
+escalation model. Use an existing authorized model policy without another human
+approval; tool failures and disproven findings do not qualify. Keep the reviewer
+independent and unchanged. Already on the selected model needs no redundant switch.
+
+Publish the bounded transition through the existing effective decision/readback
+route. At an owned safe boundary, use the installed client's supported model
+change or same-native resume; preserve effort, permission mode, source, claims,
+external operations and consumed attempts. Verify actual runtime model and owner
+readback before repair edits. Do not infer adoption from actor/title, a sent
+instruction or startup flags alone. A resume requires the old local writer to be
+joined; do not create another reservation, overlap writers or interrupt a valid
+review, CI or rollout just for policy adoption. If that runtime cannot perform a
+qualified transition, record the precise capability gap and retain custody;
+unrelated authorized work continues.
+
+For recurrence, require the existing owner to read back the compact repair brief
+and revised mechanism/verification plan before more patches, including owners
+already on the escalation model. Keep this in the current checkpoint and normal
+decision cycle, not a new approval ladder, timer or reviewer role. During live
+adoption, inspect continuing work once for an existing trigger; do not reopen
+completed repairs or rerun unchanged valid reviews to manufacture one.
+
 ## Repair the assigned outcome before admitting another Issue
 
 An omitted original requirement, failed original acceptance assertion or regression

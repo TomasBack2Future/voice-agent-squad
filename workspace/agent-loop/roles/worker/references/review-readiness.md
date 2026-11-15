@@ -97,12 +97,58 @@ cases, join and mark the old attempt superseded before registering another one.
 Return to implementation, collect all known corrections, repeat the complete
 admission audit and freeze one new final tuple.
 
-A valid blocking review finding is verified against the Issue and repository
-contract. Fix a real finding on a substantive new head, rerun relevant gates and
-admission, then review the new final complete diff once. Do not resample the same
+A valid blocking review finding follows the repair protocol below. Rerun relevant
+gates and admission, then review the new final complete diff once. Do not resample the same
 unchanged tuple, create no-op commits, lower effort or run overlapping reviewers
 to seek approval.
 
 Record the total invocation count, superseded/stale count, post-freeze commit
 count, and safe wasted-duration/token metrics in the checkpoint. These are
 efficiency signals, never authority to skip a required current-head review.
+
+## Repair after a blocking finding
+
+Verify the finding against the original Issue requirements and the reviewed
+revision before accepting it. A valid blocking finding is a demonstrated defect
+that prevents the assigned outcome or violates a required repository contract;
+the review command failing is not itself such a finding. Timeouts, tool/provider
+errors, nonblocking suggestions and disproven false positives do not trigger an
+implementation-model change. An unresolved finding needs one discriminating
+check, not automatic acceptance or dismissal.
+
+At the first valid blocking finding in the continuing canonical repair, switch
+the **implementer** to the escalation model selected by the user/workspace before
+the next repair edit. Do not change the independent reviewer's model, mechanism
+or verdict contract. Use the existing Dispatcher transition and readback route
+under [session continuity](../../../../coordination-skills/squad-dispatcher/references/session-continuity.md#review-failure-model-transition).
+If no escalation model/authority is selected, request that one decision; never
+invent a fallback. Already using the selected model satisfies the model gate.
+Another PR or resume for the same unfinished outcome does not reset this rule.
+
+Record the review tuple, verified finding and invariant, current/selected model
+and observed transition in the existing checkpoint. Preserve owner, native
+identity, branch, uncommitted work, valid evidence and consumed review attempts.
+Join the review and honor its write barrier; do not kill an in-flight operation
+to switch models. A queued request or model name in a title is not adoption.
+
+Before editing, map the original failure and the conditions the repair could
+break to checks in the existing acceptance mapping. For concurrency/retry code,
+consider a committed operation whose response is lost, duplicate requests and
+cancel/execution interleavings; exercise each relevant sequence and its durable
+downstream result. Explain inapplicability by the actual contract. A test that
+only mirrors the finding is insufficient when the change affects other states.
+Use the [behavior-first verification contract](acceptance-readiness.md#design-verification-from-behavior-not-from-the-patch);
+this does not require a new acceptance tool or a blanket full-suite rerun.
+
+If the same causal mechanism or violated invariant recurs after a repair,
+including a repair-induced regression, stop incremental patches. Keep the same
+owner and code and prepare a compact brief: original requirements/non-goals,
+current complete diff and exact revisions, failing event order, affected state
+transitions/invariants, prior attempted fixes and still-valid evidence. Under the
+selected escalation model, reassess the state transitions, commit boundaries and
+producer/consumer contract before choosing one coherent in-scope repair. Record
+why it fixes the mechanism and how the original and affected conditions will be
+rechecked, then implement and review the new complete diff. Already using that
+model still requires this reassessment. Similar wording or a repeated tool error
+alone is not recurrence. Do not reset review budgets, discard valid work, launch
+a replacement owner or widen the product scope to achieve a clean context.
