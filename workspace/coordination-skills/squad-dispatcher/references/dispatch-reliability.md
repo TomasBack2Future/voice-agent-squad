@@ -71,6 +71,39 @@ These instructions reduce recurrence but do not implement API-level idempotency.
 
 ## Convergence supervision
 
+For a closeout request, freeze the target Issue IDs and the selection basis in
+the existing batch/checkpoint once. Separate not-started requirements from work
+already changed; do not silently expand the denominator when new Issues arrive.
+Keep original omissions and regressions on their existing target. A change to
+batch membership records its reason and authority, not a new queue scan.
+
+Each target has one current row: original remaining criterion and its requirement
+reference; valid evidence with component/fixture identity; accountable owner and
+reservation; exactly one next action; and its execution scope or actual blocker.
+The next action names the operation, existing inputs and observable result, not
+"coordinate", "investigate further" or "await review" without an identified
+operation. A blocked row names the missing condition and the event/action that
+can change it. An ownerless row's next action is a supported ownership assignment
+by the Dispatcher; do not invent an owner or revive a retired native session.
+Update these current cells when a result arrives. Historical deltas may remain
+as audit evidence, but readers must not have to replay them to discover current
+status; derive counts from the current rows. Read changed targets and actual
+dependencies in later cycles instead of rebuilding the whole inventory.
+
+Admit a bounded execution scope once: target and fixture, permitted operations,
+call/cost/time bounds, cleanup/recovery and stop conditions. The owner completes
+its ordinary steps continuously, including valid readbacks and cleanup, without
+per-assertion approval. Return a decision only for an actual authority/scope/risk
+change or an explicit hold; a failed assertion first follows the Worker's
+[failure disposition](../../../agent-loop/roles/worker/references/acceptance-readiness.md#dispose-of-a-failed-assertion-before-rerunning).
+Keep source readiness, release admission and final closure distinct.
+
+Count closure only after the original criterion-to-evidence mapping and cleanup
+are satisfied. A required live assertion cannot become a local-test assertion
+because its fixture is unavailable. On a disputed or premature closure, reconcile
+through the existing owner, restore OPEN when gates remain, remove the completed
+count, and preserve applicable passed evidence and the same repair responsibility.
+
 The supervision set is the unfinished work in the authorized batch, not the set
 of live sessions. Keep partially retired and unassigned Issues in that set until
 acceptance and cleanup are complete, or the user explicitly removes them from

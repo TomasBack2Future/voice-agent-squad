@@ -57,6 +57,12 @@ self-review. Inspect every applicable companion surface for the complete change:
 Mark each surface complete or not applicable with a reason. Resolve all known
 corrections before review. A clean worktree alone is not readiness.
 
+For a repair, apply the [critical failure conditions](acceptance-readiness.md#design-verification-from-behavior-not-from-the-patch)
+before this declaration: original failed state, relevant maximum scale and real
+producer/consumer boundary. Include their existing evidence or precise gap in
+the review input. A small happy-path fixture or mock-only pass cannot discharge
+a required condition that it does not exercise.
+
 Create a durable admission receipt containing the repository and PR, base and
 head SHAs, complete-diff hash, substantive PR-body hash, clean-worktree and
 remote-head verification, completed fast gates, required/completed companion
