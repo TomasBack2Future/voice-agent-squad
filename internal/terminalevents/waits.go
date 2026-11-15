@@ -417,19 +417,22 @@ func (s Store) DecideBatch(ctx context.Context, actor string, qs []DecisionReque
 		return nil, &Rejection{Condition: "invalid-reorder", Repair: "a reorder carries 1 to 8 decisions"}
 	}
 	seen := map[string]bool{}
-	for _, q := range qs {
+	facts := make([]PRFacts, len(qs))
+	for i, q := range qs {
 		if seen[q.Reservation] {
 			return nil, &Rejection{Condition: "invalid-reorder", Repair: "each reservation appears once per reorder"}
 		}
 		seen[q.Reservation] = true
-		if err := s.precheck(ctx, q); err != nil {
+		var err error
+		facts[i], err = s.precheck(ctx, q)
+		if err != nil {
 			return nil, err
 		}
 	}
 	out := make([]Decision, len(qs))
 	err := store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
 		for i, q := range qs {
-			d, err := s.decideTx(ctx, tx, actor, q)
+			d, err := s.decideTx(ctx, tx, actor, q, facts[i])
 			if err != nil {
 				return &BatchError{Index: i, Reservation: q.Reservation, Err: err}
 			}

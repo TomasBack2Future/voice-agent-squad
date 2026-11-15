@@ -3,8 +3,10 @@ package terminalevents
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -24,10 +26,11 @@ type MergeRelease struct {
 
 // PRFacts is the live state read from the code host when a release is issued.
 type PRFacts struct {
-	State        string
-	HeadSHA      string
-	BaseTipSHA   string
-	ChecksPassed bool
+	State            string
+	HeadSHA          string
+	BaseTipSHA       string
+	ChecksPassed     bool
+	AdvisoryFailures []AdvisoryReview
 }
 
 // PRReader reads the pull request's current facts; nil means unavailable.
@@ -52,25 +55,26 @@ func (r MergeRelease) validate(now time.Time) error {
 
 // verify checks the live facts the Dispatcher attests: open PR, exact head, the
 // base branch tip the release was prepared against, and passing required checks.
-func (r MergeRelease) verify(ctx context.Context, read PRReader) error {
+func (r MergeRelease) verify(ctx context.Context, read PRReader) (PRFacts, error) {
+	var empty PRFacts
 	if read == nil {
-		return &Rejection{Condition: "merge-release-unverifiable", Repair: "live pull request state is unavailable; no release was recorded"}
+		return empty, &Rejection{Condition: "merge-release-unverifiable", Repair: "live pull request state is unavailable; no release was recorded"}
 	}
 	f, err := read(ctx, r.PRRepo, r.PRNumber)
 	if err != nil {
-		return &Rejection{Condition: "merge-release-unverifiable", Repair: "live pull request read failed; no release was recorded"}
+		return empty, &Rejection{Condition: "merge-release-unverifiable", Repair: "live pull request read failed; no release was recorded"}
 	}
 	switch {
 	case f.State != "OPEN":
-		return &Rejection{Condition: "merge-release-stale", Repair: "pull request is not open"}
+		return empty, &Rejection{Condition: "merge-release-stale", Repair: "pull request is not open"}
 	case f.HeadSHA != r.HeadSHA:
-		return &Rejection{Condition: "merge-release-stale", Repair: "pull request head changed; re-review and issue a new release for the new head"}
+		return empty, &Rejection{Condition: "merge-release-stale", Repair: "pull request head changed; re-review and issue a new release for the new head"}
 	case f.BaseTipSHA != r.BaseSHA:
-		return &Rejection{Condition: "merge-release-stale", Repair: "base branch advanced; revalidate against the new base and issue a new release"}
+		return empty, &Rejection{Condition: "merge-release-stale", Repair: "base branch advanced; revalidate against the new base and issue a new release"}
 	case !f.ChecksPassed:
-		return &Rejection{Condition: "merge-release-unmet", Repair: "required checks have not passed on the exact head"}
+		return empty, &Rejection{Condition: "merge-release-unmet", Repair: "required checks have not passed on the exact head"}
 	}
-	return nil
+	return f, nil
 }
 
 func currentRelease(ctx context.Context, q interface {
@@ -85,4 +89,59 @@ func currentRelease(ctx context.Context, q interface {
 		return nil, err
 	}
 	return &r, nil
+}
+
+// AdvisoryReview identifies the actual failed publication, not just a check name.
+type AdvisoryReview struct {
+	CheckRunID int64  `json:"check_run_id"`
+	AppID      int64  `json:"app_id"`
+	AppSlug    string `json:"app_slug"`
+	ExternalID string `json:"external_id"`
+	Mode       string `json:"mode"`
+}
+
+// The Dispatcher authors this record in the existing canonical evidence message.
+// Evidence is an accountable human/owner attestation, not a machine proof of a finding.
+type reviewDisputeEvidence struct {
+	Schema     string `json:"schema"`
+	Repository string `json:"repository"`
+	PR         int64  `json:"pr"`
+	HeadSHA    string `json:"head_sha"`
+	BaseSHA    string `json:"base_sha"`
+	Disputes   []struct {
+		AdvisoryReview
+		Verdict  string `json:"verdict"`
+		Finding  string `json:"finding"`
+		Evidence string `json:"evidence"`
+		Reason   string `json:"reason"`
+	} `json:"disputes"`
+}
+
+func (r MergeRelease) verifyDisputes(body string, failures []AdvisoryReview) error {
+	if len(failures) == 0 {
+		return nil
+	}
+	reject := &Rejection{Condition: "merge-review-dispute-required", Repair: "merge evidence must contain a verified dispute for every failed advisory review on this exact repo/PR/head/base and Check/App publication"}
+	var e reviewDisputeEvidence
+	if json.Unmarshal([]byte(body), &e) != nil || e.Schema != "squad.merge-review-disputes.v1" || e.Repository != r.PRRepo || e.PR != r.PRNumber || e.HeadSHA != r.HeadSHA || e.BaseSHA != r.BaseSHA || len(e.Disputes) != len(failures) {
+		return reject
+	}
+	seen := map[int64]bool{}
+	for _, d := range e.Disputes {
+		if seen[d.CheckRunID] || d.Mode != "shadow" || d.Verdict != "disproved" || strings.TrimSpace(d.Finding) == "" || strings.TrimSpace(d.Evidence) == "" || strings.TrimSpace(d.Reason) == "" {
+			return reject
+		}
+		found := false
+		for _, f := range failures {
+			if d.AdvisoryReview == f {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return reject
+		}
+		seen[d.CheckRunID] = true
+	}
+	return nil
 }
