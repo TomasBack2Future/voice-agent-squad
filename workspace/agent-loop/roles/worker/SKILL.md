@@ -94,6 +94,8 @@ attribution and interrupted ENV ownership.
   idempotency, concurrency, retry or migration changes, run the profile's risk
   probes before the first independent review.
 - Before independent review, follow [review readiness](references/review-readiness.md).
+  After a valid blocking finding, follow its implementation-model transition,
+  affected-invariant coverage and recurring-defect reassessment before repair.
   Start at the first stable complete implementation, independently of merge
   holds, full CI and environment waits. Admit one final, complete `base...head` PR diff only after the companion audit,
   fast gates and author self-review pass. A reviewer evaluates that aggregate
