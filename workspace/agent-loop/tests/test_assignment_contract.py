@@ -59,7 +59,8 @@ class ScannerTests(unittest.TestCase):
                    "After the assessment, wait for the user's authorization before any production mutation.",
                    '调查后如需新增生产权限，请求用户授权。',
                    'After the dry-run, request a Dispatcher decision only if the result exceeds the CNY 10 budget.',
-                   'Request a merge-release decision for each phase of the window.']:
+                   'Request a merge-release decision for each phase of the window.',
+                   'When the investigation shows production access is needed, request authorization from the user.']:
             self.assertEqual(contract.findings(ok), [], ok)
         for rule, text in bad.items():
             self.assertIn(rule, [r for r, _ in contract.findings(text)], text)
