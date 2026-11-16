@@ -34,6 +34,35 @@ class ScannerTests(unittest.TestCase):
         for rule, text in more:
             self.assertIn(rule, [r for r, _ in contract.findings(text)], text)
         self.assertEqual(contract.findings('预关单审批已取消，不再需要'), [])
+        gated = [('gated-follow-on', 'After the assessment, request approval before executing the retry.'),
+                 ('gated-follow-on', 'Once the qualification passes, wait for a Dispatcher decision to run the Simulation.'),
+                 ('gated-follow-on', 'After the dry-run, submit a decision-request and run the migration only after proceed.'),
+                 ('gated-follow-on', 'Assess the fixture; then hold until the Dispatcher confirms the run.'),
+                 ('gated-follow-on', 'No customer data in fixtures, and after the dry-run wait for a Dispatcher decision.'),
+                 ('gated-follow-on', '资格核定完成后等待 Dispatcher 决定再执行'),
+                 ('gated-follow-on', '評估後提交 decision-request 再执行'),
+                 ('gated-follow-on', 'After the assessment, request Dispatcher approval before executing; never touch production.'),
+                 ('gated-follow-on', 'After the evaluation of the user flow, wait for a Dispatcher decision before running it.'),
+                 ('gated-follow-on', 'After the assessment, request a Dispatcher decision before running the CNY 2 Simulation.'),
+                 ('gated-follow-on', 'After the assessment, ask the Dispatcher for approval before executing.'),
+                 ('gated-follow-on', 'After the assessment, request approval of the user story from the Dispatcher before executing.'),
+                 ('per-step-approval', 'Ask for a decision before each assertion.'),
+                 ('per-step-approval', 'Request approval before running every assertion.'),
+                 ('per-step-approval', 'Each acceptance assertion needs a Dispatcher decision first.'),
+                 ('per-step-approval', '每一步都要申请 Dispatcher 审批')]
+        for rule, text in gated:
+            self.assertIn(rule, [r for r, _ in contract.findings(text)], text)
+        for ok in ['Assess X; if condition C holds, execute Y within this scope.',
+                   'Do not request approval for each assertion.',
+                   'After the assessment, never wait for another approval before executing.',
+                   '评估完成后无需等待批准，满足条件直接执行',
+                   'Once the preflight passes, request a merge-release decision for the exact head.',
+                   "After the assessment, wait for the user's authorization before any production mutation.",
+                   '调查后如需新增生产权限，请求用户授权。',
+                   'After the dry-run, request a Dispatcher decision only if the result exceeds the CNY 10 budget.',
+                   'Request a merge-release decision for each phase of the window.',
+                   'When the investigation shows production access is needed, request authorization from the user.']:
+            self.assertEqual(contract.findings(ok), [], ok)
         for rule, text in bad.items():
             self.assertIn(rule, [r for r, _ in contract.findings(text)], text)
         for ok in ['Do not request ready-to-close approval.', '不要提交例行 ready-to-close 请求',

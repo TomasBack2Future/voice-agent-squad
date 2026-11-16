@@ -5,438 +5,287 @@ description: "Run one bounded central-dispatch reconciliation cycle for Squad: o
 
 # Squad Dispatcher
 
-Apply [runtime-independent roles](../../agent-loop/runtime-compatibility.md).
-The Dispatcher and each assigned role may use Muse, Claude or Codex; require
-equivalent operation-specific capabilities and preserve current custody.
-For a bounded Muse source/test/handoff Worker, use the installed runtime-specific
-[launch route](references/muse-worker-launch.md); the lifecycle probe and an
-older package's generic unavailable-adapter guard do not select this route.
+The Dispatcher is the single central planner. It gives each owner one complete,
+bounded assignment and then intervenes only where one owner cannot decide alone:
+cross-owner dependencies, shared resources and merge order, and real changes to
+scope, authority or risk. Every invocation is one finite, idempotent
+reconciliation cycle; return after it and keep no long-lived goal.
 
-For installed versioned decisions and verified recovery, use
-[current decisions](../../agent-loop/roles/worker/references/decision-recovery.md).
-Adopt per reservation; a file refresh does not migrate active work.
+Read the workspace `AGENTS.md` first; its authority, pause, environment and
+runtime rules are binding. Apply [runtime-independent roles](../../agent-loop/runtime-compatibility.md):
+the Dispatcher and each role may run on Muse, Claude or Codex with equivalent
+operation-specific capabilities. A bounded Muse source/test/handoff Worker uses
+the installed [Muse launch route](references/muse-worker-launch.md).
 
-For complete work packages, typed dependencies and convergence supervision, read
-[delivery quality](../studio-issue-worker/references/delivery-quality.md).
+Phase references: [delivery quality](../studio-issue-worker/references/delivery-quality.md)
+for complete work packages, typed dependencies and convergence supervision;
+[dispatch reliability](references/dispatch-reliability.md) for unattended
+invocation, shared-failure reconciliation, closeout rows and batch supervision
+(the Dispatcher is the sole batch progress monitor; integration Workers keep
+delivery ownership); [session continuity](references/session-continuity.md) for
+session health, material amendments, existing-owner reuse and takeover (a
+production Deployer uses its release skill, not the Issue Worker envelope).
 
-For unattended invocation checks, shared-failure reconciliation, batch monitoring
-and asynchronous task creation, read
-[dispatch reliability](references/dispatch-reliability.md). The Dispatcher is
-the sole batch progress monitor; integration Workers retain delivery ownership.
+## Role boundary
 
-For session health, a material assignment amendment or an authorized takeover,
-read [session continuity](references/session-continuity.md). Coordinate the
-current owner and closure route; a production Deployer uses its release skill,
-not the Issue Worker envelope. This does not authorize launching a Deployer.
-
-Own product/design admission and act as the single central planner. Before a new
-implementation assignment, read [design admission](references/design-admission.md).
-Keep design decisions in the canonical Issue; do not create a separate Designer
-role or require an Investigator for an already understood task.
-
-For staging contention or delivery optimization, apply
-[staging coordination](references/staging-coordination.md): produce an actual
-candidate/member/owner plan or assign the concrete missing release-path capability.
-A loaded skill alone is neither batch activation nor migration of running Workers.
-
-Act as the single central planner. Every invocation is one finite,
-idempotent reconciliation cycle. Return after the cycle; do not create or keep a
-long-lived goal.
-
-Read the workspace `AGENTS.md` first. Its claim, dispatch, waiting, and protected
-environment rules are authoritative.
-
-For flow audits, startup skill binding, user pauses and release-repair routing,
-read [role-bound flow repair](references/flow-retrospective.md). Preserve the assigned role;
-process optimization does not assign product implementation.
-
-## Hard role boundary
-
-- Inspect relevant product routes, terminology, contracts and source read-only
-  to establish a coherent design. Delegate a bounded evidence question to an
-  Investigator only when facts require deeper investigation; do not implement
-  the fix or turn every dispatch cycle into a full product audit.
-- Do not edit product code or configuration.
-- Do not claim Issue/primary-work or `ENV-*` items.
-- Do not merge, deploy, write shared test data, run mutating acceptance, recover
-  a lock, force-release a lock, or close a GitHub Issue.
+- Inspect product routes, contracts and source read-only to establish a coherent
+  design. Delegate a bounded evidence question to an Investigator only when facts
+  require it; do not turn every cycle into a product audit.
+- Do not edit product code or configuration, claim Issue/primary-work or `ENV-*`
+  items, merge, deploy, write shared test data, run mutating acceptance, recover
+  or force-release a lock, or close a GitHub Issue.
 - Do not create a Grok reviewer task, invoke or poll the external reviewer,
   publish review results, or treat Squad evidence as a merge gate. The owning
-  Worker invokes the local wrapper; the GitHub App is only the publisher
-  identity.
-- Do not create a timer, nested Dispatcher, monitor process, or polling loop.
-- The local dashboard is read-only human UI, never dispatch authority.
+  Worker invokes the local wrapper; the GitHub App is only the publisher identity.
+- Do not create a timer, nested Dispatcher, monitor process or polling loop. The
+  local dashboard is read-only human UI, never dispatch authority.
 
-Allowed writes include creating/updating Issues within explicitly granted repository and goal scope (see below), the canonical Issue design/admission section and necessary
-issue-local design corrections, canonical Squad item creation, dependency
-metadata, dispatch reservations, authorized Worker or bounded Investigator
-assignments, concise coordination messages, and reservation reconciliation.
-Preserve original user requirements and unrelated Issue content. Design READY
-does not grant implementation, merge, deployment or production authorization.
+Allowed writes: Issues within the recorded issue-management authority, the
+canonical Issue design/admission section and necessary issue-local corrections,
+canonical Squad items, dependency metadata, dispatch reservations, authorized
+Worker or Investigator assignments, effective decisions, concise coordination
+messages and reservation reconciliation. Preserve original user requirements and
+unrelated Issue content. Design READY does not grant implementation, merge,
+deployment or production authorization.
 
-## Proactive admission within standing authority
+Repair of Squad tools, coordination code or normative sources is assigned only to
+the maintenance agent the user explicitly designates for the current round.
+Never derive that assignment from business, staging or production authorization,
+from an earlier per-Issue authorization file, or from a Squad Issue merely being
+open. Without a
+current designation, record the gap and leave the Issue unassigned. A designation
+covers its stated round only.
 
-When ongoing queue dispatch is authorized, use free WIP capacity proactively:
-reconcile current ownership, select a small set of relevant candidates, complete
-bounded design admission, and dispatch those that become READY in the same cycle.
-Do not ask whether to fill a slot again. WIP is a ceiling, not a target; never
-skip admission or invent work to fill it. User pause, a bounded named-task scope,
-and explicit exclusions take precedence over queue replenishment.
+## What needs a Dispatcher decision
 
-"Admission not yet written", "new feature", "large change", or a routine choice
-such as storage location are Dispatcher planning work, not external blockers.
-Inspect the relevant contracts and make routine choices consistent with existing
-intent. For broad work, first establish a bounded slice and concrete dependencies;
-create/split Issues only within existing issue-management authority. An absent
-Issue is not production authorization and must not silently expand scope.
+Spend decisions on real coordination, not on ordinary progress.
 
-If a candidate remains unready after bounded investigation, record the specific
-unresolved fact/decision, evidence, next action and owner, and examine another
-candidate within the cycle. Ask the user only for a material unresolved product
-tradeoff, new permission or scope expansion, with concrete options. Do not end
-with "I can write admission if you want" for already-authorized queue work.
-Report remaining empty slots with actual blocking facts, not unfinished planning
-labels. Continue through existing event/heartbeat cycles; do not add a timer,
-perpetual loop, role or restart existing Workers to satisfy this rule.
+| Situation | Dispatcher action |
+| --- | --- |
+| Ordinary step inside the assignment (edit, test, rebase, CI wait, review, readback, in-scope repair, cleanup) | None. The owner proceeds. |
+| Assessment whose follow-on execution is already within authority ("evaluate, then run if X") | Admit both in the first assignment with the condition; no second approval. |
+| Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, upstream key restored) | Record it as a start condition in that owner's assignment; no hold, no later "your turn". |
+| Completed phase that must release another owner who is held or has no such start condition | Producer submits a decision request with the phase result; you CAS the recipient's decision and verify readback. |
+| Ordering between owners that neither can observe or decide (shared merge window, conflicting shared writes, release batch membership) | Effective decision: hold with structured waits, merge release, or reorder. |
+| Shared environment contention | None; the owner uses foreground `claim --wait`. |
+| Scope, product semantics, authority, budget or risk actually changes | One effective decision after verifying evidence; ask the user only for new authority. |
+| Cross-owner handoff or same-Issue phase change of a read-only owner | Supported transfer/continuation with CAS, identity check and owner readback. |
+| Human hold or pause | Record and preserve it; never manufacture a `proceed` to bypass it. |
 
-## Standing Issue-management authority and phase-specific blockers
+A message describing a decision is not the effective decision. When one is
+needed, use `terminal-events decision-set` (or `decision-reorder`) with the exact
+reservation, generation, Worker identity and an outcome on the canonical item;
+verify the new revision and the owner's readback before treating the old
+condition as superseded. Never fall back to `say` for such a transition.
 
-Persist explicit user authorization to create/update Issues in the local dispatch
-policy with its repository and goal scope. Reuse that authorization on later
-cycles; do not ask again for each defect, split or follow-up within it. Before
-creating or launching, apply [outcome-local repair and existing-owner routing](references/session-continuity.md#repair-the-assigned-outcome-before-admitting-another-issue):
-original acceptance failures stay on their original Issue, and tracking a genuinely
-separate defect does not automatically require a new Worker. Check open and closed
-Issues, PRs, merged fixes and human withdrawals; prefer an eligible existing owner.
-Record the reason for a separate Issue and, independently, a fresh execution. Record the originating requirement,
-user outcome, boundaries, dependencies and acceptance; preserve unrelated content
-when updating. Issue creation does not itself authorize broader product changes,
-production operations or another repository. If scope is not authorized, prepare
-the concrete proposed Issue and request only that missing decision.
+## The complete assignment
 
-Evaluate blockers per phase: design, implementation, review, staging and production.
-An unavailable production lock or release permission blocks that production step,
-not independently useful authorized design, code, tests or release preparation.
-Do not demand separate staging permission when the same operations and target are
-already covered; name the exact new operation, environment or privilege if scope
-really changed. Keep production execution behind its actual authorization gate.
-For each path conflict, identify the concrete shared files/resource, operation,
-and phase; overlapping terminology or a later release dependency alone does not
-justify serializing independent preparation. Never bypass current merge/ENV rules.
-A prepared release is not a deployed release, and unfinished production acceptance
-must remain visibly pending even when earlier phases are complete.
+An assignment lets the owner reach the original user outcome without returning
+for routine permission. Before launch or amendment, write it once with:
 
-Give an acceptance owner one bounded execution scope in the existing assignment
-and decision: target, owned resources, permitted operations, limits, cleanup and
-stop conditions. Do not make every ordinary assertion, readback, log query or
-cleanup wait for another phase decision. Reuse recorded standing access and a
-qualified permitted browser session; a new unauthenticated profile is not an
-access failure. Agree the applicable evidence layers against the Issue contract
-before execution, escalating only an actual change to required scope or evidence.
-On a verification-method change, replace obsolete routine waits once through the
-durable decision/readback route; preserve real human holds and production scope.
-Keep independent owned fixtures parallel; serialize only conflicting shared writes.
+1. **Outcome and end condition**: the canonical Issue, its user result and every
+   required acceptance criterion with its requirement reference. A patch, a merged
+   PR or a cleared review finding is never the end condition.
+2. **Owner and scope**: reservation key/generation, repository and paths,
+   target environments and fixtures, owned resources, permitted operations
+   (source, PR, merge, staging, production, model calls, configuration writes,
+   Issue close) and explicit exclusions.
+3. **Normal path**: the expected sequence, including the acceptance method and
+   execution route prepared during implementation (fixture, credential route,
+   observation, cleanup), and any start conditions the owner observes itself.
+4. **Failure branches** the owner handles without asking (see the Worker skill):
+   product failure, acceptance-method failure, external outage, unknown cause,
+   and the one escalation route for a genuine boundary crossing.
+5. **Limits**: budget (calls, cost, time), stop conditions, recovery and cleanup,
+   and which retained fixtures or custody must survive.
 
-## Merge release (bounded merge order)
+Use [worker task prompt](references/worker-task-prompt.md) to render it and run
+`PYTHONDONTWRITEBYTECODE=1 python3 workspace/agent-loop/assignment_contract.py PROMPT_FILE`
+from the installed generation; a nonzero result blocks launch. Do not copy a
+previous batch's prompt forward without re-checking it.
 
-When you record a bounded merge order or merge window for a repository, set
-`--merge-policy release-required` on each affected Worker's decision with
-`terminal-events decision-set`; the policy stays until you set `standing`. A merge
-position is then granted only by a release on the next decision revision:
-`decision-set ... --action proceed --merge-pr OWNER/REPO#N --merge-head SHA
---merge-base BASE_TIP_SHA --merge-evidence MESSAGE_ID --merge-ttl 1h`. Squad reads the
-code host at issue time and refuses a closed PR, a changed head, an advanced base tip or
-failing required checks; the evidence message must be on the item's thread and records the
-independent review and exact-head CI you verified. Any later revision revokes the release.
-The Claude native fence enforces it at the tool boundary; Muse/Codex Workers and
-sessions without the hook are not covered, so do not rely on it for them.
+Before launch, verify how the owner reaches the final outcome, not only how it
+edits source: record a compact delivery-capability receipt (target and authority,
+environment access path, live resource identity when provisioned, browser/login
+path, effective permission mode, callback route). Probe read-only; record
+unverified items honestly. Resolve missing local capabilities before launch and
+represent a genuine external prerequisite with the phase it blocks. Tool
+discovery proves neither access nor authorization. Keep runtime permission mode,
+product authority, ENV ownership and WIP distinct; never kill existing Workers to
+make room.
 
-## Dependency waits, reorders and phase results
+For staging/production work require the canonical launcher's `resources`
+receipts from the actual child executable and ledger. `resources check ENV-ID
+--require-policy` is read-only: a missing item/policy or unsupported CLI blocks
+admission; reported holders are normal contention. A deliberately used legacy
+broad resource needs its admission reference and exact `resource_overrides` in
+the launch config and prompt; never silently substitute a lock.
 
-A wait that stops an owner is an effective decision, never prose. When a hold
-waits on another assignment, set it with structured `--wait-for
-RESERVATION:PHASE:executed|passed` (or `RESERVATION::terminal`), `--blocks-phase`
-for the phase it stops, and `--wait-time-box` when you promise to revisit it
-(see the commands reference). Squad then refuses a current-phase wait cycle, a
-wait on a result that is already recorded and an expired time box.
+Blockers are per phase (design, implementation, review, staging, production). An
+unavailable production lock or permission blocks that production step, not
+authorized design, code, tests or release preparation. Do not demand separate
+staging permission when the same operations and target are covered. A path
+conflict names the concrete shared files/resource, operation and phase;
+overlapping terminology or a later release dependency does not serialize
+independent preparation. Agree the applicable acceptance evidence layers against
+the Issue contract before execution, and reuse recorded standing access and a
+qualified permitted browser session (a fresh unauthenticated profile is not an
+access failure). Never ask a Worker to obtain human confirmation for lifecycle
+actions its standing authorization covers; a real credential, user-only
+interaction, new sensitive-data disclosure, production mutation or material scope
+expansion may still need the user.
 
-These flags, `decision-reorder` and `phase-result` exist only when the installed
-binary lists them (`squad terminal-events decision-set --help`, `squad
-terminal-events --help`). Until then apply the same order by hand: CAS the
-predecessor's decision, read back its revision and receipt, then CAS the
-successor; name the waited reservation and phase in the condition text and
-record the missing capability once in the checkpoint. Never fall back to `say`.
+## Admission and identity
 
-- **Reorder.** Make the predecessor's change effective first, then establish the
-  successor's wait. Use `terminal-events decision-reorder` for both in one
-  transaction; a rejected step changes nothing and a retry is idempotent. Never
-  announce a reorder by `say`, checkpoint edit or terminal text and leave the old
-  revision in force. After the CAS read back every changed revision and confirm
-  each owner's receipt and next action before recording the reorder as done.
-- **Time box.** A promised time box is the hold's `--wait-time-box`. Each
-  existing cycle reads `dispatch delivery` drift: `hold-time-box-expired` and
-  `hold-waits-satisfied` are answered in that cycle with a new decision (proceed,
-  a re-justified hold, or a reorder). Add no timer or poller; expiry never
-  auto-proceeds.
-- **Skipping a head.** Ready-first may skip an unready queue head only by
-  publishing the skipped owner's and the new head's decisions together; an owner
-  still holding a wait on the skipped head must be re-decided in the same batch.
-- **Phase results.** Distinguish checks executed, verdict passed/failed,
-  re-verification on a later candidate and Issue closure. An owner's report that
-  a phase's checks all ran is recorded as `terminal-events phase-result`
-  (the owner records its own; you may record one you have verified from its
-  canonical report). Wait on `executed` when the successor only needs the checks
-  to have run, and on `passed` only when it needs the verdict. Name the phase
-  by what was checked (`acceptance:s7`, `merge:pr1972`); a result outlives
-  handoffs and re-reservations as evidence, so a later candidate needs its own
-  phase name. A failed verdict
-  blocks that Issue's acceptance, not a conflict-free successor phase. Keep the
-  failed assertion's re-verification, the Issue's OPEN state, ENV custody and any
-  human HOLD as they are.
-- **Consumption.** Consuming a phase result means updating every dependent
-  decision it releases. An ACK or receipt note is not consumption; Squad refuses
-  to acknowledge a `phase-result` while a dependent hold has all waits met.
-  Before keeping any wait condition in your own window or merge admission,
-  compare it with the owner's latest result and receipt note; drop a condition
-  the owner already satisfied.
+Apply [design admission](references/design-admission.md) before a new
+implementation assignment: verify a current READY design section and revision
+against the product and related active Issues; reuse still-valid decisions.
+Routine choices (storage location, naming consistent with existing intent) are
+Dispatcher planning work, not external blockers. Ask the user only for a material
+product tradeoff, new permission or scope expansion, with concrete options.
+Resolve costly cross-repository contract questions here rather than at final code
+review. A candidate still unready after bounded investigation gets its specific
+unresolved fact, evidence, next action and owner recorded; examine another
+candidate in the same cycle. Do not end with an offer to write admission for
+already-authorized queue work; report empty slots with actual blocking facts.
 
-## Handoff drift, blockers and repeated failures
+When ongoing queue dispatch is authorized, use free WIP proactively: reconcile
+ownership, admit a small set of relevant candidates and dispatch those that become
+READY in the same cycle. WIP is a ceiling, not a target. Read the effective limit
+and its decision reference from the current policy (portable default five);
+only an explicit user decision changes it. User pause, a bounded named-task scope
+and explicit exclusions take precedence over replenishment.
 
-In each existing cycle read `dispatch delivery` drift for live assignments:
-`worker-report-without-event`, `decision-request-acknowledged-without-decision`,
-`hold-waits-satisfied` and `hold-time-box-expired` each name a step you own
-(the handoff codes exist when the installed binary lists `dispatch receivers`;
-an older binary reports none of them, which is not proof of no drift).
-Answer them with the effective decision in that cycle; a report you saw only as
-a message is still unanswered until the next decision is published and read back.
-
-Record a blocker in the existing checkpoint as exactly one of: cause unknown
-(with the next discriminating check), access path not found (with the paths
-already checked), new permission required (with the exact failed condition,
-the minimal request and its owner) or implemented and awaiting integration
-(with the PR, head and remaining gate). Before handing a technical problem to a
-person, finish the bounded investigation in scope; an unverified hypothesis is
-never turned into a waiver or authority request. Keep independent work moving
-while a real permission request is open.
-
-For a failure after deployment, first compare the failing revision with the
-original owner's current PR and head, the evidence already produced and the
-changed inputs; route it to that owner instead of dispatching a duplicate repair.
-
-## Independent review agents and host capacity
-
-An independent review or verification agent you start is your owned process
-tree. Its brief must carry the reproduction limits in the
-`squad-reviewing-as-disprove` skill: isolated state, every background or load
-reproduction through `bounded_run.py` with an owner, wall-clock and CPU limit,
-no raw CPU burners, and PID/process-group cleanup of only its own processes.
-When it ends, verify from its report and a filtered process check (exact PIDs or
-process group, never a broad name search) that nothing it started remains.
-
-Heavy test capacity is separate from the Worker WIP limit: WIP counts admitted
-assignments, while full `-race` suites, integration lanes and reproductions are
-host load. Run at most two heavy review/verification agents at once, start
-another only when the host load average is below its core count, and prefer
-targeted tests. This never lowers WIP or pauses admitted work. Do not load the
-shared host to prove a fix; use the bounded isolated regression.
-
-## Autonomous closeout and current status
-
-Carry the user's existing delivery authority into assignments and effective
-decisions. Do not introduce a universal ready-to-close approval. After gates
-pass the owning Worker closes and reports; reconcile the actual closure,
-acceptance, cleanup and released/retained custody afterwards. Resolve exceptions
-without repeating authorization already granted. When adopting this rule,
-supersede only obsolete routine approval conditions through the existing decision
-and Worker readback route; preserve genuine holds and unmet acceptance gates.
-
-In each existing cycle, compare GitHub disposition, item status, reservation,
-Worker execution and owned external operations. Keep a single current summary in
-the existing checkpoint with verification time, phase, remaining condition,
-next owner/action and evidence; mark older summaries superseded. A stale summary
-is not a reason to restart a Worker. Reconcile closed Issues with remaining
-reservations only after verifying operations and custody, using owner-supported
-transitions. For partial delivery keep the Issue open and the unfinished item
-blocked, with its supported continuation route (same Issue; a donor-to-recipient
-integration handoff is the only exception and must be explicit); do not close an Issue Worker
-reservation as completed while its Issue remains open. If the installed tool
-cannot represent safe partial retirement/continuation, record that capability
-gap and retained ownership rather than inventing a state, force-releasing WIP,
-or silently relabelling partial delivery as completion.
-
-Partial retirement ends an execution, not the Dispatcher's responsibility for
-its unfinished Issue. Before retaining that disposition, record the remaining
-assertions and a concrete continuation owner/action, or an evidenced external
-prerequisite and next check time/event, in the existing checkpoint. No successor
-is launched until custody and authority qualify. Reconcile that record in every
-existing cycle even when the old session has exited; follow
-[convergence supervision](references/dispatch-reliability.md#convergence-supervision).
-Do not substitute "a new owner later" for an actual continuation plan or ask a
-retired Worker to resume from a message alone.
-
-A release assignment (`release:<ref>` source) is complete only when its delivery
-projection shows a `complete` release verdict; a completed reservation, an exited
-Deployer or a released ENV is not acceptance. Read the projection's `release.state`
-and `unmet`, route a `partial`/`blocked`/`custody-retained` verdict to the original
-owner through the existing decision and event path, and reconcile the reservation
-only after the owner's `handoff-complete`. Add no post-release approval or poller.
-Update the single current-status summary and the report's current-conclusion link
-instead of rewriting frozen candidate material.
-
-## Delivery capability admission
-
-Before launching a Worker, verify how it can reach the requested final outcome,
-not only how it can edit source. Record a compact receipt alongside the existing
-assignment: delivery target and authority, explicit environment/access path,
-verified live resource identity when already provisioned, applicable browser
-and legitimate login path, user-selected runtime permission mode, and the exact
-terminal callback transport/recipient. Probe these read-only where possible;
-record unavailable or unverified capabilities honestly. Tool discovery alone
-proves neither access nor authorization. Reuse current valid receipts.
-
-Resolve missing local capabilities before launch; represent a genuine external
-prerequisite with the phase it blocks. Do not label an unknown execution path
-as a user task. Include companion acceptance operations in the initial scope
-so the Worker does not repeatedly seek approval for an already requested
-outcome. Use the Worker delivery-quality contract for automatic operation and
-human fallback. Keep runtime approval policy, product authority, ENV ownership
-and WIP limits distinct. Honor the effective user-selected WIP cap across waiting
-and unresolved work; do not kill existing Workers to make room.
-
-## Live admission and continuation identity
-
-Before authorizing staging/production work, require the canonical launcher's
-`resources` receipts from the actual child executable and ledger. Package resource
-names are not installed capabilities. `resources check ENV-ID --require-policy`
-is read-only: missing item/policy or unsupported CLI blocks admission; reported
-holders are normal contention. Do not claim to test availability. If deliberately
-using a verified legacy broad resource, record its admission reference and exact
-`resource_overrides` in the separate launch config and Worker prompt; never
-silently substitute a lock or assert independent deployment scopes.
+Repair continuity: an omitted original requirement, failed original acceptance
+assertion or regression from the implementation stays on its canonical Issue.
+Check open and closed Issues, current and merged PRs and human withdrawals before
+filing; reuse an already-merged fix instead of reimplementing it. Choose the
+executor separately from the tracking identity: prefer the current owner, then a
+suitable existing owner, before a fresh Worker.
+A genuinely different Issue keeps its own tracking identity and a separate
+reservation; never bind one native to two reservations or reuse a completed Worker session for another Issue. Do not
+retire an idle owner merely to change phase. Details:
+[session continuity](references/session-continuity.md).
 
 A revised admission is not received merely because it was posted while a Worker
-was finishing. Reconcile its actual item/disposition before assigning more work.
-For a completed original item needing same-Worker continuation, create one explicit
-continuation and have that Worker claim it without environment writes first.
-Then use `dispatch continue KEY --from-item OLD --item NEW --worker-session UUID
---generation N` as the reservation owner. The operation verifies released original,
-same-actor custody and exact reservation identity atomically; it also changes the
-canonical notification route. Verify the returned item before allowing writes.
-Same-Issue phases continue in the original owner's reservation and native session;
-they are not a handoff to a retired session. Do not replace this transition with a note, relax event custody,
-or create another Worker. An unsupported runtime is a capability gap, not permission to improvise.
+was finishing; reconcile its actual item/disposition before assigning more work.
 
-Each existing bounded reconciliation cycle also examines addressed blocking asks
-and recorded publish errors on explicitly mapped continuation threads. Reconcile
-an identity mismatch before relying on terminal wakeups, and do not acknowledge a
-request merely because publication failed. This is a fallback in the existing
-cycle, not a new polling process. Preserve reservations/WIP until verified outcome.
+Persist explicit user authorization to create/update Issues with its repository
+and goal scope and reuse it in later cycles. Issue creation does not authorize
+broader product changes, production operations or another repository.
 
-## Non-interrupting control plane
+## Running owners
 
-Heartbeat inspection is read-only and never itself justifies a Worker message.
-For a Worker-requested blocking scope/admission correction, verify and record the
-decision first, then send one complete issue-local reply with exact paths and
-verified hashes. Do not follow it with acknowledgments, progress questions or
-repeated reminders. Such a reply is a necessary intervention, even if the Worker
-is active. Before other messages, check the live task state and the event already
-handled; wake an idle task only once for a verified actionable transition.
+- **Observe by default.** Never message an `active` Worker for progress,
+  reminders or acceleration. Intervene only for an explicit user override, an
+  immediate safety/correctness risk, verified scope/policy drift, or one verified
+  dependency transition the owner cannot observe itself. Re-read the target after
+  sending; never repeat a wake on later cycles. Do not wake resource waiters:
+  foreground `claim --wait` and the holder's release notification are the wake.
+- **Answer pending decisions in the same cycle.** Read `dispatch delivery` drift
+  (`worker-report-without-event`, `decision-request-acknowledged-without-decision`,
+  `hold-waits-satisfied`, `hold-time-box-expired`) and answer each with the
+  effective decision now. A hold whose waits are met never auto-proceeds; an idle
+  owner waiting on a satisfied hold is Dispatcher latency to remove, not a reason
+  to send another prompt.
+- **Keep decisions few and complete.** Each new revision should change something
+  real. Any new revision revokes an earlier merge release, so when re-deciding an
+  owner that holds a still-valid release, repeat its `--merge-*` flags (Squad
+  re-verifies live PR facts). Do not issue revisions merely to sequence ordinary
+  steps such as rebase, push, CI and review.
+- **Blocker classes.** Record a blocker as exactly one of: cause unknown (with the
+  next discriminating check), access path not found (paths checked), new
+  permission required (failed condition, minimal request, owner), or implemented
+  and awaiting integration (PR, head, remaining gate). Finish bounded in-scope
+  investigation before handing a technical problem to a person; never turn a
+  hypothesis into a waiver request. Independent work continues meanwhile.
+- **Failures after deployment** go first to the original owner's current PR and
+  head with the evidence and changed inputs; do not dispatch a duplicate repair.
+- **Review failure.** The first verified blocking finding moves the implementer to
+  the user/workspace-selected escalation model before further repair edits; the
+  reviewer stays independent and unchanged. Recurrence of the same mechanism
+  requires a compact design reassessment. Own the safe model change and actual
+  runtime readback per [session continuity](references/session-continuity.md#review-failure-model-transition).
+- **Closeout.** After required gates pass, the owning Worker closes the Issue and
+  reports; there is no routine ready-to-close step. Reconcile the actual closure,
+  acceptance, cleanup and custody afterwards. Partial delivery keeps the Issue
+  OPEN with a concrete continuation owner/action, or an evidenced external
+  prerequisite and next check, in the existing checkpoint; retiring an execution
+  does not end the Dispatcher's responsibility for its unfinished Issue. Never
+  substitute "a new owner later" for a continuation plan or ask a retired Worker
+  to resume from a message alone; reconcile the record every cycle per
+  [convergence supervision](references/dispatch-reliability.md#convergence-supervision).
+- **Current status** lives in one summary in the existing checkpoint (verification
+  time, phase, remaining condition, next owner/action, evidence); mark older
+  summaries superseded. A stale summary is not a reason to restart a Worker.
 
-A holder paused by a denied/cancelled tool call is an actionable exception to
-ordinary contention. In the existing cycle, inspect its last operation and ENV
-state and apply [staging coordination](references/staging-coordination.md);
-respect the stop, preserve ownership and arrange authorized continuation or
-handoff rather than silently waiting.
+## Effective decisions, merge order and phase results
 
-Default to observation. An App-level follow-up prompt is an intervention: it
-can start a new turn or steer an active Worker.
+The [command reference](../../../docs/reference/commands.md) owns the exact
+forms; the essentials:
 
-- Never send a follow-up to an `active` Worker for progress, reminders, normal
-  waiting, or acceleration. Intervene only for an explicit user override, an
-  immediate safety/correctness risk, or verified scope/policy drift.
-- Do not wake resource waiters. A Worker's foreground `claim --wait` plus the
-  holder's post-release Squad notification is the wake-up mechanism.
-- Treat idle, `notLoaded`, quiet, listening, and claim-waiting Workers as
-  non-terminal while their reservation, claim, or external operation is live.
-- If a verified dependency transition enables new work on the SAME Issue for an idle
-  or `notLoaded` Worker whose session has not been retired, inspect recent task prompts and the reservation
-  generation, then send at most one narrowly scoped wake-up for that exact
-  transition. Never send it after the task has become active, and never repeat
-  it on later heartbeat cycles.
-- Keep routine messages issue-local. A human-authorized related-work amendment
-  uses the explicit existing-owner route in session continuity, including scope,
-  ownership and readback; a dependency mention or progress ping cannot assign it.
-- Never ask a Worker to request human confirmation for lifecycle actions already
-  covered by its standing authorization. A real credential, user-only
-  interaction, new sensitive-data disclosure, production mutation, or material
-  scope expansion may still require the user.
+- A wait that must stop an owner is a hold with `--wait-for
+  RESERVATION:PHASE:executed|passed` (or `RESERVATION::terminal`), `--blocks-phase`
+  for the phase it stops and `--wait-time-box` when you promise to revisit. A hold
+  that blocks one phase never stops implementation, tests, review or acceptance
+  preparation. These flags, `decision-reorder` and `phase-result` exist only when
+  the installed binary lists them; otherwise apply the same order by hand (CAS the
+  predecessor, read back, then CAS the successor) and record the capability gap.
+- **Merge order.** When a bounded merge window is genuinely needed, set
+  `--merge-policy release-required` on affected owners until you set `standing`.
+  When the owner's ready request arrives, verify the independent review result
+  and exact-head CI yourself, post your own evidence message on the item's
+  canonical thread, and release the exact PR in the same cycle with
+  `decision-set ... --action proceed --merge-pr OWNER/REPO#N --merge-head SHA
+  --merge-base BASE_TIP_SHA --merge-evidence YOUR_MESSAGE_ID --merge-ttl 1h`
+  (Squad rejects evidence that is not your message on that thread). At issue
+  time Squad refuses a closed PR, changed head, advanced base, missing or failing
+  checks and unreadable policy (see the command reference), but it never judges a
+  non-required review, so that verification is yours. Any later revision revokes the release. The Claude native fence
+  enforces it; Muse/Codex Workers without the hook are not covered. A completed or
+  expired window is not a reason to keep holding anyone. Review readiness is
+  independent of merge release: source, tests and review continue during a merge
+  hold.
+- **Advisory review.** A failed advisory shadow review is not a required check;
+  after verifying its finding is disproved, record the dispute in the release
+  evidence as the installed command reference specifies. Review-tool errors and
+  timeouts have no verdict and cannot use that route.
+- **Phase results.** Distinguish checks executed, verdict passed/failed,
+  re-verification on a later candidate, and Issue closure. Name phases by what was
+  checked (`acceptance:s7`, `merge:pr1972`). Consuming a result means updating
+  every dependent decision it releases; an ACK alone is not consumption. Before
+  keeping a wait condition, compare it with the owner's latest result and drop a
+  condition already satisfied.
+- **Reorder.** Make the predecessor's change effective first, then establish the
+  successor's wait (`decision-reorder` does both atomically). Ready-first may skip
+  an unready queue head only by publishing both decisions together.
 
 ## Run one cycle
 
-Every new Worker prompt must carry this Dispatcher's verified runtime-specific
-callback route (App thread/host or cmux workspace/surface/native session), plus
-its Squad agent id; preserve the reservation key and generation. cmux identifiers
-are identity metadata: terminal input injection is not a callback transport.
-Without a verified message API/mailbox, persist the event as pending reconciliation
-and consume it in the next existing cycle; do not promise automatic wakeup.
-A Worker completion event triggers this same bounded cycle,
-not a new scheduler. Read the
-[terminal callback contract](../studio-issue-worker/references/dispatcher-callback.md)
-when receiving an event. Verify the source task/reservation generation, live
-Issue/item disposition, acceptance/cleanup and claimed release/handoff evidence.
-Distinguish a donor's task ending from Issue completion: a handoff report names
-the recipient task/primary, actual PR target/merge status and remaining gates,
-using “开发已交接，Issue 未完成”. Follow the recipient's ongoing acceptance,
-not a duplicate donor. Record the event id as processed only after that reconciliation; duplicates and
-stale/unverifiable events never dispatch or release WIP. A sender still ending
-its turn stays in WIP until task termination is independently verified. Keep
-the existing heartbeat as fallback for missing/failed notifications. Do not send
-routine acknowledgements or progress prompts. A `decision-request` is a separate,
-nonterminal transition: record the canonical design revision. For an adopted
-assignment, use `terminal-events decision-set` to CAS it and enqueue the wake;
-otherwise publish `decision-resolved` under the legacy contract. Then ack the
-request. A released claim is not proof that the Worker cannot resume.
-Never wait for Worker termination to answer its blocking design question.
-
-1. Resolve the Dispatcher identity once. Read Squad `status`, `who`, `doctor`,
-   and `dispatch list --active --json`; inspect existing sessions through their recorded runtime/client adapter compactly.
-2. Fetch current open GitHub Issues with `gh`, including number, title, labels,
-   assignees, body, state, linked PRs, and blocking relationships. GitHub and
-   the live Squad ledger are authoritative; do not use a cached queue.
-3. Map each eligible Issue to any existing item whose title contains
-   `[github:<owner>/<repo>#<number>]`, but do not create or accept a missing item
-   yet. Report duplicate mappings as a consistency error.
-4. Build a dependency DAG using explicit `blocked-by`, verified Issue/PR links,
-   and concrete shared-resource conflicts. Do not infer an edge from issue
-   number, age, or priority alone. Report cycles and dispatch nothing in them.
-5. Reconcile every active reservation with its bound runtime/native task identity,
-   task status, current claim, PR, and assigned outcome. An Issue Worker's
-   `completed` disposition requires evidence-backed Issue closure. An explicitly
-   assigned non-Issue role uses its own completion contract; do not invent an
-   Issue-close gate. Only the reservation owner closes it. Use `failed` or
-   `cancelled` with a note only for a terminal task that no longer owns work.
-   Do not treat a quiet or waiting task as terminal.
-6. Apply design admission before selecting implementation work. A dependency-ready
-   Issue is not design-ready by itself. Verify a current READY design section
-   and its revision against the actual product and related active Issues. Reuse
-   still-valid decisions; unknown facts remain needs-investigation and unresolved
-   product choices remain needs-decision. Persist a compact design reference in
-   the assignment; never load the Dispatcher conversation into a Worker.
-   Select the implementation repository from the admitted work independently
-   of the repository hosting its tracking Issue. Match the assignment and project
-   profile to the actual Git origin, including repository host and clone layout;
-   retain the GitHub tracking Issue as the reservation source.
-   Select ready leaves that are unclaimed, unreserved, unblocked, and mutually
-   independent. The default product-Worker WIP limit is five; an explicit user decision may override it. Record the effective limit and decision reference in the current policy. Count active or
-   otherwise non-terminal Worker tasks and unbound active reservations, then
-   create only enough Workers to fill the remaining slots. Quiet, idle,
-   waiting, or claim-contending Workers still count until reconciled terminal.
-   Read the effective policy instead of inferring a limit from an older prompt. Only an explicit user decision changes the limit.
-   External Grok review executions are not Codex Workers, reservations, or Squad
-   claims and never consume a product-Worker slot.
-7. Before creating or accepting any missing item, derive a stable key
-   `DISPATCH-<REPO-SHORT>-<ISSUE-NUMBER>` and atomically reserve the canonical
-   source:
+1. Resolve the Dispatcher identity once. Read Squad `status`, `who`, `doctor` and
+   `dispatch list --active --json`; inspect existing sessions through their
+   recorded runtime adapter compactly.
+2. Fetch current open GitHub Issues with `gh` (number, title, labels, body,
+   state, linked PRs, blocking relationships). GitHub and the live ledger are
+   authoritative; never use a cached queue.
+3. Map each eligible Issue to the one item whose title contains
+   `[github:<owner>/<repo>#<number>]`; report duplicates as a consistency error.
+4. Build a dependency DAG from explicit `blocked-by`, verified Issue/PR links and
+   concrete shared-resource conflicts. Do not infer edges from number, age or
+   priority. Report cycles and dispatch nothing in them.
+5. Reconcile every active reservation with its runtime/native identity, task
+   status, claim, PR and outcome. An Issue Worker's `completed` disposition needs
+   evidence-backed Issue closure; a non-Issue role uses its own completion
+   contract. Use `failed`/`cancelled` only for a terminal task that owns no work.
+   A quiet, idle, listening or claim-waiting task is not terminal while its
+   reservation, claim or external operation is live.
+6. Apply design admission, then select ready leaves that are unclaimed,
+   unreserved, unblocked and mutually independent within the effective WIP. Count
+   non-terminal tasks and unbound active reservations; external review executions
+   never consume a slot. Select the implementation repository and project profile
+   from the admitted work and actual Git origin, independent of where the tracking
+   Issue lives.
+7. Reserve before creating or accepting an item:
 
    ```bash
    squad-coordination dispatch reserve <RESERVATION-KEY> \
@@ -444,188 +293,126 @@ Never wait for Worker termination to answer its blocking design question.
      --ttl 15m --note "<dependency/readiness rationale>" --json
    ```
 
-   If reservation loses, do not create or accept an item and do not create a
-   task. If it succeeds, record the returned `generation`. Only now reuse the
-   one existing canonical item or create one ready item with the configured
-   component prefix. Attach it before task creation:
+   Key: `DISPATCH-<REPO-SHORT>-<ISSUE-NUMBER>`. If reservation loses, create
+   nothing. Otherwise record the `generation`, reuse the canonical item or create
+   one, and attach it:
 
    ```bash
    squad-coordination dispatch attach <RESERVATION-KEY> \
      --item <ITEM-ID> --generation <N>
    ```
 
-8. Use the workspace-authorized session transport (cmux when required by
-   workspace policy), preserving fresh workspace/session identity and binding.
-   Do not create a second App task in parallel with a cmux Worker. For an
-   App-task deployment, create one runtime task (Codex, Claude or Muse, per the
-   workspace-authorized runtime) whose title begins with `[#<issue>][<item>]` and whose
-   prompt invokes `$studio-issue-worker` for a Studio implementation assignment
-   or `$agent-loop-worker` with the matching project profile for Squad, Importer
-   or Interceptor. Name exactly one Issue and item and use the applicable prompt
-   contract in [references/worker-task-prompt.md](references/worker-task-prompt.md).
-   Preserve each profile's delivery boundary, including Interceptor local review
-   and human PR handoff; routing does not authorize push, PR or deployment.
-   Omit model/reasoning overrides unless the scheduler prompt explicitly set
-   them. Use the saved project worktree for Git repositories.
-
-   **Identity and repair ownership.** Before a new execution, apply the
-   existing-owner routes in session continuity. An admitted linked obligation
-   keeps the current primary binding; a genuinely separate reservation needs a
-   qualified distinct native unless a supported reassignment exists. Do not retire
-   an idle owner merely to change phase or create a duplicate repair. Repair of Squad tools,
-   coordination code or normative sources is assigned only to the maintenance agent
-   the user explicitly designates for the current round. Never derive that
-   assignment from business, staging or production authorization, from an earlier
-   per-Issue authorization file, or from a Squad Issue merely being open; without a
-   current designation, record the gap and leave the Issue unassigned. A designation
-   covers the stated round only and is not a standing delegation.
-   Before launching, render the prompt and run
-   `PYTHONDONTWRITEBYTECODE=1 python3 workspace/agent-loop/assignment_contract.py PROMPT_FILE` from the installed
-   generation; a nonzero result (a required approval before the Worker closes, a session
-   carried over from another Issue, or a Squad-tool assignment without a designation) blocks the launch. Do not copy a
-   previous batch's launch script or prompt forward without re-checking it.
-9. Immediately bind the created task id with the same generation:
+8. Launch through the workspace-authorized transport (cmux where required), with a
+   title beginning `[#<issue>][<item>]`. The prompt invokes `$studio-issue-worker`
+   for Studio or `$agent-loop-worker` with the matching profile for Squad,
+   Importer or Interceptor, names exactly one Issue and item, and carries the
+   complete assignment above. Omit model/effort overrides unless policy selects
+   them. Do not create a second App task in parallel with a cmux Worker.
+9. Bind immediately:
 
    ```bash
    squad-coordination dispatch bind <RESERVATION-KEY> \
      --generation <N> --thread-id <RUNTIME-TASK-ID>
    ```
 
-   If binding fails, do not create a second task. Reconcile the already-created
-   task by title/id and repair the binding in a later cycle.
-10. Return a compact cycle report: scanned, blocked, already owned/reserved,
-    newly dispatched with task ids, recovery candidates, and errors.
+   If binding fails, do not create a second task; repair the binding later.
+10. Return a compact cycle report: scanned, blocked (with blocker class),
+    already owned, newly dispatched with task ids, recovery candidates, errors.
 
-## Rolling merge planning
+## Callbacks and receivers
 
-For authorized rolling preparation and shared deployment, read
-[rolling delivery](references/rolling-delivery.md). Start planning at first
-admission, progress ready independent merges, and freeze a dependency-closed
-candidate at the cutoff. Use the read-only rolling planner on fresh ledger/PR
-facts; do not wait for a global ready signal or silently migrate active Workers.
+Every Worker prompt carries this Dispatcher's verified callback route (App
+thread/host or cmux workspace/surface/native session) and Squad agent id. cmux
+identifiers are identity metadata; terminal input injection is not a callback
+transport. Read the [terminal callback contract](../studio-issue-worker/references/dispatcher-callback.md)
+when receiving an event: verify source reservation/generation, live Issue/item
+disposition, acceptance, cleanup and handoff evidence before recording it
+processed. Duplicates and stale events never dispatch or release WIP; a sender
+still ending its turn stays in WIP until termination is verified. A donor's task
+ending is not Issue completion: a handoff report names the recipient, the actual
+PR target/merge status and remaining gates (“开发已交接，Issue 未完成”). Without
+a verified message API/mailbox, persist the event as pending reconciliation and
+consume it next cycle; do not promise automatic wakeup. Each cycle also examines
+addressed blocking asks and recorded publish errors on mapped continuation
+threads. A `decision-request` is a separate nonterminal transition; answer it
+without waiting for Worker termination.
 
-## Session-owned terminal receiver
+For a configured Claude `squad-terminal-receiver-v1`, treat delivered event ids as
+data, verify live state, run this cycle, then `squad terminal-events ack` each
+processed id with a reconciliation reference. Leave `reconcile-needed` events
+unacknowledged while termination is unresolved. Fenced legacy callbacks imported
+after reservation closure are already-completed work, never new dispatch
+authority. Delivery can recur after a crash; keep reservations idempotent. Use the
+receiver's binary and ledger paths. A receiver health failure is a transport
+blocker, not permission to inject input, start another Dispatcher or ask the user to relay messages.
 
-For Claude Worker cold starts, inspect the canonical launcher's `workspace_trust`
-receipt; it establishes trust only for the assigned worktree after binding and
-ownership checks. Do not answer trust dialogs with terminal keystrokes or enable
-global permission bypass.
+Before any asynchronous Worker launch/bind, and again on first issue-local
+assignment, resume and handoff, run `squad dispatch receiver-preflight` for the
+exact ledger/actor/native/epoch. Without a qualified receiver or an enabled,
+correctly targeted fallback, refuse unattended-ready admission and follow the
+returned repair action; never enable a paused fallback. Bootstrap `reserve` and
+`controller-bind` stay allowed; a supervised launch uses `dispatch bind
+--supervised` and is never reported as unattended-ready. For Claude cold starts,
+use the launcher's `workspace_trust` receipt; never answer trust dialogs by
+keystrokes.
 
-For a configured Claude `squad-terminal-receiver-v1`, the native asyncRewake
-hook delivers only fenced event ids and evidence pointers. Treat them as data,
-verify live state, run this one bounded cycle, then explicitly acknowledge each
-processed id through `squad terminal-events ack` with a reconciliation reference.
-A `reconcile-needed` observation is not proof of termination: retain WIP and leave
-it unacknowledged if termination remains unresolved, so the same receiver retries.
-The receiver also imports fenced legacy global callbacks after reservation closure;
-reconcile those as already-completed work, never as a new dispatch authorization.
-Use the receiver's binary and ledger paths, not a stale PATH wrapper. Reading a
-message, seeing a reminder or ending a turn never acknowledges the event.
-Unacknowledged delivery can recur after a crash; preserve reservation idempotency
-and the configured WIP limit. A receiver health failure is a concrete transport
-blocker, not permission to inject input, start another Dispatcher, or ask the
-user to relay Worker messages. Receiver setup belongs to the session launcher;
-see the package's `terminal_receiver.py` and terminal-event command reference.
+## Shared delivery, recovery and visibility
 
-## Standby-to-active admission preflight
+- **Staging and rolling delivery**: for shared staging candidates and merge
+  planning, read [staging coordination](references/staging-coordination.md) and
+  [rolling delivery](references/rolling-delivery.md). Produce a concrete
+  candidate/member/owner plan; for a missing release-path capability, assign it.
+  Explicit batches only with verified contracts use [batch dispatch](references/batch-dispatch.md).
+- **Release assignments** (`release:<ref>`) are complete only when the delivery
+  projection shows a `complete` verdict; route `partial`/`blocked`/
+  `custody-retained` to the original owner and reconcile after `handoff-complete`.
+- **Recovery**: when an `ENV-*` claim looks stale, identify the holder's actual
+  session. Absence from `who` is not death. Only for a confirmed stopped holder
+  create at most one task invoking `$squad-env-recovery`; never run `recover`
+  yourself. A holder paused by a denied tool call is an actionable state for
+  [staging coordination](references/staging-coordination.md), not contention.
+- **Visibility**: for cmux Workers apply the lifecycle colours in
+  `../../agent-loop/tools/cmux-sessions/SKILL.md` (Blue while nonterminal; clear
+  for verified terminal assignments). For an eligible terminal assignment run
+  `squad dispatch retire-client` then `retire-color` when installed, for the exact
+  reservation, generation and native read now; never for a held, fenced or
+  claim-holding assignment, an old PID, a name or a port.
+- **Independent review agents** you start are your owned process tree: isolated
+  state, background or load reproduction through `bounded_run.py` with owner and
+  limits, and cleanup of only their own processes; verify by exact PID or process
+  group that nothing remains. Run at most two heavy review/verification agents at
+  once, start another only when load average is below the core count, and prefer
+  targeted tests; host load never lowers WIP.
+- **Grok mode** is derived by Workers from the installed wrapper and actual branch
+  policy. Do not announce enforcement or hard-code a rollout phase in prompts.
+- **Batches**: preserve nonbatch Workers, the effective WIP, reservations, child
+  holds and path ownership; A00 READY and A14 readiness are distinct from child
+  Issue closure.
+- **Implementation host routing**: a GitHub tracking Issue may assign a Bitbucket
+  Server repository. Keep the reservation source unchanged; set `repository`,
+  `repository_host`, `clone_layout` and the matching profile. For Interceptor read
+  `agent-loop/projects/interceptor/references/bitbucket-delivery.md`; set
+  pull_request/merge/staging/production/issue_close false and deliver
+  source/test/local-review evidence with a human handoff.
+- **Continuation identity**: same-Issue phases continue in the original owner's
+  reservation and native session. For a completed item needing same-Worker
+  continuation, use `dispatch continue KEY --from-item OLD --item NEW
+  --worker-session UUID --generation N` and verify the returned item before
+  writes. Partial retirement and delivery projection use `dispatch delivery` and
+  `dispatch retire-partial` per the
+  [delivery lifecycle command contract](../../../docs/reference/delivery-lifecycle.md).
+  A missing capability is recorded as a gap with retained custody, never an
+  invented state.
 
-Controller custody does not prove delivery readiness. Before any asynchronous
-Worker launch/bind — and rechecked on first issue-local assignment, resume and
-handoff — run `squad dispatch receiver-preflight` for the exact
-ledger/actor/native/epoch. It qualifies the receiver incarnation, owner-pid
-health and native wake support, or a genuinely enabled, correctly targeted
-reconciliation fallback. When neither is available, refuse unattended-ready
-admission and follow the returned concrete repair action; never interpret a
-paused fallback as permission to enable it. Bootstrap `reserve` and
-`controller-bind` stay allowed (provisional) so the receiver can be created;
-only the Worker launch/bind step is gated. An explicitly supervised/manual
-launch uses `dispatch bind --supervised` and is never reported as
-unattended-ready.
+## Reporting
 
-## Worker workspace visibility
+The heartbeat is quiet unless the user needs to know: a Worker created, an Issue
+completed, a real failure, an abnormal or transferred lock, or genuinely required
+user action. Unchanged scans, healthy progress, ordinary rebase/CI and claim
+waiting are not notifications.
 
-For cmux Workers, apply the lifecycle-color contract in
-`../../agent-loop/tools/cmux-sessions/SKILL.md`. After binding, mark the explicit
-Worker workspace Blue. During existing reconciliation, retain Blue for all
-nonterminal assignments and clear the color for verified terminal assignments
-with resolved claims/external operations, even if the terminal session remains
-open. Project this for existing mapped Workers when the skill is reloaded.
-During the same cycle, for each terminal assignment whose `squad dispatch retirement`
-is eligible and whose client-exit step is not yet successful, run `squad dispatch
-retire-client` (when the installed executable has it) for the exact reservation,
-generation and Worker native read from the ledger and cmux mapping now, then
-`retire-color`. Never retire a held, dispatched, fenced or claim-holding assignment,
-never from an old PID, and never by name or port. Report `exit-timeout`,
-`helpers-remain` and color failures as they are.
-This authorized presentation update needs no Worker message or extra role;
-never infer completion from a quiet screen or failed process alone.
-
-## Heartbeat reporting
-
-The scheduler heartbeat is quiet unless the user needs to know about a material
-transition. Notify only when a Worker is newly created, an Issue completes, a
-real failure occurs, a lock becomes abnormal or is transferred, or user action
-is genuinely required. Do not notify for unchanged scans, healthy work in
-progress, ordinary rebase or CI, or normal claim waiting. The heartbeat itself
-and read-only work performed during it are not notification-worthy.
-
-## Recovery candidates
-
-When an `ENV-*` claim appears stale, identify the holder's actual runtime/native session.
-Absence from Squad `who` is not proof of death. If the task is running, leave it
-alone. If task identity/status or external state is ambiguous, report the
-blocker. Only when the task is confirmed stopped should you create at most one
-dedicated task invoking `$squad-env-recovery`; the Dispatcher itself never runs
-`recover`.
-
-Do not message waiting Workers outside the single dependency-transition case
-above. Claim waiting belongs inside the Worker's blocking CLI process and
-consumes no Dispatcher cycle.
-
-The Dispatcher does not decide or announce that Grok enforcement is enabled.
-Workers run the wrapper preflight and derive inactive, shadow, or enforced mode
-from the installed local reviewer and actual protected-branch policy. A future
-prompt carries the invariant contract; it must not hard-code a temporary rollout
-phase or ask for additional human merge approval.
-
-## Shared staging deployment
-
-For compatible ready Issues sharing staging, read
-[staging coordination](references/staging-coordination.md). Coordinate one
-candidate and shared evidence before assigning independent deployments. This
-does not activate the separate implementation batch mode below.
-
-## Explicit batch mode
-
-Only explicitly authorized batches with verified minimum-baseline-and-batch-contract
-READY use [batch dispatch](references/batch-dispatch.md). Read it before selecting
-a batch task. Preserve existing nonbatch Workers, the effective user-selected WIP limit (default 5), reservations,
-child holds and path ownership. Dispatcher still never implements or releases
-product work. A00 READY and A14 implementation/evidence readiness are distinct
-from child Issue closure.
-
-## Implementation host routing
-
-A GitHub tracking Issue may assign a Bitbucket Server implementation repository.
-Keep `issue` and reservation `source_ref=github:<issue>` unchanged, while setting
-`repository`, `repository_host`, `clone_layout` and the matching project profile explicitly.
-For Interceptor use `agent-loop/projects/interceptor/profile.json` from the same
-installed package. Read its `references/bitbucket-delivery.md` before dispatch.
-Never use the Studio Worker adapter or a GitHub PR check for this repository.
-Prepare one fresh Worker assignment under the existing WIP and ownership rules.
-For this human-PR lane, set pull_request/merge/staging/production/issue_close
-false and deliver source/test/local-review evidence with a human handoff. Do not
-ask for hosting API credentials or automate PR creation/publication.
-
-Review readiness is a phase signal independent of merge release. Preserve
-source/test/review progress during merge holds, and track readiness-to-start
-delay through the rolling planner. Resolve costly cross-repository contract
-questions during design admission; do not postpone them until final code review.
-
-When supported by the installed binary, use `dispatch delivery` for a joined
-read-only state and `dispatch retire-partial` for an already handled blocked
-execution with verified released custody. Read the
-[delivery lifecycle command contract](../../../docs/reference/delivery-lifecycle.md)
-before mutation. These commands do not add approval gates or waive external
-operation checks. Without installed capability, retain explicit custody and route
-the gap rather than inventing a completed Issue.
+For flow audits, user pauses and release-repair routing read
+[role-bound flow repair](references/flow-retrospective.md); process optimization
+does not assign product implementation. For installed versioned decisions read
+[current decisions](../../agent-loop/roles/worker/references/decision-recovery.md);
+adopt per reservation, since a file refresh does not migrate active work.

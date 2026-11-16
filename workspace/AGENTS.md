@@ -124,6 +124,18 @@ or an informal prompt. Preserve one primary identity, real access boundaries,
 frozen candidates and per-Issue acceptance. Read the Dispatcher's session-continuity
 reference for the supported routes and already-filed repair reconciliation.
 
+## Owner flow and decisions
+
+One owner carries one canonical Issue from the original problem to accepted,
+cleaned-up closure inside one complete assignment (outcome, scope, normal path,
+failure branches, limits). Ordinary in-scope steps, including a pre-authorized
+"assess, then execute if the condition holds", need no Dispatcher decision.
+Effective decisions are for cross-owner order, shared resources, merge conflicts,
+handoffs and real changes of permission, scope, product semantics, budget or
+risk. Failures are classified first (product, acceptance method, external,
+unknown, boundary crossing); every retry names what changed and keeps still-valid
+evidence. The role skills own the procedure.
+
 ## Flow audits and instruction adoption
 
 A workflow retrospective directly repairs authorized skills and working
