@@ -64,7 +64,8 @@ Spend decisions on real coordination, not on ordinary progress.
 | --- | --- |
 | Ordinary step inside the assignment (edit, test, rebase, CI wait, review, readback, in-scope repair, cleanup) | None. The owner proceeds. |
 | Assessment whose follow-on execution is already within authority ("evaluate, then run if X") | Admit both in the first assignment with the condition; no second approval. |
-| Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, upstream key restored) | State it as a start condition in the assignment; no hold, no later "your turn". |
+| Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, upstream key restored) | Record it as a start condition in that owner's assignment; no hold, no later "your turn". |
+| Completed phase that must release another owner who is held or has no such start condition | Producer submits a decision request with the phase result; you CAS the recipient's decision and verify readback. |
 | Ordering between owners that neither can observe or decide (shared merge window, conflicting shared writes, release batch membership) | Effective decision: hold with structured waits, merge release, or reorder. |
 | Shared environment contention | None; the owner uses foreground `claim --wait`. |
 | Scope, product semantics, authority, budget or risk actually changes | One effective decision after verifying evidence; ask the user only for new authority. |
@@ -232,11 +233,15 @@ forms; the essentials:
   predecessor, read back, then CAS the successor) and record the capability gap.
 - **Merge order.** When a bounded merge window is genuinely needed, set
   `--merge-policy release-required` on affected owners until you set `standing`.
-  Release one exact PR with `decision-set ... --action proceed --merge-pr
-  OWNER/REPO#N --merge-head SHA --merge-base BASE_TIP_SHA --merge-evidence
-  MESSAGE_ID --merge-ttl 1h` as soon as the owner's ready request arrives. Squad
-  refuses a closed PR, changed head, advanced base or failing required checks at
-  issue time. Any later revision revokes the release. The Claude native fence
+  When the owner's ready request arrives, verify the independent review result
+  and exact-head CI yourself, post your own evidence message on the item's
+  canonical thread, and release the exact PR in the same cycle with
+  `decision-set ... --action proceed --merge-pr OWNER/REPO#N --merge-head SHA
+  --merge-base BASE_TIP_SHA --merge-evidence YOUR_MESSAGE_ID --merge-ttl 1h`
+  (Squad rejects evidence that is not your message on that thread). Squad checks
+  only that the PR is open, head and base tip match and required checks pass, at
+  issue time; it does not check non-required review, so that verification is
+  yours. Any later revision revokes the release. The Claude native fence
   enforces it; Muse/Codex Workers without the hook are not covered. A completed or
   expired window is not a reason to keep holding anyone. Review readiness is
   independent of merge release: source, tests and review continue during a merge

@@ -122,7 +122,7 @@ from a compact brief. The full protocol is
 - Repair omissions, regressions and failed original acceptance on the same Issue;
   an additional PR is not a reason to open another Issue or end your role. If your
   current role is read-only, request the smallest authorized phase change once and
-  retain ownership. A genuinely separate finding is reported to the Dispatcher
+  retain ownership; do not implement before it is effective. A genuinely separate finding is reported to the Dispatcher
   with evidence and a proposed disposition; do not create or dispatch work.
 - After the assigned acceptance, logs, cleanup and safe resource release, close the
   Issue yourself under your `authorization.issue_close` and report; there is no

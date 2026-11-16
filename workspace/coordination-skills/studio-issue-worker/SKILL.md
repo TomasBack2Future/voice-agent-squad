@@ -178,7 +178,7 @@ stays non-success, record a precise blocker and do not claim the environment.
   source `proceed` is not merge permission: submit the exact head/base readiness
   request once, keep working, and merge only with the decision's `merge_release`
   for this PR and head via `gh pr merge N --repo OWNER/REPO --squash
-  --match-head-commit HEAD`.
+  --match-head-commit <HEAD-SHA>` (the full 40-hex released head).
 - Delivery mode per [staging candidates](references/staging-candidates.md): with
   verified `staging-candidate-v1` capability and explicit assignment, finish main
   CI/images/prefetch outside ENV and claim immediately before deployment;
