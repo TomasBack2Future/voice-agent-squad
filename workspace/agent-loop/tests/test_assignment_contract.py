@@ -45,6 +45,7 @@ class ScannerTests(unittest.TestCase):
                  ('gated-follow-on', 'After the evaluation of the user flow, wait for a Dispatcher decision before running it.'),
                  ('gated-follow-on', 'After the assessment, request a Dispatcher decision before running the CNY 2 Simulation.'),
                  ('gated-follow-on', 'After the assessment, ask the Dispatcher for approval before executing.'),
+                 ('gated-follow-on', 'After the assessment, request approval of the user story from the Dispatcher before executing.'),
                  ('per-step-approval', 'Ask for a decision before each assertion.'),
                  ('per-step-approval', 'Request approval before running every assertion.'),
                  ('per-step-approval', 'Each acceptance assertion needs a Dispatcher decision first.'),

@@ -41,7 +41,7 @@ def gated_findings(flat):
             tail = m.group(0)[-30:]
             rest = re.split(r"[.。;；\n]", flat[m.end():])[0][:80]
             conditional = re.search(r"(?i)\b(?:only\s+(?:if|when)|unless|if)\b|如需|如果|若|超出", rest)
-            from_user = re.match(r"(?i)\s*(?:from|by|of)\s+(?:the\s+)?user|\s*(?:向|由)用户", rest)
+            from_user = re.match(r"(?i)\s*(?:from|by)\s+(?:the\s+)?user|\s*(?:向|由)用户", rest)
             exempt = GATED_EXEMPT.search(tail) or from_user or (conditional and GATED_EXEMPT.search(rest[conditional.start():]))
             if exempt or IN_MATCH_NEGATION.search(m.group(0)) or CLAUSE_NEGATION.search(clause):
                 continue
