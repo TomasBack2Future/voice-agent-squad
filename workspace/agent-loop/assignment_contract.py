@@ -11,6 +11,8 @@ FORBIDDEN = [
     ('pre-close-approval', re.compile(r"(?i)ready[- ]to[- ]close|预关单|pre[- ]close\s+(?:approval|gate|review)|先不要关单|等待\s*Dispatcher[^。\n]{0,20}批准|(?:wait|await)(?:ing)?\s+(?:for\s+)?(?:the\s+)?(?:Dispatcher|dispatcher)[^.\n]{0,30}(?:approv|release|go-ahead|permission)|(?:Dispatcher|dispatcher)[^.\n]{0,30}approv[^.\n]{0,30}(?:before|prior to)[^.\n]{0,20}clos")),
     ('completed-session-reuse', re.compile(r"(?i)(?:reuse|re-?use|resume|wake|re-?activate|re-?assign|复用|重用|唤醒|续用)[^。.\n]{0,40}(?:completed|finished|retired|已完成|已结束|结束)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)[^。.\n]{0,40}(?:for|承接|接手)[^。.\n]{0,30}(?:another|next|different|其他|另一|下一)[^。.\n]{0,10}Issue")),
     ('handoff-to-completed', re.compile(r"(?i)hand\s*off[^。.\n]{0,60}(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:交接|移交)[^。.\n]{0,30}(?:已完成|已结束)[^。.\n]{0,10}(?:worker|会话)")),
+    ('gated-follow-on', re.compile(r"(?i)(?:after|once|when)\s+(?:the\s+)?(?:assessment|evaluation|qualification|investigation|preflight|dry[- ]run)[^.\n]{0,60}(?:request|wait(?:ing)? for|await|ask for|seek)[^.\n]{0,25}(?:approval|decision|go-ahead|permission|authori[sz]ation)|(?:评估|核定|资格核定|预检|dry-run|调查)(?:完成|结束|后|之后)[^。\n]{0,30}(?:等待|申请|请求|再要|再申请)[^。\n]{0,15}(?:批准|决定|授权|许可)")),
+    ('per-step-approval', re.compile(r"(?i)(?:request|wait for|await|ask for|seek|obtain)[^.\n]{0,25}(?:approval|decision|go-ahead|permission)[^.\n]{0,20}(?:for|before)\s+(?:each|every)\s+(?:step|assertion|readback|phase)|(?:每一步|每步|逐步|逐条断言)[^。\n]{0,20}(?:申请|等待|请求)[^。\n]{0,20}(?:审批|批准|决定)")),
     ('squad-repair-to-business-worker', re.compile(r"(?i)(?:(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}worker|(?:squad|coordination)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}worker|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,20}(?:repair|fix|修复)[^。.\n]{0,40}(?:squad|coordination|协作))")),
 ]
 
@@ -23,7 +25,7 @@ def findings(text):
         for m in pattern.finditer(flat):
             before = re.split(r"[;；]", flat[max(0, m.start() - 70):m.start()])[-1]
             after = flat[m.end():m.end() + 24]
-            if NEGATION.search(before) or (rule != 'pre-close-approval' and re.search(r"(?i)\b(?:never|not)\b|不得|不要|禁止", m.group(0))) or re.match(r"[^。.;；]{0,12}(?:已取消|不再|无需|取消|is cancelled|no longer)", after):
+            if NEGATION.search(before) or (rule != 'pre-close-approval' and re.search(r"(?i)\b(?:never|not)\b|不得|不要|禁止|无需|无须|不必|不用", m.group(0))) or re.match(r"[^。.;；]{0,12}(?:已取消|不再|无需|取消|is cancelled|no longer)", after):
                 continue
             out.append((rule, flat[max(0, m.start() - 20):m.end() + 40].strip()))
     return out
