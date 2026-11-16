@@ -238,10 +238,10 @@ forms; the essentials:
   canonical thread, and release the exact PR in the same cycle with
   `decision-set ... --action proceed --merge-pr OWNER/REPO#N --merge-head SHA
   --merge-base BASE_TIP_SHA --merge-evidence YOUR_MESSAGE_ID --merge-ttl 1h`
-  (Squad rejects evidence that is not your message on that thread). Squad checks
-  only that the PR is open, head and base tip match and required checks pass, at
-  issue time; it does not check non-required review, so that verification is
-  yours. Any later revision revokes the release. The Claude native fence
+  (Squad rejects evidence that is not your message on that thread). At issue
+  time Squad refuses a closed PR, changed head, advanced base, missing or failing
+  checks and unreadable policy (see the command reference), but it never judges a
+  non-required review, so that verification is yours. Any later revision revokes the release. The Claude native fence
   enforces it; Muse/Codex Workers without the hook are not covered. A completed or
   expired window is not a reason to keep holding anyone. Review readiness is
   independent of merge release: source, tests and review continue during a merge

@@ -18,7 +18,7 @@ FORBIDDEN = [
 # Ordinary follow-on work gated behind another Dispatcher round-trip. Real
 # authority boundaries (user, production, budget, merge release) are exempt.
 GATED = [
-    ('gated-follow-on', re.compile(r"(?i)\b(?:after|once|when)\s+(?:the\s+)?(?:assessment|evaluation|qualification|investigation|preflight|dry[- ]run|fixture check|analysis)\b[^.\n]{0,60}?\b(?:request|submit|wait(?:ing)?\s+for|await|ask\s+for|seek|hold\s+until)\b[^.\n]{0,30}?(?:approval|decision|go-ahead|permission|authori[sz]ation|confirm\w*|proceed)")),
+    ('gated-follow-on', re.compile(r"(?i)\b(?:after|once|when)\s+(?:the\s+)?(?:assessment|evaluation|qualification|investigation|preflight|dry[- ]run|fixture check|analysis)\b[^.\n]{0,60}?\b(?:request|submit|wait(?:ing)?\s+for|await|ask\b(?:\s+[\w-]+){0,3}?\s+for|seek|hold\s+until)\b[^.\n]{0,30}?(?:approval|decision|go-ahead|permission|authori[sz]ation|confirm\w*|proceed)")),
     ('gated-follow-on', re.compile(r"(?i)\b(?:assess|evaluate|qualify|investigate|dry-run)\b[^.\n]{0,40}?\bthen\s+(?:hold|wait|pause)\b[^.\n]{0,40}?(?:Dispatcher|approval|decision|confirm\w*)")),
     ('gated-follow-on', re.compile(r"(?:评估|評估|核定|资格核定|预检|dry-run|调查)(?:完成|结束|後|后|之后)?[^。\n]{0,30}?(?:等待|申请|请求|提交|再要|再申请)[^。\n]{0,20}?(?:批准|决定|決定|授权|许可|decision-request)")),
     ('per-step-approval', re.compile(r"(?i)\b(?:request|submit|wait\s+for|await|ask\s+for|seek|obtain|needs?|requires?)\b[^.\n]{0,30}?(?:approval|decision|go-ahead|permission)[^.\n]{0,40}?\b(?:each|every)\s+(?:[\w-]+\s+){0,2}?(?:step|assertion|readback|check)s?\b")),
@@ -35,8 +35,14 @@ def gated_findings(flat):
     for rule, pattern in GATED:
         for m in pattern.finditer(flat):
             clause = re.split(r"[,，;；:：]", flat[max(0, m.start() - 60):m.start()])[-1]
-            sentence = clause + re.split(r"[.。\n]", flat[m.start():])[0]
-            if GATED_EXEMPT.search(sentence) or IN_MATCH_NEGATION.search(m.group(0)) or CLAUSE_NEGATION.search(clause):
+            # Exempt only when the authority term belongs to the approval object:
+            # inside the tail of the match ("user's authorization", "merge-release
+            # decision") or after a condition ("only if ... exceeds the budget").
+            tail = m.group(0)[-30:]
+            rest = re.split(r"[.。;；\n]", flat[m.end():])[0][:80]
+            conditional = re.search(r"(?i)\b(?:only\s+(?:if|when)|unless|if)\b|如需|如果|若|超出", rest)
+            exempt = GATED_EXEMPT.search(tail) or (conditional and GATED_EXEMPT.search(rest[conditional.start():]))
+            if exempt or IN_MATCH_NEGATION.search(m.group(0)) or CLAUSE_NEGATION.search(clause):
                 continue
             out.append((rule, flat[max(0, m.start() - 20):m.end() + 40].strip()))
     return out
