@@ -128,6 +128,11 @@ func (s Store) Submit(ctx context.Context, actor string, q SubmitRequest) (Submi
 	})
 	if err == nil {
 		s.wakeReceivers(ctx)
+		if q.Kind == "phase-result" {
+			// Same contract as RecordPhaseResult: once the result is committed, a
+			// dependent whose release is in force proceeds without a Dispatcher step.
+			s.releaseBestEffort(ctx)
+		}
 	}
 	return out, err
 }
@@ -209,11 +214,6 @@ func (s Store) submitTx(ctx context.Context, tx *sql.Tx, actor string, q SubmitR
 		if _, err = tx.ExecContext(ctx, `INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(repo_id,reservation_key,phase) DO UPDATE SET generation=excluded.generation,item_id=excluded.item_id,checks=excluded.checks,verdict=excluded.verdict,deferred=excluded.deferred,outcome_id=excluded.outcome_id,recorded_by=excluded.recorded_by,recorded_at=excluded.recorded_at`,
 			s.Repo, q.Reservation, q.Phase, q.Generation, item, q.Checks, q.Verdict, q.Deferred, messageID, actor, now); err != nil {
-			return out, err
-		}
-		// Same contract as RecordPhaseResult: a dependent whose release is in
-		// force proceeds in the transaction that records the result.
-		if _, err = releaseSatisfiedHolds(ctx, tx, s.Repo, time.Unix(now, 0)); err != nil {
 			return out, err
 		}
 	}

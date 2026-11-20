@@ -314,9 +314,9 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
 	if s.Repo == "" || s.Recipient == "" || session == "" {
 		return nil, fmt.Errorf("repo, recipient and delivery session required")
 	}
-	// Any recipient's read applies a pending pre-authorized release, so one the
-	// recording transaction could not perform (custody was ambiguous then) is
-	// not lost; the release is delivered to its own Worker in that Worker's read.
+	// Any recipient's read applies a pending pre-authorized release, so one that
+	// could not be performed when the result was recorded (custody was ambiguous
+	// then) is not lost; it is delivered to its own Worker in that Worker's read.
 	s.releaseBestEffort(ctx)
 	rows, err := s.DB.QueryContext(ctx, `SELECT e.event_id,e.item_id,e.kind,e.outcome_id,e.source_message_id,e.delivered_at,e.processed_at
  FROM terminal_event_receipts e JOIN dispatch_reservations r
@@ -385,13 +385,12 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 	if s.Repo == "" || s.Recipient == "" || strings.TrimSpace(note) == "" {
 		return fmt.Errorf("repo, recipient and reconciliation note required")
 	}
+	// A dependent whose release is in force is consumed by releasing it; do that
+	// first, in its own transaction, so the gate below only ever sees holds that
+	// could not be released and a failed release cannot fail this acknowledgement.
+	s.releaseBestEffort(ctx)
 	return store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
 		if err := s.controllerFence(ctx, tx, ""); err != nil {
-			return err
-		}
-		// A dependent whose release is in force is consumed by releasing it now;
-		// any other satisfied dependent still needs its decision first.
-		if _, err := releaseSatisfiedHolds(ctx, tx, s.Repo, time.Now()); err != nil {
 			return err
 		}
 		if err := s.phaseConsumed(ctx, tx, id); err != nil {

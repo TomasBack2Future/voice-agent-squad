@@ -321,7 +321,6 @@ func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResul
 	if p.Reservation == "" || p.Generation < 1 || p.WorkerSession == "" || p.OutcomeID < 1 {
 		return p, ErrInvalidEvent
 	}
-	released := false
 	err := store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
 		var item, owner string
 		var reservedAt int64
@@ -368,18 +367,19 @@ func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResul
 			return err
 		}
 		if worker {
-			if p.EventID, err = s.phaseEvent(ctx, tx, actor, p); err != nil {
-				return err
-			}
+			p.EventID, err = s.phaseEvent(ctx, tx, actor, p)
 		}
-		// The result may satisfy the last wait of a pre-authorized hold: release
-		// it in the same transaction so no Dispatcher round trip is needed.
-		n, err := releaseSatisfiedHolds(ctx, tx, s.Repo, time.Now())
-		released = n > 0
 		return err
 	})
-	if err == nil && (p.EventID != "" || released) {
+	if err == nil && p.EventID != "" {
 		s.wakeReceivers(ctx)
+	}
+	if err == nil {
+		// The result is committed. It may satisfy the last wait of a
+		// pre-authorized hold: release that hold now, in its own transaction, so
+		// no Dispatcher round trip is needed and nothing about another
+		// assignment's hold can ever fail this owner's result.
+		s.releaseBestEffort(ctx)
 	}
 	return p, err
 }

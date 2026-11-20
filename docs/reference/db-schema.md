@@ -333,7 +333,8 @@ old decision. No live claims or existing assignments are rewritten by migration.
 
 Migration 030 adds `on_satisfied_revision`: when it equals `revision` the
 structured hold is released into a proceed decision once its waits are all
-satisfied. It stores the authorizing revision rather than a flag, so a later
+satisfied, in a transaction of its own after the satisfying result is committed.
+It stores the authorizing revision rather than a flag, so a later
 revision written by a binary that does not set it, including one that already
 writes the wait columns, never inherits it. Interfaces show it as
 `on_satisfied: proceed`.

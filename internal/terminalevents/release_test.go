@@ -494,3 +494,101 @@ func TestReleaseConditionIsCutOnARuneBoundary(t *testing.T) {
 		t.Fatal("short text changed")
 	}
 }
+
+// A Worker native fenced for a legacy stop can receive no wake: the schema
+// refuses its receipt. Its hold is not released, and that never fails the
+// producer's result, an acknowledgement, a poll, or another hold's release.
+func TestFencedWorkerNeverFailsAnotherOwnersOperation(t *testing.T) {
+	s := waitFixture(t, "W", "V", "P")
+	ctx := context.Background()
+	for _, key := range []string{"W", "V"} {
+		if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, key, Wait{Reservation: "P", Phase: "merge", Until: "executed"})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fence := func() {
+		t.Helper()
+		if _, err := s.DB.Exec(`INSERT INTO worker_native_fences(repo_id,native_session,actor,reservation_key,generation,stop_id) VALUES('repo','native-W','worker-W','W',1,'stop-1')`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fence()
+	p := PhaseResult{Reservation: "P", Generation: 1, WorkerSession: "native-P", Phase: "merge", Checks: "all", Verdict: "passed", OutcomeID: say(t, s, "worker-P", "TASK-P")}
+	out, err := s.RecordPhaseResult(ctx, "worker-P", p)
+	if err != nil {
+		t.Fatalf("a fenced dependent failed the producer's result: %v", err)
+	}
+	var stored int
+	_ = s.DB.QueryRow(`SELECT count(*) FROM dispatch_phase_results WHERE reservation_key='P' AND phase='merge'`).Scan(&stored)
+	if stored != 1 {
+		t.Fatal("the producer's result was rolled back")
+	}
+	if _, action, _ := storedDecision(t, s, "W"); action != "hold" {
+		t.Fatal("a fenced Worker's hold was released")
+	}
+	if rev, action, _ := storedDecision(t, s, "V"); rev != 2 || action != "proceed" {
+		t.Fatalf("the unfenced dependent was not released: %d %s", rev, action)
+	}
+	d, err := s.CurrentDecision(ctx, "W", 1, "native-W")
+	if err != nil || d.OnSatisfied != "" {
+		t.Fatalf("a fenced hold still reads as self-releasing: %+v %v", d, err)
+	}
+	// The Dispatcher's acknowledgement is refused by the gate, not by an error.
+	dispatcher := Store{DB: s.DB, Repo: s.Repo, Recipient: "dispatcher"}
+	if _, err = dispatcher.Pending(ctx, "controller", 0); err != nil {
+		t.Fatalf("poll failed: %v", err)
+	}
+	if err = dispatcher.Delivered(ctx, out.EventID, "controller"); err != nil {
+		t.Fatal(err)
+	}
+	if err = dispatcher.Ack(ctx, out.EventID, "noted"); rejection(err) != "phase-result-unconsumed" {
+		t.Fatalf("acknowledgement did not reach the gate: %v", err)
+	}
+	// An unrelated Worker acknowledges its own event while the fenced hold stays.
+	worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker-V"}
+	events, err := worker.Pending(ctx, "incarnation", 0)
+	if err != nil || len(events) == 0 {
+		t.Fatalf("unrelated Worker's poll: %+v %v", events, err)
+	}
+	if err = worker.Delivered(ctx, events[0].ID, "incarnation"); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.Ack(ctx, events[0].ID, "resumed"); err != nil {
+		t.Fatalf("unrelated acknowledgement failed: %v", err)
+	}
+}
+
+// A write the schema refuses for one hold (a native fenced between the read and
+// the write) is undone for that hold alone; the others in the pass still release.
+func TestOneRefusedReleaseDoesNotUndoTheOthers(t *testing.T) {
+	s := waitFixture(t, "W", "V", "P")
+	ctx := context.Background()
+	for _, key := range []string{"V", "W"} {
+		if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, key, Wait{Reservation: "P", Phase: "merge", Until: "executed"})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.DB.Exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo','P','merge',1,'TASK-P','all','passed','',1,'worker-P',5)`); err != nil {
+		t.Fatal(err)
+	}
+	// Refuse the wake for V at the schema level without making V ineligible in
+	// the read: the predicate still selects it, the insert aborts.
+	if _, err := s.DB.Exec(`CREATE TRIGGER refuse_v BEFORE INSERT ON terminal_event_receipts WHEN NEW.reservation_key='V' AND NEW.event_id LIKE '%waits-released%' BEGIN SELECT RAISE(ABORT,'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.ReleaseSatisfied(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("released %d, err %v", n, err)
+	}
+	if rev, action, marker := storedDecision(t, s, "V"); rev != 1 || action != "hold" || marker != "proceed" {
+		t.Fatalf("the refused hold was half-released: %d %s %q", rev, action, marker)
+	}
+	var history int
+	_ = s.DB.QueryRow(`SELECT count(*) FROM dispatch_decision_history WHERE reservation_key='V'`).Scan(&history)
+	if history != 1 {
+		t.Fatalf("history of the refused hold has %d rows", history)
+	}
+	if rev, action, _ := storedDecision(t, s, "W"); rev != 2 || action != "proceed" {
+		t.Fatalf("the other hold was not released: %d %s", rev, action)
+	}
+}

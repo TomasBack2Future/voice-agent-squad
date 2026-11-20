@@ -24,14 +24,16 @@ type markedHold struct {
 // is in force", over dispatch_decisions d joined to its reservation r, with the
 // current unix time as its single parameter: authorized at exactly the current
 // revision, by the Dispatcher that owns the reservation now, inside the time
-// box. It does not survive a newer revision, a controller change or an expired
-// time box; each returns the hold to the responsible Dispatcher. The release,
+// box, for a Worker native that is not fenced (a fenced native can receive no
+// wake). It does not survive a newer revision, a controller change, an expired
+// time box or a fence; each returns the hold to the responsible Dispatcher. The release,
 // the owner's read of its decision and the sweep all use this predicate, so
 // none of them can believe in a release another would refuse. The dispatch
 // package repeats it for the sweep (it cannot import this one).
 const effectiveRelease = `(d.on_satisfied_revision=d.revision AND d.waits_revision=d.revision AND d.waits_for!='[]'
  AND (d.wait_deadline=0 OR d.wait_deadline>=?)
- AND EXISTS(SELECT 1 FROM messages m WHERE m.repo_id=d.repo_id AND m.id=d.outcome_id AND m.agent_id=r.reserved_by))`
+ AND EXISTS(SELECT 1 FROM messages m WHERE m.repo_id=d.repo_id AND m.id=d.outcome_id AND m.agent_id=r.reserved_by)
+ AND NOT EXISTS(SELECT 1 FROM worker_native_fences f WHERE f.repo_id=d.repo_id AND f.native_session=r.worker_thread_id))`
 
 // markedHolds reads the live holds whose release authorization is in force. A
 // hold whose waits cannot be decoded is skipped, never an error for the
@@ -82,9 +84,13 @@ func (h markedHold) satisfied(ctx context.Context, q querier, repo string) (bool
 // releaseSatisfiedHolds turns every marked hold whose waits are all satisfied
 // into a proceed decision: one new revision under the same Dispatcher outcome,
 // a history row and a durable decision-resolved wake for the held Worker.
-// Nothing else changes: scope, claims and merge policy stay as decided. A hold
-// with an unmet wait or with ambiguous Worker custody is left alone. It returns
-// how many holds were released.
+// Nothing else changes: scope, claims and merge policy stay as decided.
+//
+// It runs only in its own transaction (ReleaseSatisfied), never inside another
+// owner's write, and each hold is released under its own savepoint: a hold with
+// an unmet wait, ambiguous custody or writes the schema refuses is left exactly
+// as it was for the Dispatcher's sweep, and the remaining holds still release.
+// It returns how many holds were released.
 func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string, now time.Time) (int, error) {
 	holds, err := markedHolds(ctx, tx, repo, now)
 	if err != nil {
@@ -107,34 +113,54 @@ func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string, now tim
 		if err != nil {
 			return released, err
 		}
-		id := fmt.Sprintf("worker-terminal-v1/%s/%d/%s/decision-resolved/%d/waits-released-r%d", h.key, h.generation, h.session, h.outcome, h.revision+1)
-		if eventPattern.FindString(id) != id {
-			// Unreachable for identities Decide accepted. Checked before any write
-			// so another assignment's malformed identity never fails the caller's
-			// own work; the hold stays for the Dispatcher.
-			continue
-		}
-		d := Decision{Revision: h.revision + 1, OutcomeID: h.outcome, Action: "proceed", WorkerAgent: worker,
-			Condition: truncateRunes("waits satisfied ("+strings.Join(evidence, "; ")+"); released hold: "+h.condition, 500)}
-		res, err := tx.ExecContext(ctx, `UPDATE dispatch_decisions SET revision=?,action='proceed',condition=?,worker_agent=?,waits_for='[]',blocks_phase='',wait_deadline=0,waits_revision=?,on_satisfied_revision=0
- WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=? AND revision=? AND action='hold' AND on_satisfied_revision=revision`, d.Revision, d.Condition, worker, d.Revision, repo, h.key, h.generation, h.item, h.revision)
-		if err != nil {
+		if _, err = tx.ExecContext(ctx, `SAVEPOINT hold_release`); err != nil {
 			return released, err
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
-			continue
+		done, err := h.release(ctx, tx, repo, worker, evidence)
+		if err != nil || !done {
+			// Undo this hold only. A write the schema refuses (for example a wake
+			// for a native fenced after the read above) must not undo the others.
+			if _, rerr := tx.ExecContext(ctx, `ROLLBACK TO hold_release`); rerr != nil {
+				return released, rerr
+			}
 		}
-		if err = recordDecisionHistory(ctx, tx, repo, h.key, h.generation, h.item, d, "[]", "waits-satisfied"); err != nil {
-			return released, err
+		if _, rerr := tx.ExecContext(ctx, `RELEASE hold_release`); rerr != nil {
+			return released, rerr
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO terminal_event_receipts
- (repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id)
- VALUES(?,?,?,?,?,?,?,'decision-resolved',?,?)`, repo, worker, id, h.key, h.generation, h.session, h.item, h.outcome, h.outcome); err != nil {
-			return released, err
+		if err == nil && done {
+			released++
 		}
-		released++
 	}
 	return released, nil
+}
+
+// release performs one hold's transition. It reports false, with no error,
+// when the hold changed under it (the CAS matched no row).
+func (h markedHold) release(ctx context.Context, tx *sql.Tx, repo, worker string, evidence []string) (bool, error) {
+	id := fmt.Sprintf("worker-terminal-v1/%s/%d/%s/decision-resolved/%d/waits-released-r%d", h.key, h.generation, h.session, h.outcome, h.revision+1)
+	if eventPattern.FindString(id) != id {
+		return false, nil
+	}
+	d := Decision{Revision: h.revision + 1, OutcomeID: h.outcome, Action: "proceed", WorkerAgent: worker,
+		Condition: truncateRunes("waits satisfied ("+strings.Join(evidence, "; ")+"); released hold: "+h.condition, 500)}
+	res, err := tx.ExecContext(ctx, `UPDATE dispatch_decisions SET revision=?,action='proceed',condition=?,worker_agent=?,waits_for='[]',blocks_phase='',wait_deadline=0,waits_revision=?,on_satisfied_revision=0
+ WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=? AND revision=? AND action='hold' AND on_satisfied_revision=revision`, d.Revision, d.Condition, worker, d.Revision, repo, h.key, h.generation, h.item, h.revision)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false, nil
+	}
+	if err = recordDecisionHistory(ctx, tx, repo, h.key, h.generation, h.item, d, "[]", "waits-satisfied"); err != nil {
+		return false, err
+	}
+	res, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO terminal_event_receipts
+ (repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id)
+ VALUES(?,?,?,?,?,?,?,'decision-resolved',?,?)`, repo, worker, id, h.key, h.generation, h.session, h.item, h.outcome, h.outcome)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // truncateRunes cuts s to at most max bytes without splitting a rune.
@@ -193,9 +219,10 @@ func (s Store) ReleaseSatisfied(ctx context.Context) (int, error) {
 	return released, err
 }
 
-// releaseBestEffort runs before a recipient reads its pending events. A failure
-// leaves the hold in place, where it stays visible as hold-waits-satisfied
-// drift; it never fails the read.
+// releaseBestEffort applies pending releases around another operation: after a
+// phase result commits, before an acknowledgement, before a recipient reads its
+// pending events. A failure leaves the hold in place, where it stays visible as
+// hold-waits-satisfied drift; it never fails the operation it accompanies.
 func (s Store) releaseBestEffort(ctx context.Context) {
 	releaseCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

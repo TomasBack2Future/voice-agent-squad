@@ -163,6 +163,22 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "WAITS").OnSatisfied != "" {
 		t.Fatalf("lapsed authorization still shown: %+v %v", sweepRow(t, report, "WAITS"), err)
 	}
+	exec(`UPDATE dispatch_decisions SET wait_deadline=0 WHERE reservation_key='WAITS'`)
+	// Another Dispatcher's authorization, and one for a fenced Worker native,
+	// are not in force either.
+	exec(`UPDATE dispatch_reservations SET reserved_by='successor' WHERE item_id='WAITS'`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "WAITS").OnSatisfied != "" {
+		t.Fatalf("a predecessor's authorization still shown: %+v %v", sweepRow(t, report, "WAITS"), err)
+	}
+	exec(`UPDATE dispatch_reservations SET reserved_by='dispatcher' WHERE item_id='WAITS'`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "WAITS").OnSatisfied != "proceed" {
+		t.Fatalf("authorization in force not shown again: %+v %v", sweepRow(t, report, "WAITS"), err)
+	}
+	exec(`INSERT INTO worker_native_fences(repo_id,native_session,actor,reservation_key,generation,stop_id) VALUES('repo-test','native-WAITS','worker-WAITS','WAITS',1,'stop-1')`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "WAITS").OnSatisfied != "" {
+		t.Fatalf("a fenced Worker's authorization still shown: %+v %v", sweepRow(t, report, "WAITS"), err)
+	}
+	exec(`DELETE FROM worker_native_fences`)
 	exec(`UPDATE dispatch_decisions SET wait_deadline=0,revision=2,action='proceed',waits_for='[]',waits_revision=2,on_satisfied_revision=0 WHERE reservation_key='WAITS'`)
 	// Thresholds are the caller's.
 	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: time.Minute}); err != nil || !slices.Contains(sweepRow(t, report, "ASKED").Drift, "owner-quiet") {

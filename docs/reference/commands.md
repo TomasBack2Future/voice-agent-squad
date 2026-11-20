@@ -1080,13 +1080,14 @@ hold into proceed; the owner answers it with a new decision.
 `--on-satisfied proceed` (MCP `on_satisfied`) pre-authorizes the release of a
 structured hold: when its last wait becomes satisfied the hold becomes a
 `proceed` decision with the next revision and the held Worker receives a
-`decision-resolved` wake, with no further Dispatcher step. The release happens
-in the transaction that records the satisfying phase result, through either
-`phase-result` or `submit --kind phase-result`. A release that transaction
-could not perform (Worker custody was ambiguous then) is applied by the next
-listener read of any recipient, by the Dispatcher's acknowledgement of the
-phase result, or by the held Worker's CLI `decision-get`; the MCP read tool
-never writes. It keeps the Dispatcher's
+`decision-resolved` wake, with no further Dispatcher step. The release runs in
+its own transaction, never inside another owner's write: immediately after a
+phase result is committed (through `phase-result` or `submit --kind
+phase-result`), before any recipient's acknowledgement, on any recipient's
+listener read, and on the held Worker's CLI `decision-get`; the MCP read tool
+never writes. Each hold is released independently, so one that cannot be
+released (ambiguous Worker custody, a wake the schema refuses) stays a hold and
+neither fails the operation it accompanies nor stops the others. It keeps the Dispatcher's
 outcome message, drops the waits, records a `dispatch_decision_history` row
 with `decided_by` `waits-satisfied` and changes nothing else: scope, claims and
 merge policy stay as decided. A stale `--expected-revision` from the Dispatcher
@@ -1096,8 +1097,9 @@ The authorization is narrow. It requires phase waits (`executed` or `passed`);
 a `terminal` wait is refused with the marker, because a reservation also ends
 by failing or being retired. It belongs to the revision that carried it, so a
 later revision written by any binary never inherits it. It lapses when the
-hold's time box expires, when the reservation changes Dispatcher, and when a
-takeover or Worker handoff copies the decision to a new generation: the hold
+hold's time box expires, when the reservation changes Dispatcher, when the
+Worker's native session is fenced for a stop, and when a takeover or Worker
+handoff copies the decision to a new generation: the hold
 then stays, `on_satisfied` is no longer shown, and it is reported as
 `hold-waits-satisfied` or `hold-time-box-expired` for the responsible
 Dispatcher. Retrying the identical marked request after its release returns
@@ -1179,8 +1181,8 @@ installed target (default: this binary, symlinks resolved). Only identity
 fields are printed, never full command lines. Installation is the installed
 target; adoption is each live process running it.
 
-Acknowledging a `phase-result` event first releases every dependent whose
-release authorization is in force, and is then refused with
+Before any acknowledgement, every dependent whose release authorization is in
+force is released. Acknowledging a `phase-result` event is then refused with
 `phase-result-unconsumed` while any live hold that cites the result still has
 every wait satisfied: publish each such dependent's next decision first. An
 acknowledgement alone is not consumption.
