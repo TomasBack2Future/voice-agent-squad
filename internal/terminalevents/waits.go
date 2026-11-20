@@ -54,9 +54,12 @@ var phaseName = regexp.MustCompile(`^[a-z0-9][a-z0-9:._-]{0,63}$`)
 const maxWaits = 8
 
 func validateWaits(q DecisionRequest, self string, now time.Time) error {
+	if q.OnSatisfied != "" && q.OnSatisfied != "proceed" {
+		return &Rejection{Condition: "invalid-wait", Repair: "--on-satisfied is empty or proceed"}
+	}
 	if len(q.WaitsFor) == 0 {
-		if q.WaitDeadline != 0 || q.BlocksPhase != "" {
-			return &Rejection{Condition: "invalid-wait", Repair: "--wait-deadline and --blocks-phase require at least one --wait-for"}
+		if q.WaitDeadline != 0 || q.BlocksPhase != "" || q.OnSatisfied != "" {
+			return &Rejection{Condition: "invalid-wait", Repair: "--wait-deadline, --blocks-phase and --on-satisfied require at least one --wait-for"}
 		}
 		return nil
 	}
@@ -87,6 +90,10 @@ func validateWaits(q DecisionRequest, self string, now time.Time) error {
 			return &Rejection{Condition: "invalid-wait", Repair: "until must be executed, passed or terminal"}
 		case seen[w]:
 			return &Rejection{Condition: "invalid-wait", Repair: "duplicate wait"}
+		case w.Until == "terminal" && q.OnSatisfied != "":
+			// A reservation also ends by failing, being cancelled or being partially
+			// retired; whether its successor may go then is a judgment, not a fact.
+			return &Rejection{Condition: "invalid-wait", Repair: "--on-satisfied needs phase waits (executed or passed); decide a terminal wait yourself when the predecessor ends"}
 		}
 		seen[w] = true
 	}
@@ -195,9 +202,19 @@ func currentHolds(ctx context.Context, tx *sql.Tx, repo string) (map[string]acti
 }
 
 // blocksNode reports whether a hold stops progress toward the waited phase.
-// A terminal wait is blocked by any hold; "" blocks every phase.
+// A terminal wait is blocked by any hold; "" blocks every phase. The relation
+// is the one operations are held by, so a cycle is never accepted here and
+// then enforced there.
 func (h activeHold) blocksNode(w Wait) bool {
-	return h.blocks == "" || w.Until == "terminal" || h.blocks == w.Phase
+	return h.blocks == "" || w.Until == "terminal" || samePhase(h.blocks, w.Phase)
+}
+
+// samePhase is the single phase relation: names are hierarchical with ":" as
+// the only separator, so "merge:pr1972" is the phase "merge" and the reverse.
+// "merge-pr1" or "premerge" are different names; phases are declared by their
+// owner, so a scope is a cooperative boundary, not an access control.
+func samePhase(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+":") || strings.HasPrefix(b, a+":")
 }
 
 // checkWaitGraph rejects a hold that waits on something already satisfied
@@ -356,6 +373,13 @@ func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResul
 	})
 	if err == nil && p.EventID != "" {
 		s.wakeReceivers(ctx)
+	}
+	if err == nil {
+		// The result is committed. It may satisfy the last wait of a
+		// pre-authorized hold: release that hold now, in its own transaction, so
+		// no Dispatcher round trip is needed and nothing about another
+		// assignment's hold can ever fail this owner's result.
+		s.releaseBestEffort(ctx, true)
 	}
 	return p, err
 }

@@ -347,15 +347,42 @@ func TestDecisionGetRejectsMissingOrWrongSessionPrecisely(t *testing.T) {
 }
 
 func TestParseWaitSpecs(t *testing.T) {
-	got, err := parseWaits([]string{"DISPATCH-STUDIO-1940:s6-acceptance:executed", "release:v1:2::terminal"})
+	got, err := parseWaits([]string{"DISPATCH-STUDIO-1940:s6-acceptance:executed", "release:v1:2::terminal"}, nil)
 	if err != nil || len(got) != 2 || got[0].Reservation != "DISPATCH-STUDIO-1940" || got[0].Phase != "s6-acceptance" || got[0].Until != "executed" ||
 		got[1].Reservation != "release:v1:2" || got[1].Phase != "" || got[1].Until != "terminal" {
 		t.Fatalf("%+v %v", got, err)
 	}
 	for _, bad := range []string{"D", "D:x", ":x:executed"} {
-		if _, err := parseWaits([]string{bad}); err == nil {
+		if _, err := parseWaits([]string{bad}, nil); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
+	}
+}
+
+// Reservation keys and phase names both contain colons, so the split between
+// them is the one whose reservation exists in the ledger.
+func TestParseWaitSpecsResolvesColonsAgainstTheLedger(t *testing.T) {
+	ledger := map[string]bool{"A": true, "production:studio:7bd6": true, "X": true, "X:merge": true}
+	exists := func(key string) (bool, error) { return ledger[key], nil }
+	for spec, want := range map[string][3]string{
+		"A:merge:passed":                               {"A", "merge", "passed"},
+		"A:merge:pr42:passed":                          {"A", "merge:pr42", "passed"},
+		"A:deploy:staging:b7:a2:passed":                {"A", "deploy:staging:b7:a2", "passed"},
+		"A::terminal":                                  {"A", "", "terminal"},
+		"production:studio:7bd6:merge:executed":        {"production:studio:7bd6", "merge", "executed"},
+		"production:studio:7bd6:deploy:prod:b7:passed": {"production:studio:7bd6", "deploy:prod:b7", "passed"},
+		"production:studio:7bd6::terminal":             {"production:studio:7bd6", "", "terminal"},
+		// An unknown reservation keeps the documented single-field phase so the
+		// decision can name the missing reservation.
+		"NOPE:merge:passed": {"NOPE", "merge", "passed"},
+	} {
+		got, err := parseWaits([]string{spec}, exists)
+		if err != nil || len(got) != 1 || got[0].Reservation != want[0] || got[0].Phase != want[1] || got[0].Until != want[2] {
+			t.Errorf("%q: got %+v %v, want %v", spec, got, err, want)
+		}
+	}
+	if _, err := parseWaits([]string{"X:merge:pr1:passed"}, exists); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous split was guessed: %v", err)
 	}
 }
 
@@ -413,5 +440,145 @@ func TestMCPReorderAndPhaseResultParity(t *testing.T) {
 	out = call("squad_terminal_decision_get", map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B"})
 	if !strings.Contains(out, `waits_satisfied`) {
 		t.Fatalf("readback lacks satisfaction: %s", out)
+	}
+}
+
+// CLI and MCP parity for the release marker and the fleet sweep: a marked hold
+// set over MCP is released by the producer's phase result, the MCP read of the
+// decision stays a pure read, and the sweep reports the fleet over MCP.
+func TestMCPSelfReleasingHoldAndSweep(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	for _, k := range []string{"A", "B"} {
+		if _, err := env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,?,?,?,1,1,0,'dispatched',1,?,'',?)`, env.RepoID, k, "github:o/r#"+k, env.AgentID, "native-"+k, "TASK-"+k); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,?,?,1,2,'blocked')`, env.RepoID, "TASK-"+k, "worker-"+k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := chat.New(env.DB, env.RepoID)
+	msg := func(thread string) int64 {
+		if err := c.Post(ctx, chat.PostRequest{AgentID: env.AgentID, Thread: thread, Kind: "fyi", Body: "decision"}); err != nil {
+			t.Fatal(err)
+		}
+		var id int64
+		if err := env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	call := func(name string, args map[string]any) string {
+		request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+		var out bytes.Buffer
+		if err := runMCP(ctx, env.DB, env.RepoID, env.Root, strings.NewReader(string(request)+"\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	waitA := []map[string]any{{"reservation": "A", "phase": "merge", "until": "passed"}}
+	hold := map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B", "expected_revision": 0, "outcome_id": msg("TASK-B"), "action": "hold", "condition": "after A merges", "waits_for": waitA, "on_satisfied": "proceed", "agent_id": env.AgentID}
+	terminal := map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B", "expected_revision": 0, "outcome_id": hold["outcome_id"], "action": "hold", "condition": "after A ends", "waits_for": []map[string]any{{"reservation": "A", "until": "terminal"}}, "on_satisfied": "proceed", "agent_id": env.AgentID}
+	if out := call("squad_terminal_decision_set", terminal); !strings.Contains(out, "invalid-wait") {
+		t.Fatalf("MCP accepted a pre-authorized terminal wait: %s", out)
+	}
+	if out := call("squad_terminal_decision_set", hold); strings.Contains(out, `"isError":true`) || !strings.Contains(out, `on_satisfied`) {
+		t.Fatalf("MCP marked hold: %s", out)
+	}
+	if out := call("squad_dispatch_sweep", map[string]any{"reserved_by": env.AgentID}); strings.Contains(out, `"isError":true`) || !strings.Contains(out, `on_satisfied`) || !strings.Contains(out, `"active":2`) {
+		t.Fatalf("MCP sweep: %s", out)
+	}
+	if out := call("squad_dispatch_sweep", map[string]any{"reserved_by": "nobody"}); !strings.Contains(out, `"active":0`) {
+		t.Fatalf("MCP sweep owner filter: %s", out)
+	}
+	// The producer's own Worker records the phase; the dependent is released.
+	if _, err := env.DB.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,'worker-A','TASK-A','say','merged','[]','normal')`, env.RepoID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	var outcome int64
+	if err := env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	if out := call("squad_terminal_phase_result", map[string]any{"reservation": "A", "generation": 1, "worker_session": "native-A", "phase": "merge", "checks": "all", "verdict": "passed", "outcome_id": outcome, "agent_id": "worker-A"}); strings.Contains(out, `"isError":true`) {
+		t.Fatalf("producer phase result: %s", out)
+	}
+	out := call("squad_terminal_decision_get", map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B"})
+	if !strings.Contains(out, `"action":"proceed"`) || !strings.Contains(out, `"revision":2`) {
+		t.Fatalf("dependent not released: %s", out)
+	}
+	var history int
+	if err := env.DB.QueryRow(`SELECT count(*) FROM dispatch_decision_history WHERE reservation_key='B'`).Scan(&history); err != nil || history != 2 {
+		t.Fatalf("history rows %d %v", history, err)
+	}
+}
+
+// The command line carries the same contract as MCP: --on-satisfied sets the
+// authorization, dispatch sweep shows it, the MCP read of a satisfied marked
+// hold writes nothing, and the owner's CLI decision-get applies the release.
+func TestCLIOnSatisfiedSweepAndDecisionGetRelease(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	bc, err := bootClaimContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoID, dispatcher := bc.repoID, bc.agentID
+	bc.Close()
+	for _, k := range []string{"A", "B"} {
+		if _, err = env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,?,?,?,1,1,0,'dispatched',1,?,'',?)`, repoID, k, "github:o/r#"+k, dispatcher, "native-"+k, "TASK-"+k); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,?,?,1,2,'blocked')`, repoID, "TASK-"+k, "worker-"+k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := env.DB.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,?,'TASK-B','say','after A merges','[]','normal')`, repoID, time.Now().Unix(), dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, _ := res.LastInsertId()
+	run := func(args ...string) (string, error) {
+		root := newRootCmd()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(args)
+		err := root.Execute()
+		return out.String(), err
+	}
+	set := []string{"terminal-events", "decision-set", "--reservation", "B", "--generation", "1", "--worker-session", "native-B", "--expected-revision", "0",
+		"--outcome", strconv.FormatInt(outcome, 10), "--action", "hold", "--condition", "after A merges", "--on-satisfied", "proceed", "--wait-time-box", "1h"}
+	if out, err := run(append(set, "--wait-for", "A::terminal")...); err == nil || !strings.Contains(err.Error(), "invalid-wait") {
+		t.Fatalf("CLI accepted a pre-authorized terminal wait: %v %s", err, out)
+	}
+	// A hierarchical phase name is accepted on the command line.
+	out, err := run(append(set, "--wait-for", "A:merge:pr42:passed")...)
+	if err != nil || !strings.Contains(out, `"on_satisfied":"proceed"`) || !strings.Contains(out, `"phase":"merge:pr42"`) {
+		t.Fatalf("decision-set --on-satisfied with a colon phase: %v %s", err, out)
+	}
+	out, err = run("dispatch", "sweep", "--reserved-by", dispatcher)
+	if err != nil || !strings.Contains(out, `"active":2`) || !strings.Contains(out, `"on_satisfied":"proceed"`) {
+		t.Fatalf("dispatch sweep: %v %s", err, out)
+	}
+	if out, err = run("dispatch", "sweep", "--reserved-by", "someone-else"); err != nil || !strings.Contains(out, `"active":0`) {
+		t.Fatalf("dispatch sweep owner filter: %v %s", err, out)
+	}
+	// The producer's phase is recorded behind the commands' back, so nothing has
+	// applied the release yet.
+	if _, err = env.DB.Exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES(?,'A','merge:pr42',1,'TASK-A','all','passed','',?,'worker-A',?)`, repoID, outcome, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "squad_terminal_decision_get", "arguments": map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B"}}})
+	var mcpOut bytes.Buffer
+	if err = runMCP(ctx, env.DB, repoID, env.Root, strings.NewReader(string(request)+"\n"), &mcpOut); err != nil {
+		t.Fatal(err)
+	}
+	var revision int64
+	if err = env.DB.QueryRow(`SELECT revision FROM dispatch_decisions WHERE reservation_key='B'`).Scan(&revision); err != nil || revision != 1 || !strings.Contains(mcpOut.String(), `"action":"hold"`) {
+		t.Fatalf("the MCP read wrote or misread: revision %d %v %s", revision, err, mcpOut.String())
+	}
+	out, err = run("terminal-events", "decision-get", "--reservation", "B", "--generation", "1", "--worker-session", "native-B")
+	if err != nil || !strings.Contains(out, `"action":"proceed"`) || !strings.Contains(out, `"revision":2`) {
+		t.Fatalf("the owner's CLI read did not apply the release: %v %s", err, out)
 	}
 }

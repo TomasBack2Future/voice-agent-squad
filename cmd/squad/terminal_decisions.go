@@ -38,7 +38,11 @@ func terminalDecisionCommands() []*cobra.Command {
 			mergeRelease.ExpiresAt = time.Now().Add(mergeTTL).Unix()
 			q.MergeRelease = &mergeRelease
 		}
-		if q.WaitsFor, err = parseWaits(waitSpecs); err != nil {
+		if q.WaitsFor, err = parseWaits(waitSpecs, func(key string) (bool, error) {
+			var n int
+			err := bc.db.QueryRowContext(cmd.Context(), `SELECT count(*) FROM dispatch_reservations WHERE repo_id=? AND item_id=?`, bc.repoID, key).Scan(&n)
+			return n > 0, err
+		}); err != nil {
 			return err
 		}
 		if timeBox > 0 {
@@ -66,6 +70,7 @@ func terminalDecisionCommands() []*cobra.Command {
 	set.Flags().StringArrayVar(&waitSpecs, "wait-for", nil, "Structured hold dependency RESERVATION:PHASE:executed|passed or RESERVATION::terminal (repeatable)")
 	set.Flags().StringVar(&q.BlocksPhase, "blocks-phase", "", "Phase of this assignment the hold stops (empty: every phase)")
 	set.Flags().DurationVar(&timeBox, "wait-time-box", 0, "Optional time box for the waits; expiry is reported for reconciliation, never auto-proceeds")
+	set.Flags().StringVar(&q.OnSatisfied, "on-satisfied", "", "proceed: release this structured hold and wake its Worker once every wait is satisfied (empty: a new decision is needed)")
 	var key, session string
 	var generation, expected int64
 	get := &cobra.Command{Use: "decision-get", Short: "Read the latest decision; --reservation, --generation and --worker-session are all required", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -74,7 +79,16 @@ func terminalDecisionCommands() []*cobra.Command {
 			return err
 		}
 		defer bc.Close()
-		d, err := (terminalevents.Store{DB: bc.db, Repo: bc.repoID}).CurrentDecision(cmd.Context(), key, generation, session)
+		events := terminalevents.Store{DB: bc.db, Repo: bc.repoID}
+		d, err := events.CurrentDecision(cmd.Context(), key, generation, session)
+		if err == nil && d.Action == "hold" && d.OnSatisfied == "proceed" && d.WaitsSatisfied {
+			// An owner reading its own satisfied, pre-authorized hold applies the
+			// release so it never acts on a stale hold. Best effort: a failure
+			// leaves the hold as read. The MCP read tool stays a pure read.
+			if n, rerr := events.ReleaseSatisfied(cmd.Context()); rerr == nil && n > 0 {
+				d, err = events.CurrentDecision(cmd.Context(), key, generation, session)
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -133,20 +147,56 @@ func terminalDecisionCommands() []*cobra.Command {
 	return []*cobra.Command{set, get, reorder, phase}
 }
 
-// parseWaits reads RESERVATION:PHASE:UNTIL; the reservation may itself contain
-// colons, so the last two fields are split from the right.
-func parseWaits(specs []string) ([]terminalevents.Wait, error) {
+// parseWaits reads RESERVATION:PHASE:UNTIL. Both a reservation key
+// ("production:studio:7bd6fb54") and a phase ("merge:pr1972",
+// "deploy:staging:b7") may contain colons, so the text alone is ambiguous. The
+// last field is UNTIL; the split between reservation and phase is the one for
+// which the reservation exists in this ledger. Several matching splits are
+// refused rather than guessed: use decision-reorder --request, whose JSON
+// names the fields. Without a lookup (exists == nil) the phase is the single
+// field before UNTIL, the form documented before phases had colons.
+func parseWaits(specs []string, exists func(string) (bool, error)) ([]terminalevents.Wait, error) {
 	out := make([]terminalevents.Wait, 0, len(specs))
 	for _, spec := range specs {
+		bad := fmt.Errorf("--wait-for %q: want RESERVATION:PHASE:UNTIL or RESERVATION::terminal", spec)
 		i := strings.LastIndex(spec, ":")
-		j := -1
-		if i > 0 {
-			j = strings.LastIndex(spec[:i], ":")
+		if i <= 0 {
+			return nil, bad
 		}
-		if j <= 0 {
-			return nil, fmt.Errorf("--wait-for %q: want RESERVATION:PHASE:UNTIL or RESERVATION::terminal", spec)
+		head, until := spec[:i], spec[i+1:]
+		// Candidate boundaries between reservation and phase, shortest phase first.
+		var cuts []int
+		for k := len(head) - 1; k > 0; k-- {
+			if head[k] == ':' {
+				cuts = append(cuts, k)
+			}
 		}
-		out = append(out, terminalevents.Wait{Reservation: spec[:j], Phase: spec[j+1 : i], Until: spec[i+1:]})
+		if len(cuts) == 0 {
+			return nil, bad
+		}
+		if exists == nil {
+			out = append(out, terminalevents.Wait{Reservation: head[:cuts[0]], Phase: head[cuts[0]+1:], Until: until})
+			continue
+		}
+		var found []terminalevents.Wait
+		for _, k := range cuts {
+			ok, err := exists(head[:k])
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				found = append(found, terminalevents.Wait{Reservation: head[:k], Phase: head[k+1:], Until: until})
+			}
+		}
+		switch len(found) {
+		case 1:
+			out = append(out, found[0])
+		case 0:
+			// Let the decision report the precise missing reservation.
+			out = append(out, terminalevents.Wait{Reservation: head[:cuts[0]], Phase: head[cuts[0]+1:], Until: until})
+		default:
+			return nil, fmt.Errorf("--wait-for %q is ambiguous: reservations %q and %q both exist; name the fields with terminal-events decision-reorder --request (JSON waits_for)", spec, found[0].Reservation, found[1].Reservation)
+		}
 	}
 	return out, nil
 }

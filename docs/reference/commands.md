@@ -1061,7 +1061,11 @@ describing it only in prose: repeat `--wait-for RESERVATION:PHASE:executed`,
 `--blocks-phase PHASE` for the phase of this assignment the hold stops (empty
 means every phase) and optionally `--wait-time-box 25m`. MCP: `waits_for`
 (`reservation`, `phase`, `until`), `blocks_phase`, `wait_deadline` (unix
-seconds). Waits are valid only on a hold. In the same CAS transaction the
+seconds). Waits are valid only on a hold. A reservation key and a phase name
+may both contain colons (`merge:pr1972`, `deploy:staging:b7:a2`): the command
+line takes the last field as `until` and splits the rest at the reservation
+that exists in this ledger. If two splits both name existing reservations it
+refuses to guess; use `decision-reorder --request`, whose JSON names the fields. In the same CAS transaction the
 command refuses:
 
 - `wait-cycle`: following the unsatisfied waits of current holds from the new
@@ -1076,6 +1080,74 @@ command refuses:
 `wait_overdue` (the time box ended with waits unmet). Delivery reports these as
 drift `hold-waits-satisfied` and `hold-time-box-expired`. Expiry never turns a
 hold into proceed; the owner answers it with a new decision.
+
+`--on-satisfied proceed` (MCP `on_satisfied`) pre-authorizes the release of a
+structured hold: when its last wait becomes satisfied the hold becomes a
+`proceed` decision with the next revision and the held Worker receives a
+`decision-resolved` wake, with no further Dispatcher step. The release runs in
+its own transaction, never inside another owner's write: immediately after a
+phase result is committed (through `phase-result` or `submit --kind
+phase-result`), before any recipient's acknowledgement, after any recipient's
+listener read, and on a CLI `decision-get` that read a satisfied in-force hold;
+the MCP read tool never writes. A listener read reads its own events first
+and then takes the write lock for a release only if it is free, so a poll never
+waits on a release it does not own; the next read retries. When that attempt
+does release something the read is repeated, so a held Worker that polls first
+receives the release itself rather than its retired hold. Each hold is
+released independently, so one that cannot be released (ambiguous Worker
+custody, a wake the schema refuses) stays a hold and neither fails the
+operation it accompanies nor stops the others. The time box is checked with the
+write lock held: one that expired while the release waited for the lock is
+expired. The released hold's own wake is retired in the same step, so only the
+release is delivered and acknowledging the old hold is refused, as after any
+newer decision. It keeps the Dispatcher's
+outcome message, drops the waits, records a `dispatch_decision_history` row
+with `decided_by` `waits-satisfied` and changes nothing else: scope, claims and
+merge policy stay as decided. A stale `--expected-revision` from the Dispatcher
+is refused afterwards, which is how it learns the hold was released.
+
+The authorization is narrow. It requires phase waits (`executed` or `passed`);
+a `terminal` wait is refused with the marker, because a reservation also ends
+by failing or being retired. It belongs to the revision that carried it, so a
+later revision written by any binary never inherits it. It lapses when the
+hold's time box expires, when the reservation changes Dispatcher, when the
+Worker's native session is fenced for a stop, and when a takeover or Worker
+handoff copies the decision to a new generation: the hold
+then stays, `on_satisfied` is no longer shown, and it is reported as
+`hold-waits-satisfied` or `hold-time-box-expired` for the responsible
+Dispatcher. Retrying the identical marked request after its release returns
+the stale-decision error rather than the earlier result. Without the marker a satisfied hold needs a new
+decision, as before. Use it for an order the Dispatcher has already decided
+("after B's merge, go"); leave it off for a human hold or a gate whose result
+must be judged first.
+
+`squad dispatch sweep [--reserved-by AGENT] [--request-after 10m]
+[--decision-after 5m] [--quiet-after 3h] [--hold-after 2h] [--operation-after
+12h]` (MCP `squad_dispatch_sweep` with `reserved_by` and `*_after_seconds`) reads every
+active reservation in one call, or only one Dispatcher's with `--reserved-by`,
+and writes nothing. Each row carries
+the `dispatch delivery` drift of that reservation plus the fleet checks below,
+with `last_progress_at` (newest owner message, attestation, phase result or
+owned operation), `quiet_seconds` (counted from the later of that and the
+current decision, so a hold that just ended restarts the clock), the current
+decision and its waits. The rows are read one reservation at a time, not as
+one snapshot. Flagged
+rows come first.
+
+| Drift | Recorded fact | Next step belongs to |
+| --- | --- | --- |
+| `decision-request-unanswered` | A Worker decision request is unhandled past the threshold | Dispatcher |
+| `decision-undelivered` | The current decision's wake exists and reached no Worker receiver | Dispatcher (receiver or session health) |
+| `hold-waits-satisfied` | Every wait of a hold is met and it was not released (no marker, lapsed marker or ambiguous Worker custody) | Dispatcher |
+| `hold-without-checkable-wait` | A hold older than the threshold names no structured wait | Dispatcher: add the wait or lift the hold |
+| `owner-quiet` | A proceeding owner recorded no progress and has no owned operation in flight | Dispatcher inspects the session once |
+| `sweep-read-failed` | This reservation could not be read (the error is in `notes`); the other rows are complete | Dispatcher reads it with `dispatch delivery` |
+
+A plain Worker message after the current decision appears under `notes`
+(`worker-report-without-event`), not under drift: ordinary progress needs no
+answer. An owned operation recorded as started with no exit is normally a watch
+still running: it is the note `operation-in-flight`, and becomes the drift
+`owned-operation-unresolved` only when older than `--operation-after`. A result another owner must consume is recorded with `phase-result`.
 
 `terminal-events decision-reorder --request FILE` applies a JSON array of up to
 eight decision requests (the MCP field names) in one transaction, in array
@@ -1124,9 +1196,11 @@ installed target (default: this binary, symlinks resolved). Only identity
 fields are printed, never full command lines. Installation is the installed
 target; adoption is each live process running it.
 
-Acknowledging a `phase-result` event is refused with `phase-result-unconsumed`
-while a live hold that cites it has every wait satisfied: publish each such
-dependent's next decision first. An acknowledgement alone is not consumption.
+Before any acknowledgement, every dependent whose release authorization is in
+force is released. Acknowledging a `phase-result` event is then refused with
+`phase-result-unconsumed` while any live hold that cites the result still has
+every wait satisfied: publish each such dependent's next decision first. An
+acknowledgement alone is not consumption.
 
 Only the current decision is delivered; an older delivered decision cannot be
 acknowledged as current. A released primary claim does not disable the wake:

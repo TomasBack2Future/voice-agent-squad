@@ -314,6 +314,25 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
 	if s.Repo == "" || s.Recipient == "" || session == "" {
 		return nil, fmt.Errorf("repo, recipient and delivery session required")
 	}
+	events, err := s.pendingRead(ctx, session, retry)
+	if err != nil {
+		return nil, err
+	}
+	// Any recipient's read also applies a pending pre-authorized release, so one
+	// that could not be performed when the result was recorded (custody was
+	// ambiguous then, or the write lock was busy) is not lost. It runs after this
+	// recipient's own events are read and never delays or fails them.
+	if s.releaseBestEffort(ctx, false) == 0 {
+		return events, nil
+	}
+	// A release happened, and it retires the released hold's own wake. If that
+	// hold is this recipient's, the list read above now names a retired event
+	// that can be neither delivered nor acknowledged. Read again so the caller
+	// gets what is current: the release itself.
+	return s.pendingRead(ctx, session, retry)
+}
+
+func (s Store) pendingRead(ctx context.Context, session string, retry time.Duration) ([]Event, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT e.event_id,e.item_id,e.kind,e.outcome_id,e.source_message_id,e.delivered_at,e.processed_at
  FROM terminal_event_receipts e JOIN dispatch_reservations r
  ON r.repo_id=e.repo_id AND r.item_id=e.reservation_key AND r.generation=e.generation
@@ -380,6 +399,13 @@ func (s Store) Delivered(ctx context.Context, id, session string) error {
 func (s Store) Ack(ctx context.Context, id, note string) error {
 	if s.Repo == "" || s.Recipient == "" || strings.TrimSpace(note) == "" {
 		return fmt.Errorf("repo, recipient and reconciliation note required")
+	}
+	// A dependent whose release is in force is consumed by releasing it; do that
+	// first, in its own transaction, so the gate below only ever sees holds that
+	// could not be released and a failed release cannot fail this acknowledgement.
+	// A caller the controller fence will refuse triggers nothing.
+	if s.controllerFence(ctx, s.DB, "") == nil {
+		s.releaseBestEffort(ctx, true)
 	}
 	return store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
 		if err := s.controllerFence(ctx, tx, ""); err != nil {
