@@ -269,7 +269,10 @@ in the checkpoint; keep exactly one; stop it when the batch is closed or the
 user pauses the work. An outside observer may check that this Dispatcher is
 alive, and nothing more: it does not find stuck work or send corrections.
 
-Each wake runs `squad dispatch sweep` and acts only on flagged rows:
+Each wake runs `squad dispatch sweep --reserved-by <your agent id>` and acts only
+on flagged rows. These commands and `--on-satisfied` exist when the installed
+binary lists them; on an older binary apply the same checks per reservation with
+`dispatch delivery` and record the capability gap.
 
 | Drift | Action in this cycle |
 | --- | --- |
