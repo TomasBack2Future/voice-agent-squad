@@ -315,15 +315,21 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
 		return nil, fmt.Errorf("repo, recipient and delivery session required")
 	}
 	events, err := s.pendingRead(ctx, session, retry)
-	if err == nil {
-		// Any recipient's read also applies a pending pre-authorized release, so
-		// one that could not be performed when the result was recorded (custody
-		// was ambiguous then, or the write lock was busy) is not lost. It runs
-		// after this recipient's own events are read and never delays or fails
-		// them; a released hold wakes its Worker, whose next read delivers it.
-		s.releaseBestEffort(ctx, false)
+	if err != nil {
+		return nil, err
 	}
-	return events, err
+	// Any recipient's read also applies a pending pre-authorized release, so one
+	// that could not be performed when the result was recorded (custody was
+	// ambiguous then, or the write lock was busy) is not lost. It runs after this
+	// recipient's own events are read and never delays or fails them.
+	if s.releaseBestEffort(ctx, false) == 0 {
+		return events, nil
+	}
+	// A release happened, and it retires the released hold's own wake. If that
+	// hold is this recipient's, the list read above now names a retired event
+	// that can be neither delivered nor acknowledged. Read again so the caller
+	// gets what is current: the release itself.
+	return s.pendingRead(ctx, session, retry)
 }
 
 func (s Store) pendingRead(ctx context.Context, session string, retry time.Duration) ([]Event, error) {

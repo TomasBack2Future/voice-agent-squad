@@ -289,6 +289,7 @@ func (s Store) tryTx(ctx context.Context, fn func(*sql.Tx) error) error {
 // on a release it does not own. A failure leaves the hold in place, where it
 // stays visible as hold-waits-satisfied drift and is retried by the next read;
 // it never fails the operation it accompanies.
-func (s Store) releaseBestEffort(ctx context.Context, wait bool) {
-	_, _ = s.releaseSatisfied(context.WithoutCancel(ctx), wait)
+func (s Store) releaseBestEffort(ctx context.Context, wait bool) int {
+	n, _ := s.releaseSatisfied(context.WithoutCancel(ctx), wait)
+	return n
 }

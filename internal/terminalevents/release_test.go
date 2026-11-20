@@ -724,3 +724,50 @@ func TestPollStaysPromptWhileAReleaseWaitsForTheWriteLock(t *testing.T) {
 		t.Fatalf("the deferred release was lost: %d %s", rev, action)
 	}
 }
+
+// The held Worker itself is the first to poll after a release that had been
+// deferred (custody was ambiguous when the result was recorded). Its poll
+// applies the release, which retires the hold's own wake: the poll must hand
+// back the release, deliverable and acknowledgeable, not the retired hold.
+func TestHeldWorkerPollingFirstReceivesTheReleaseNotTheRetiredHold(t *testing.T) {
+	for _, heldWakeDelivered := range []bool{false, true} {
+		s := waitFixture(t, "W", "P")
+		ctx := context.Background()
+		if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "build", Until: "passed"})); err != nil {
+			t.Fatal(err)
+		}
+		worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker-W"}
+		if heldWakeDelivered {
+			first, err := worker.Pending(ctx, "incarnation", 0)
+			if err != nil || len(first) != 1 {
+				t.Fatalf("%+v %v", first, err)
+			}
+			if err = worker.Delivered(ctx, first[0].ID, "incarnation"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','TASK-W','intruder',1,2,'released')`); err != nil {
+			t.Fatal(err)
+		}
+		p := PhaseResult{Reservation: "P", Generation: 1, WorkerSession: "native-P", Phase: "build", Checks: "all", Verdict: "passed", OutcomeID: say(t, s, "worker-P", "TASK-P")}
+		if _, err := s.RecordPhaseResult(ctx, "worker-P", p); err != nil {
+			t.Fatal(err)
+		}
+		if _, action, _ := storedDecision(t, s, "W"); action != "hold" {
+			t.Fatal("released under ambiguous custody")
+		}
+		if _, err := s.DB.Exec(`DELETE FROM claim_history WHERE agent_id='intruder'`); err != nil {
+			t.Fatal(err)
+		}
+		events, err := worker.Pending(ctx, "incarnation", 0)
+		if err != nil || len(events) != 1 || !strings.HasSuffix(events[0].ID, "/waits-released-r2") {
+			t.Fatalf("heldWakeDelivered=%v: want only the release, got %+v %v", heldWakeDelivered, events, err)
+		}
+		if err = worker.Delivered(ctx, events[0].ID, "incarnation"); err != nil {
+			t.Fatalf("heldWakeDelivered=%v: the poll returned an event that cannot be delivered: %v", heldWakeDelivered, err)
+		}
+		if err = worker.Ack(ctx, events[0].ID, "resumed at revision 2"); err != nil {
+			t.Fatalf("heldWakeDelivered=%v: %v", heldWakeDelivered, err)
+		}
+	}
+}

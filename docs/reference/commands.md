@@ -1089,9 +1089,11 @@ its own transaction, never inside another owner's write: immediately after a
 phase result is committed (through `phase-result` or `submit --kind
 phase-result`), before any recipient's acknowledgement, after any recipient's
 listener read, and on a CLI `decision-get` that read a satisfied in-force hold;
-the MCP read tool never writes. A listener read returns its own events first
+the MCP read tool never writes. A listener read reads its own events first
 and then takes the write lock for a release only if it is free, so a poll never
-waits on a release it does not own; the next read retries. Each hold is
+waits on a release it does not own; the next read retries. When that attempt
+does release something the read is repeated, so a held Worker that polls first
+receives the release itself rather than its retired hold. Each hold is
 released independently, so one that cannot be released (ambiguous Worker
 custody, a wake the schema refuses) stays a hold and neither fails the
 operation it accompanies nor stops the others. The time box is checked with the
