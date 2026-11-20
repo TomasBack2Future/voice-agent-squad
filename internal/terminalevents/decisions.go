@@ -31,6 +31,9 @@ type Decision struct {
 	// WaitOverdue: the time box ended with waits unmet; it never auto-proceeds.
 	WaitsSatisfied bool `json:"waits_satisfied,omitempty"`
 	WaitOverdue    bool `json:"wait_overdue,omitempty"`
+	// OnSatisfied "proceed" marks a hold the Dispatcher pre-authorized to release
+	// itself once every wait is satisfied; "" needs a new Dispatcher decision.
+	OnSatisfied string `json:"on_satisfied,omitempty"`
 }
 
 type DecisionRequest struct {
@@ -49,6 +52,9 @@ type DecisionRequest struct {
 	WaitsFor     []Wait `json:"waits_for,omitempty"`
 	BlocksPhase  string `json:"blocks_phase,omitempty"`
 	WaitDeadline int64  `json:"wait_deadline,omitempty"`
+	// OnSatisfied "proceed" pre-authorizes the release of this structured hold
+	// when its waits are all satisfied; it requires at least one wait.
+	OnSatisfied string `json:"on_satisfied,omitempty"`
 }
 
 var ErrStaleDecision = errors.New("decision changed or missing: read terminal-events decision-get before proceeding")
@@ -151,9 +157,9 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 		return d, &DecisionLookupError{"missing-worker-session", "--worker-session is required: decision-get never resolves a session implicitly"}
 	}
 	var rawWaits string
-	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.waits_for ELSE '[]' END,'[]'),CASE WHEN d.waits_revision=d.revision THEN d.blocks_phase ELSE '' END,CASE WHEN d.waits_revision=d.revision THEN d.wait_deadline ELSE 0 END
+	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.waits_for ELSE '[]' END,'[]'),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.blocks_phase ELSE '' END,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.wait_deadline ELSE 0 END,0),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.on_satisfied ELSE '' END,'')
  FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation AND d.item_id=r.canonical_item_id
- WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item, &rawWaits, &d.BlocksPhase, &d.WaitDeadline)
+ WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item, &rawWaits, &d.BlocksPhase, &d.WaitDeadline, &d.OnSatisfied)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, s.diagnoseLookup(ctx, key, generation)
 	}
@@ -247,7 +253,7 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 
 		var old Decision
 		oldWaits := "[]"
-		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy,CASE WHEN waits_revision=revision THEN waits_for ELSE '[]' END,CASE WHEN waits_revision=revision THEN blocks_phase ELSE '' END,CASE WHEN waits_revision=revision THEN wait_deadline ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy, &oldWaits, &old.BlocksPhase, &old.WaitDeadline)
+		err = tx.QueryRowContext(ctx, `SELECT revision,outcome_id,action,condition,worker_agent,merge_policy,CASE WHEN waits_revision=revision THEN waits_for ELSE '[]' END,CASE WHEN waits_revision=revision THEN blocks_phase ELSE '' END,CASE WHEN waits_revision=revision THEN wait_deadline ELSE 0 END,CASE WHEN waits_revision=revision THEN on_satisfied ELSE '' END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&old.Revision, &old.OutcomeID, &old.Action, &old.Condition, &old.WorkerAgent, &old.MergePolicy, &oldWaits, &old.BlocksPhase, &old.WaitDeadline, &old.OnSatisfied)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -265,7 +271,7 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 			policy = "standing"
 		}
 		waits := encodeWaits(q.WaitsFor)
-		if old.Revision > 0 && old.OutcomeID == q.OutcomeID && old.Action == q.Action && old.Condition == q.Condition && old.WorkerAgent == worker && old.Revision == q.ExpectedRevision+1 && old.MergePolicy == policy && oldWaits == waits && old.BlocksPhase == q.BlocksPhase && old.WaitDeadline == q.WaitDeadline {
+		if old.Revision > 0 && old.OutcomeID == q.OutcomeID && old.Action == q.Action && old.Condition == q.Condition && old.WorkerAgent == worker && old.Revision == q.ExpectedRevision+1 && old.MergePolicy == policy && oldWaits == waits && old.BlocksPhase == q.BlocksPhase && old.WaitDeadline == q.WaitDeadline && old.OnSatisfied == q.OnSatisfied {
 			d = old
 			if err = d.loadWaits(ctx, tx, s.Repo, oldWaits, time.Now()); err != nil {
 				return err
@@ -287,10 +293,13 @@ func (s Store) decideTx(ctx context.Context, tx *sql.Tx, actor string, q Decisio
 		if err = checkWaitGraph(ctx, tx, s.Repo, q.Reservation, q); err != nil {
 			return err
 		}
-		d = Decision{Revision: old.Revision + 1, OutcomeID: q.OutcomeID, Action: q.Action, Condition: q.Condition, WorkerAgent: worker, MergePolicy: policy, BlocksPhase: q.BlocksPhase, WaitDeadline: q.WaitDeadline}
-		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,merge_policy,waits_for,blocks_phase,wait_deadline,waits_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
- ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent,merge_policy=excluded.merge_policy,waits_for=excluded.waits_for,blocks_phase=excluded.blocks_phase,wait_deadline=excluded.wait_deadline,waits_revision=excluded.waits_revision`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker, policy, waits, q.BlocksPhase, q.WaitDeadline, d.Revision)
+		d = Decision{Revision: old.Revision + 1, OutcomeID: q.OutcomeID, Action: q.Action, Condition: q.Condition, WorkerAgent: worker, MergePolicy: policy, BlocksPhase: q.BlocksPhase, WaitDeadline: q.WaitDeadline, OnSatisfied: q.OnSatisfied}
+		_, err = tx.ExecContext(ctx, `INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent,merge_policy,waits_for,blocks_phase,wait_deadline,waits_revision,on_satisfied) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ ON CONFLICT(repo_id,reservation_key,generation,item_id) DO UPDATE SET revision=excluded.revision,outcome_id=excluded.outcome_id,action=excluded.action,condition=excluded.condition,worker_agent=excluded.worker_agent,merge_policy=excluded.merge_policy,waits_for=excluded.waits_for,blocks_phase=excluded.blocks_phase,wait_deadline=excluded.wait_deadline,waits_revision=excluded.waits_revision,on_satisfied=excluded.on_satisfied`, s.Repo, q.Reservation, q.Generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, worker, policy, waits, q.BlocksPhase, q.WaitDeadline, d.Revision, q.OnSatisfied)
 		if err != nil {
+			return err
+		}
+		if err = recordDecisionHistory(ctx, tx, s.Repo, q.Reservation, q.Generation, item, d, waits, actor); err != nil {
 			return err
 		}
 		if err = d.loadWaits(ctx, tx, s.Repo, waits, time.Now()); err != nil {
@@ -357,4 +366,12 @@ func decisionFence(ctx context.Context, tx *sql.Tx, repo string, q PublishReques
 		}
 	}
 	return nil
+}
+
+// recordDecisionHistory appends one revision; dispatch_decisions keeps only the
+// current row, so this is the only durable count of an assignment's decisions.
+func recordDecisionHistory(ctx context.Context, tx *sql.Tx, repo, key string, generation int64, item string, d Decision, waits, decidedBy string) error {
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO dispatch_decision_history(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,waits_for,on_satisfied,decided_by,decided_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		repo, key, generation, item, d.Revision, d.OutcomeID, d.Action, d.Condition, waits, d.OnSatisfied, decidedBy, time.Now().Unix())
+	return err
 }

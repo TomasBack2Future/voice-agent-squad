@@ -53,6 +53,27 @@ func newDispatchDeliveryCmd() *cobra.Command {
 	return cmd
 }
 
+func newDispatchSweepCmd() *cobra.Command {
+	var opts dispatch.SweepOptions
+	cmd := &cobra.Command{Use: "sweep", Short: "Read every active reservation and report which need attention and why; no ledger writes", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		bc, err := bootDeliveryRead()
+		if err != nil {
+			return err
+		}
+		defer bc.Close()
+		report, err := dispatch.New(bc.db, bc.repoID, nil).Sweep(cmd.Context(), opts)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(report)
+	}}
+	cmd.Flags().DurationVar(&opts.RequestAfter, "request-after", 0, "Flag a Worker decision request unhandled for this long (default 10m)")
+	cmd.Flags().DurationVar(&opts.DecisionAfter, "decision-after", 0, "Flag a current decision undelivered for this long (default 5m)")
+	cmd.Flags().DurationVar(&opts.QuietAfter, "quiet-after", 0, "Flag a proceeding owner with no recorded progress and no operation in flight for this long (default 3h)")
+	cmd.Flags().DurationVar(&opts.HoldAfter, "hold-after", 0, "Flag a hold without a structured wait older than this (default 2h)")
+	return cmd
+}
+
 func newDispatchRetirePartialCmd() *cobra.Command {
 	var request string
 	cmd := &cobra.Command{Use: "retire-partial", Short: "Retire a reconciled blocked execution while its Issue remains open", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {

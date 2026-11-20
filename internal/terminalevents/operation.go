@@ -89,12 +89,19 @@ func (s Store) RunOperation(ctx context.Context, actor string, q OperationReques
 			return fmt.Errorf("operation requires the Worker's current primary claim")
 		}
 		var revision int64
-		var action string
-		err = tx.QueryRowContext(ctx, `SELECT revision,action FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&revision, &action)
+		var action, blocks string
+		err = tx.QueryRowContext(ctx, `SELECT revision,action,CASE WHEN waits_revision=revision THEN blocks_phase ELSE '' END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`, s.Repo, q.Reservation, q.Generation, item).Scan(&revision, &action, &blocks)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if err == nil && (revision != q.ExpectedDecision || action != "proceed") {
+		if err == nil && revision != q.ExpectedDecision {
+			return fmt.Errorf("read current decision before operation; hold/stale decision refuses execution")
+		}
+		// A hold scoped to one phase stops only that phase: an operation that
+		// names a different phase (a test run, a watch on the owner's own
+		// precondition) keeps running. An unscoped hold, or an operation that
+		// names no phase, is refused as before.
+		if err == nil && action != "proceed" && (blocks == "" || q.Phase == "" || q.Phase == blocks) {
 			return fmt.Errorf("read current decision before operation; hold/stale decision refuses execution")
 		}
 		var body string

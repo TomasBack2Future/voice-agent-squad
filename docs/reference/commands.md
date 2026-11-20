@@ -1077,6 +1077,42 @@ command refuses:
 drift `hold-waits-satisfied` and `hold-time-box-expired`. Expiry never turns a
 hold into proceed; the owner answers it with a new decision.
 
+`--on-satisfied proceed` (MCP `on_satisfied`) pre-authorizes the release of a
+structured hold: when its last wait becomes satisfied the hold becomes a
+`proceed` decision with the next revision and the held Worker receives a
+`decision-resolved` wake, with no further Dispatcher step. The release happens
+in the transaction that records the satisfying phase result, and otherwise on
+the held Worker's own CLI `decision-get` or listener read (a terminal
+reservation records no event of its own; the MCP read tool never writes). It keeps the Dispatcher's outcome message, drops
+the waits, records a `dispatch_decision_history` row with `decided_by`
+`waits-satisfied` and changes nothing else: scope, claims and merge policy stay
+as decided. A stale `--expected-revision` from the Dispatcher is refused
+afterwards, which is how it learns the hold was released. The marker requires
+at least one `--wait-for`; without it a satisfied hold still needs a new
+decision, and a time box never releases anything. Use it for an ordering the
+Dispatcher has already decided ("after B's merge, go"); leave it off for a
+human hold or a gate whose result must be judged first.
+
+`squad dispatch sweep [--request-after 10m] [--decision-after 5m] [--quiet-after
+3h] [--hold-after 2h]` (MCP `squad_dispatch_sweep` with `*_after_seconds`)
+reads every active reservation in one call and writes nothing. Each row carries
+the `dispatch delivery` drift of that reservation plus the fleet checks below,
+with `last_progress_at` (newest owner message, attestation, phase result or
+owned operation), `quiet_seconds`, the current decision and its waits. Flagged
+rows come first.
+
+| Drift | Recorded fact | Next step belongs to |
+| --- | --- | --- |
+| `decision-request-unanswered` | A Worker decision request is unhandled past the threshold | Dispatcher |
+| `decision-undelivered` | The current decision reached no Worker receiver | Dispatcher (receiver or session health) |
+| `hold-waits-satisfied` | Every wait of a hold is met and it carries no release marker | Dispatcher |
+| `hold-without-checkable-wait` | A hold older than the threshold names no structured wait | Dispatcher: add the wait or lift the hold |
+| `owner-quiet` | A proceeding owner recorded no progress and has no owned operation in flight | Dispatcher inspects the session once |
+
+A plain Worker message after the current decision appears under `notes`
+(`worker-report-without-event`), not under drift: ordinary progress needs no
+answer. A result another owner must consume is recorded with `phase-result`.
+
 `terminal-events decision-reorder --request FILE` applies a JSON array of up to
 eight decision requests (the MCP field names) in one transaction, in array
 order, so a predecessor's `proceed` is effective before the successor's wait is

@@ -279,6 +279,11 @@ wraps a command explicitly, with identity/custody and decision checks:
  "kind":"test","argv":["go","test","./internal/example"],"timeout_seconds":600}
 ```
 
+A hold refuses the operation unless the hold is scoped with `--blocks-phase`
+and the operation names a different `phase`: a hold on `merge` does not stop a
+test run or a watch on the owner's own precondition, while an unscoped hold, or
+an operation that names no phase, is refused.
+
 Optional `phase`, `revision` and `resume_step` are bounded single-line references
 saved with the operation and included in its request digest. Changed provenance
 under the same key is rejected. Use a client-native tracked background task for a long command. No permanent

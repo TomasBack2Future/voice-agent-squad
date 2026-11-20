@@ -54,9 +54,12 @@ var phaseName = regexp.MustCompile(`^[a-z0-9][a-z0-9:._-]{0,63}$`)
 const maxWaits = 8
 
 func validateWaits(q DecisionRequest, self string, now time.Time) error {
+	if q.OnSatisfied != "" && q.OnSatisfied != "proceed" {
+		return &Rejection{Condition: "invalid-wait", Repair: "--on-satisfied is empty or proceed"}
+	}
 	if len(q.WaitsFor) == 0 {
-		if q.WaitDeadline != 0 || q.BlocksPhase != "" {
-			return &Rejection{Condition: "invalid-wait", Repair: "--wait-deadline and --blocks-phase require at least one --wait-for"}
+		if q.WaitDeadline != 0 || q.BlocksPhase != "" || q.OnSatisfied != "" {
+			return &Rejection{Condition: "invalid-wait", Repair: "--wait-deadline, --blocks-phase and --on-satisfied require at least one --wait-for"}
 		}
 		return nil
 	}
@@ -168,11 +171,13 @@ func encodeWaits(w []Wait) string {
 type activeHold struct {
 	blocks string
 	waits  []Wait
+	// release: the Dispatcher pre-authorized this hold to proceed once satisfied.
+	release bool
 }
 
 // currentHolds reads every effective structured hold of live assignments.
 func currentHolds(ctx context.Context, tx *sql.Tx, repo string) (map[string]activeHold, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT d.reservation_key,d.blocks_phase,d.waits_for FROM dispatch_decisions d JOIN dispatch_reservations r
+	rows, err := tx.QueryContext(ctx, `SELECT d.reservation_key,d.blocks_phase,d.waits_for,d.on_satisfied FROM dispatch_decisions d JOIN dispatch_reservations r
  ON r.repo_id=d.repo_id AND r.item_id=d.reservation_key AND r.generation=d.generation AND r.canonical_item_id=d.item_id
  WHERE d.repo_id=? AND r.state='dispatched' AND d.action='hold' AND d.waits_for!='[]' AND d.waits_revision=d.revision`, repo)
 	if err != nil {
@@ -181,15 +186,15 @@ func currentHolds(ctx context.Context, tx *sql.Tx, repo string) (map[string]acti
 	defer rows.Close()
 	out := map[string]activeHold{}
 	for rows.Next() {
-		var key, blocks, raw string
-		if err = rows.Scan(&key, &blocks, &raw); err != nil {
+		var key, blocks, raw, onSatisfied string
+		if err = rows.Scan(&key, &blocks, &raw, &onSatisfied); err != nil {
 			return nil, err
 		}
 		w, err := decodeWaits(raw)
 		if err != nil {
 			return nil, fmt.Errorf("decision %s waits: %w", key, err)
 		}
-		out[key] = activeHold{blocks: blocks, waits: w}
+		out[key] = activeHold{blocks: blocks, waits: w, release: onSatisfied == "proceed"}
 	}
 	return out, rows.Err()
 }
@@ -304,6 +309,7 @@ func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResul
 	if p.Reservation == "" || p.Generation < 1 || p.WorkerSession == "" || p.OutcomeID < 1 {
 		return p, ErrInvalidEvent
 	}
+	released := false
 	err := store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
 		var item, owner string
 		var reservedAt int64
@@ -350,11 +356,17 @@ func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResul
 			return err
 		}
 		if worker {
-			p.EventID, err = s.phaseEvent(ctx, tx, actor, p)
+			if p.EventID, err = s.phaseEvent(ctx, tx, actor, p); err != nil {
+				return err
+			}
 		}
+		// The result may satisfy the last wait of a pre-authorized hold: release
+		// it in the same transaction so no Dispatcher round trip is needed.
+		n, err := releaseSatisfiedHolds(ctx, tx, s.Repo)
+		released = n > 0
 		return err
 	})
-	if err == nil && p.EventID != "" {
+	if err == nil && (p.EventID != "" || released) {
 		s.wakeReceivers(ctx)
 	}
 	return p, err
@@ -384,6 +396,10 @@ func unconsumedDependents(ctx context.Context, tx *sql.Tx, repo, reservation str
 	}
 	var out []string
 	for key, h := range holds {
+		if h.release {
+			// A pre-authorized hold releases itself; it needs no new decision.
+			continue
+		}
 		cites := false
 		for _, w := range h.waits {
 			if w.Reservation == reservation && (w.Phase == phase || w.Until == "terminal") {

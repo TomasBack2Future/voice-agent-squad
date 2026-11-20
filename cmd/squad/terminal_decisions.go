@@ -66,6 +66,7 @@ func terminalDecisionCommands() []*cobra.Command {
 	set.Flags().StringArrayVar(&waitSpecs, "wait-for", nil, "Structured hold dependency RESERVATION:PHASE:executed|passed or RESERVATION::terminal (repeatable)")
 	set.Flags().StringVar(&q.BlocksPhase, "blocks-phase", "", "Phase of this assignment the hold stops (empty: every phase)")
 	set.Flags().DurationVar(&timeBox, "wait-time-box", 0, "Optional time box for the waits; expiry is reported for reconciliation, never auto-proceeds")
+	set.Flags().StringVar(&q.OnSatisfied, "on-satisfied", "", "proceed: release this structured hold and wake its Worker once every wait is satisfied (empty: a new decision is needed)")
 	var key, session string
 	var generation, expected int64
 	get := &cobra.Command{Use: "decision-get", Short: "Read the latest decision; --reservation, --generation and --worker-session are all required", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -74,7 +75,14 @@ func terminalDecisionCommands() []*cobra.Command {
 			return err
 		}
 		defer bc.Close()
-		d, err := (terminalevents.Store{DB: bc.db, Repo: bc.repoID}).CurrentDecision(cmd.Context(), key, generation, session)
+		events := terminalevents.Store{DB: bc.db, Repo: bc.repoID}
+		// An owner reading its own decision applies a pre-authorized release whose
+		// waits are met, so it never acts on a stale hold. The MCP read tool stays
+		// a pure read.
+		if _, err = events.ReleaseSatisfied(cmd.Context()); err != nil {
+			return err
+		}
+		d, err := events.CurrentDecision(cmd.Context(), key, generation, session)
 		if err != nil {
 			return err
 		}
