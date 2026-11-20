@@ -109,6 +109,17 @@ Rules for the block:
   existing client or CLI, or an owned browser. A new acceptance tool or workflow,
   and a check run as a cluster Job, are never the method for one Issue. A
   product defect still gets its regression test in the product PR.
+- **Able to overturn a wrong fix.** A row that carries the original defect names
+  three things: the original failing input or state (the paused retry already on
+  the page, the payload at the size that broke), the real consumer or surface
+  that must show the result (the client that reads the response, the panel the
+  user reads; not a neighbouring element, and not a test double of the
+  producer), and in Not pass the observation that would prove the fix wrong.
+  Evidence that would look the same under a wrong implementation is not
+  evidence: a test that asserts the response shape the code happens to return, a
+  measurement of the element next to the broken one, a fresh object when the
+  defect was in an existing one. For an Issue admitted before this rule, add
+  only what is missing when it next enters repair or acceptance.
 - **Constructible now.** Name the fixture or data each row uses and confirm it
   exists or can be created within authority. A criterion nobody can construct
   is resolved here, before launch: choose an equivalent observable that proves

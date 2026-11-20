@@ -78,11 +78,17 @@ implementation, not after rollout.
   older cost or access blockers against them before asking. Count retries in
   the same budget. A standing budget never widens shared configuration,
   production or customer scope.
-- **Surface real human decisions early.** When preparation shows a decision
-  only the user can make (real-model package, production history, customer
-  data, a disputed criterion), raise it once with options and its effect as
-  soon as it is known; continue independent work meanwhile. Do not collect such
-  decisions for the final report.
+- **Surface real human decisions in the cycle you find them.** When a decision
+  only the user can make appears (a temporary change to shared staging
+  configuration, an isolated production configuration, a login only they can
+  complete, production history, customer data, a disputed criterion), raise it
+  at once, a single time, with the concrete choice, its options, what each
+  affects and what you will keep doing meanwhile. Do not collect such decisions
+  for the final report or wait to be asked what you need. The reverse also
+  holds: an existing authorization, a stale label and a blocker that touches one
+  criterion only are yours to apply or correct directly, and you add no wait
+  (for example a production observation) that the original criteria do not ask
+  for.
 - **Unfinished technical preparation is not a waiver.** A missing fixture,
   read path or tool gap is preparation work for its owner. Never ask the user
   to waive a criterion because its preparation is incomplete.

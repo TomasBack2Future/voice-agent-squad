@@ -58,6 +58,9 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    values, serialized shape between producer and consumer, old persisted data,
    duplicate or interleaved events), and see them fail on the unfixed code. A
    defect that a unit test could have caught must not be first found on staging.
+   Take the expected value from the contract or the consumer, never from what
+   the code currently returns: a test that also passes against the wrong
+   implementation proves nothing.
 3. **Repair completely.** Fix the cause, not the symptom: a guard that avoids the
    failing input size, a retry around a deterministic error or a narrower
    fixture is not a repair unless the Issue asks for exactly that. Reuse an
@@ -95,7 +98,9 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    revision deployment. Production requires an explicit `production: true`
    assignment and the project production contract; staging never implies it.
 8. **Accept, clean up, close.** Check every criterion at its stated layer and
-   record pass or not pass against the block's own wording. The block has one
+   record pass or not pass against the block's own wording, on the original
+   failing input and on the real consumer or surface the row names, looking for
+   the observation that would prove the fix wrong. The block has one
    row per original criterion; an original criterion it omits still binds, and
    you report the gap as one decision request. Close the Issue when
    all of them pass, owned fixtures are cleaned up and resources released (see

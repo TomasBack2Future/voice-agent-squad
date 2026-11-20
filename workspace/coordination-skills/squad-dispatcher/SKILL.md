@@ -300,18 +300,31 @@ checks per reservation with `dispatch delivery` and record the capability gap.
 Then check the batch, not only the live sessions:
 
 - **Closure count.** Admitted Issues against Issues closed after verification.
-  Every open one has an owner, one next action and the condition it waits on.
+  Every open one has an owner, one next action and the condition it waits on,
+  including an Issue whose reservation has ended while it is still open.
+- **Current means read in this cycle.** A current cell in the checkpoint
+  (Issue state, merged PRs, deployed component and version, remaining
+  criterion) is a fact read now from its source: the code host, the deployment
+  run or the running endpoint, the ledger. A newer fact replaces the older one
+  in place; a cell you did not re-read is marked stale with its read time, never
+  carried forward as current. Do not schedule from a version or a merge status
+  you copied from an earlier cycle.
+- **A release is followed to its first action.** A satisfied dependency is done
+  when the released owner has read the new decision and started the agreed
+  deploy, acceptance or repair, not when the result was recorded. An owner
+  released with no action recorded afterwards is the next thing to look at.
 - **Ready but not started.** A stage whose inputs are all recorded and which
   nobody has begun (merged members with no deploy run; a deployed candidate with
   no acceptance started) is a missing decision of yours: make it now, within
   recorded authority. A production stage without production authorization, a
   frozen candidate, environment custody held by another owner and a human hold
   or pause are not "ready": record what is missing and raise it once.
-- **Waiting on a person.** An item waiting for an answer or authorization from
-  the user for more than four hours is raised to the user once, with the concrete
-  question and options. First challenge the label: "needs the user" and "cannot
-  be constructed" are claims to verify, and most are technical steps an owner
-  can take. This is about unanswered needs, not about a hold or pause the user
+- **Waiting on a person.** A decision only the user can make is raised in the
+  cycle it is found, once, with the concrete choice, its options, what each
+  affects and what continues meanwhile. The four hours are for reminding: an
+  item still waiting for the user's answer after that long is raised once more.
+  First challenge the label: "needs the user" and "cannot be constructed" are
+  claims to verify, and most are technical steps an owner can take. This is about unanswered needs, not about a hold or pause the user
   set: those are recorded only.
 
 A quiet sweep reports nothing and sends nothing.
