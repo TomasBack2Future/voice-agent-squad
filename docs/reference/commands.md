@@ -1081,31 +1081,44 @@ hold into proceed; the owner answers it with a new decision.
 structured hold: when its last wait becomes satisfied the hold becomes a
 `proceed` decision with the next revision and the held Worker receives a
 `decision-resolved` wake, with no further Dispatcher step. The release happens
-in the transaction that records the satisfying phase result, and otherwise on
-the held Worker's own CLI `decision-get` or listener read (a terminal
-reservation records no event of its own; the MCP read tool never writes). It keeps the Dispatcher's outcome message, drops
-the waits, records a `dispatch_decision_history` row with `decided_by`
-`waits-satisfied` and changes nothing else: scope, claims and merge policy stay
-as decided. A stale `--expected-revision` from the Dispatcher is refused
-afterwards, which is how it learns the hold was released. The marker requires
-at least one `--wait-for`; without it a satisfied hold still needs a new
-decision, and a time box never releases anything. Use it for an ordering the
-Dispatcher has already decided ("after B's merge, go"); leave it off for a
-human hold or a gate whose result must be judged first.
+in the transaction that records the satisfying phase result. A release that
+transaction could not perform (Worker custody was ambiguous then) is applied by
+the next listener read of any recipient, or by the held Worker's CLI
+`decision-get`; the MCP read tool never writes. It keeps the Dispatcher's
+outcome message, drops the waits, records a `dispatch_decision_history` row
+with `decided_by` `waits-satisfied` and changes nothing else: scope, claims and
+merge policy stay as decided. A stale `--expected-revision` from the Dispatcher
+is refused afterwards, which is how it learns the hold was released.
 
-`squad dispatch sweep [--request-after 10m] [--decision-after 5m] [--quiet-after
-3h] [--hold-after 2h]` (MCP `squad_dispatch_sweep` with `*_after_seconds`)
-reads every active reservation in one call and writes nothing. Each row carries
+The authorization is narrow. It requires phase waits (`executed` or `passed`);
+a `terminal` wait is refused with the marker, because a reservation also ends
+by failing or being retired. It belongs to the revision that carried it, so a
+later revision written by any binary never inherits it. It lapses when the
+hold's time box expires or the reservation changes Dispatcher: the hold then
+stays, reported as `hold-waits-satisfied` or `hold-time-box-expired` for the
+responsible Dispatcher. Without the marker a satisfied hold needs a new
+decision, as before. Use it for an order the Dispatcher has already decided
+("after B's merge, go"); leave it off for a human hold or a gate whose result
+must be judged first.
+
+`squad dispatch sweep [--reserved-by AGENT] [--request-after 10m]
+[--decision-after 5m] [--quiet-after 3h] [--hold-after 2h]` (MCP
+`squad_dispatch_sweep` with `reserved_by` and `*_after_seconds`) reads every
+active reservation in one call, or only one Dispatcher's with `--reserved-by`,
+and writes nothing. Each row carries
 the `dispatch delivery` drift of that reservation plus the fleet checks below,
 with `last_progress_at` (newest owner message, attestation, phase result or
-owned operation), `quiet_seconds`, the current decision and its waits. Flagged
+owned operation), `quiet_seconds` (counted from the later of that and the
+current decision, so a hold that just ended restarts the clock), the current
+decision and its waits. The rows are read one reservation at a time, not as
+one snapshot. Flagged
 rows come first.
 
 | Drift | Recorded fact | Next step belongs to |
 | --- | --- | --- |
 | `decision-request-unanswered` | A Worker decision request is unhandled past the threshold | Dispatcher |
-| `decision-undelivered` | The current decision reached no Worker receiver | Dispatcher (receiver or session health) |
-| `hold-waits-satisfied` | Every wait of a hold is met and it carries no release marker | Dispatcher |
+| `decision-undelivered` | The current decision's wake exists and reached no Worker receiver | Dispatcher (receiver or session health) |
+| `hold-waits-satisfied` | Every wait of a hold is met and it was not released (no marker, lapsed marker or ambiguous Worker custody) | Dispatcher |
 | `hold-without-checkable-wait` | A hold older than the threshold names no structured wait | Dispatcher: add the wait or lift the hold |
 | `owner-quiet` | A proceeding owner recorded no progress and has no owned operation in flight | Dispatcher inspects the session once |
 

@@ -87,12 +87,13 @@ func registerDeliveryTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		}
 		return dispatch.New(db, repoID, nil).Delivery(ctx, a.Reservation, a.Issue)
 	}})
-	srv.Register(mcp.Tool{Name: "squad_dispatch_sweep", Description: "Read every active reservation and report which need attention and why (unanswered request, undelivered decision, quiet owner, uncheckable hold, satisfied waits); no ledger writes.", InputSchema: json.RawMessage(`{"type":"object","properties":{"request_after_seconds":{"type":"integer","minimum":0},"decision_after_seconds":{"type":"integer","minimum":0},"quiet_after_seconds":{"type":"integer","minimum":0},"hold_after_seconds":{"type":"integer","minimum":0}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+	srv.Register(mcp.Tool{Name: "squad_dispatch_sweep", Description: "Read every active reservation and report which need attention and why (unanswered request, undelivered decision, quiet owner, uncheckable hold, satisfied waits); no ledger writes.", InputSchema: json.RawMessage(`{"type":"object","properties":{"request_after_seconds":{"type":"integer","minimum":0},"decision_after_seconds":{"type":"integer","minimum":0},"quiet_after_seconds":{"type":"integer","minimum":0},"hold_after_seconds":{"type":"integer","minimum":0},"reserved_by":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {
-			Request  int64 `json:"request_after_seconds"`
-			Decision int64 `json:"decision_after_seconds"`
-			Quiet    int64 `json:"quiet_after_seconds"`
-			Hold     int64 `json:"hold_after_seconds"`
+			Request  int64  `json:"request_after_seconds"`
+			Decision int64  `json:"decision_after_seconds"`
+			Quiet    int64  `json:"quiet_after_seconds"`
+			Hold     int64  `json:"hold_after_seconds"`
+			Owner    string `json:"reserved_by"`
 		}
 		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &a); err != nil {
@@ -102,7 +103,7 @@ func registerDeliveryTools(srv *mcp.Server, db *sql.DB, repoID, repoRoot string)
 		if err := requireRepo(repoRoot, repoID); err != nil {
 			return nil, err
 		}
-		return dispatch.New(db, repoID, nil).Sweep(ctx, dispatch.SweepOptions{RequestAfter: time.Duration(a.Request) * time.Second, DecisionAfter: time.Duration(a.Decision) * time.Second, QuietAfter: time.Duration(a.Quiet) * time.Second, HoldAfter: time.Duration(a.Hold) * time.Second})
+		return dispatch.New(db, repoID, nil).Sweep(ctx, dispatch.SweepOptions{RequestAfter: time.Duration(a.Request) * time.Second, DecisionAfter: time.Duration(a.Decision) * time.Second, QuietAfter: time.Duration(a.Quiet) * time.Second, HoldAfter: time.Duration(a.Hold) * time.Second, ReservedBy: a.Owner})
 	}})
 	srv.Register(mcp.Tool{Name: "squad_dispatch_retire_partial", Description: "Owner-only audited retirement of a held, blocked execution; keeps Issue open and permits a new generation.", InputSchema: json.RawMessage(`{"type":"object","required":["request"],"properties":{"request":{"type":"object"},"agent_id":{"type":"string"}},"additionalProperties":false}`), Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var a struct {

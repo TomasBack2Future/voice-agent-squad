@@ -247,7 +247,8 @@ func (s Store) diagnoseReservation(ctx context.Context, tx *sql.Tx, q SubmitRequ
 // submitDecisionFence keeps the opt-in decision contract: unadopted
 // assignments publish exactly as before; adopted assignments require the
 // current expected revision. Holds are preserved: a held assignment cannot
-// report terminal completion. Nothing auto-proceeds.
+// report terminal completion. Only a hold the Dispatcher marked for release
+// (release.go) ever becomes a proceed without a new Dispatcher decision.
 func submitDecisionFence(ctx context.Context, tx *sql.Tx, repo string, q SubmitRequest, item string) error {
 	var revision int64
 	var action string

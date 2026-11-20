@@ -404,7 +404,7 @@ func bootstrapLegacyVersions(ctx context.Context, db *sql.DB) error {
 		legacy = append(legacy, legacyRow{29, "decision_waits_revision"})
 	}
 	var historyTable, onSatisfied int
-	if err := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dispatch_decision_history'), (SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name='on_satisfied')`).Scan(&historyTable, &onSatisfied); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dispatch_decision_history'), (SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name='on_satisfied_revision')`).Scan(&historyTable, &onSatisfied); err != nil {
 		return err
 	}
 	if historyTable+onSatisfied > 0 {

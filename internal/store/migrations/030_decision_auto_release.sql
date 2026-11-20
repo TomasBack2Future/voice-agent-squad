@@ -1,9 +1,10 @@
--- on_satisfied lets the Dispatcher pre-authorize a structured hold's release:
--- 'proceed' turns the hold into a proceed decision, and wakes the held Worker,
--- as soon as every wait is satisfied. '' keeps the earlier behavior (a
--- satisfied hold waits for a new Dispatcher decision). It is only honored when
--- waits_revision=revision, so an older binary's rewrite never inherits it.
-ALTER TABLE dispatch_decisions ADD COLUMN on_satisfied TEXT NOT NULL DEFAULT '';
+-- on_satisfied_revision lets the Dispatcher pre-authorize a structured hold's
+-- release: when it equals the row's revision, the hold becomes a proceed
+-- decision, and its Worker is woken, as soon as every wait is satisfied. It
+-- stores the revision that carried the authorization rather than a flag, so a
+-- later revision written by any binary that does not set it (including one that
+-- already knows the wait columns) never inherits it. 0 means not authorized.
+ALTER TABLE dispatch_decisions ADD COLUMN on_satisfied_revision INTEGER NOT NULL DEFAULT 0;
 
 -- dispatch_decisions keeps only the current row per assignment. The history
 -- records every revision so the number and kind of decisions an assignment

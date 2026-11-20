@@ -314,9 +314,9 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
 	if s.Repo == "" || s.Recipient == "" || session == "" {
 		return nil, fmt.Errorf("repo, recipient and delivery session required")
 	}
-	// A held Worker's own listener observes its waits: a pre-authorized hold
-	// whose last wait is met (including a terminal reservation, which records no
-	// event of its own) is released here and delivered in this same read.
+	// Any recipient's read applies a pending pre-authorized release, so one the
+	// recording transaction could not perform (custody was ambiguous then) is
+	// not lost; the release is delivered to its own Worker in that Worker's read.
 	s.releaseBestEffort(ctx)
 	rows, err := s.DB.QueryContext(ctx, `SELECT e.event_id,e.item_id,e.kind,e.outcome_id,e.source_message_id,e.delivered_at,e.processed_at
  FROM terminal_event_receipts e JOIN dispatch_reservations r

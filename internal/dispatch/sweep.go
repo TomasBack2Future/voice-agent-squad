@@ -22,6 +22,9 @@ type SweepOptions struct {
 	// HoldAfter: a hold that names no structured wait, so nobody can observe
 	// when it ends.
 	HoldAfter time.Duration
+	// ReservedBy limits the sweep to one Dispatcher's reservations; empty reads
+	// every active reservation of the ledger.
+	ReservedBy string
 }
 
 func (o SweepOptions) withDefaults() SweepOptions {
@@ -87,6 +90,15 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 		return nil, err
 	}
 	now := s.now().Unix()
+	if opts.ReservedBy != "" {
+		own := active[:0]
+		for _, r := range active {
+			if r.ReservedBy == opts.ReservedBy {
+				own = append(own, r)
+			}
+		}
+		active = own
+	}
 	report := &SweepReport{VerifiedAt: now, Active: len(active), Rows: make([]SweepRow, 0, len(active))}
 	for _, r := range active {
 		d, err := s.Delivery(ctx, r.ItemID, IssueObservation{})
@@ -105,7 +117,7 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 		}
 		var outcome int64
 		var structured int
-		err = s.db.QueryRowContext(ctx, `SELECT revision,outcome_id,CASE WHEN waits_revision=revision THEN on_satisfied ELSE '' END,CASE WHEN waits_revision=revision AND waits_for!='[]' THEN 1 ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`,
+		err = s.db.QueryRowContext(ctx, `SELECT revision,outcome_id,CASE WHEN on_satisfied_revision=revision AND waits_revision=revision THEN 'proceed' ELSE '' END,CASE WHEN waits_revision=revision AND waits_for!='[]' THEN 1 ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`,
 			s.repoID, r.ItemID, r.Generation, r.CanonicalItemID).Scan(&row.DecisionRevision, &outcome, &row.OnSatisfied, &structured)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
@@ -124,7 +136,9 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 			return nil, err
 		}
 		row.LastProgressAt = max(r.ReservedAt, d.LastOwnerActivityAt, d.LastResultAt, d.OperationRecordedAt, phaseAt)
-		row.QuietSeconds = max(now-row.LastProgressAt, 0)
+		// An owner is quiet only since it was last free to act: a hold that just
+		// ended, or a decision just published, restarts the clock.
+		row.QuietSeconds = max(now-max(row.LastProgressAt, row.DecisionAt), 0)
 		if r.State != "dispatched" {
 			report.Rows = append(report.Rows, row)
 			continue
@@ -140,13 +154,14 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 			// An automatic release reuses the Dispatcher's outcome under its own event
 			// id; when one exists for this revision it is the wake that must arrive.
 			released := fmt.Sprintf("%%/waits-released-r%d", row.DecisionRevision)
-			var delivered int
-			if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.kind='decision-resolved' AND e.outcome_id=? AND e.delivered_at>0
+			// A decision copied by a takeover has no receipt of its own to deliver.
+			var wakes, delivered int
+			if err = s.db.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(e.delivered_at>0),0) FROM terminal_event_receipts e WHERE e.repo_id=? AND e.reservation_key=? AND e.generation=? AND e.kind='decision-resolved' AND e.outcome_id=?
  AND (e.event_id LIKE ? OR NOT EXISTS(SELECT 1 FROM terminal_event_receipts x WHERE x.repo_id=e.repo_id AND x.reservation_key=e.reservation_key AND x.generation=e.generation AND x.kind='decision-resolved' AND x.event_id LIKE ?))`,
-				s.repoID, r.ItemID, r.Generation, outcome, released, released).Scan(&delivered); err != nil {
+				s.repoID, r.ItemID, r.Generation, outcome, released, released).Scan(&wakes, &delivered); err != nil {
 				return nil, err
 			}
-			if delivered == 0 {
+			if wakes > 0 && delivered == 0 {
 				row.Drift = append(row.Drift, "decision-undelivered")
 			}
 		}

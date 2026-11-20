@@ -53,6 +53,17 @@ func (s Store) Operation(ctx context.Context, actor string, q OperationRequest) 
 	return r, nil
 }
 
+// phaseOutside reports whether an operation's self-declared phase is provably a
+// different phase from the one a hold blocks. Phase names are hierarchical
+// ("merge:pr1972" belongs to "merge"), so a well-formed name on either side of
+// that relation is the held phase; anything not a well-formed name is refused.
+func phaseOutside(phase, blocks string) bool {
+	if !phaseName.MatchString(phase) || !phaseName.MatchString(blocks) {
+		return false
+	}
+	return phase != blocks && !strings.HasPrefix(phase, blocks+":") && !strings.HasPrefix(blocks, phase+":")
+}
+
 func (s Store) RunOperation(ctx context.Context, actor string, q OperationRequest, opts attest.RunOpts) (OperationResult, error) {
 	var result OperationResult
 	if s.Repo == "" || actor == "" || opts.AgentID != actor || q.Generation < 1 || q.RequestKey == "" || len(q.RequestKey) > 96 || strings.ContainsAny(q.RequestKey, "/\x00") {
@@ -101,7 +112,7 @@ func (s Store) RunOperation(ctx context.Context, actor string, q OperationReques
 		// names a different phase (a test run, a watch on the owner's own
 		// precondition) keeps running. An unscoped hold, or an operation that
 		// names no phase, is refused as before.
-		if err == nil && action != "proceed" && (blocks == "" || q.Phase == "" || q.Phase == blocks) {
+		if err == nil && action != "proceed" && (blocks == "" || !phaseOutside(q.Phase, blocks)) {
 			return fmt.Errorf("read current decision before operation; hold/stale decision refuses execution")
 		}
 		var body string

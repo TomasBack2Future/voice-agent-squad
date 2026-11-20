@@ -331,10 +331,12 @@ custody. The decision and terminal receipt are committed atomically. Reads join
 the live dispatched reservation so transfers and continuations cannot revive an
 old decision. No live claims or existing assignments are rewritten by migration.
 
-Migration 030 adds `on_satisfied` (`''` or `proceed`): a structured hold marked
-`proceed` is released into a proceed decision when its waits are all satisfied.
-Like the wait columns it is honored only while `waits_revision=revision`, so a
-rewrite by an older binary never inherits it.
+Migration 030 adds `on_satisfied_revision`: when it equals `revision` the
+structured hold is released into a proceed decision once its waits are all
+satisfied. It stores the authorizing revision rather than a flag, so a later
+revision written by a binary that does not set it, including one that already
+writes the wait columns, never inherits it. Interfaces show it as
+`on_satisfied: proceed`.
 
 ## dispatch_decision_history
 
@@ -343,5 +345,6 @@ table appends every revision (`revision`, `outcome_id`, `action`, `condition`,
 `waits_for`, `on_satisfied`, `decided_by`, `decided_at`) so the number and kind
 of decisions an assignment needed can be measured. `decided_by` is the deciding
 Dispatcher, or `waits-satisfied` for an automatic release. It is a record only:
-no reader derives authority from it, and revisions written before the migration
-are not backfilled.
+no reader derives authority from it. Revisions written before the migration are
+not backfilled, and a decision copied to a new generation by a takeover or
+Worker handoff adds no row.

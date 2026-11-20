@@ -90,6 +90,10 @@ func validateWaits(q DecisionRequest, self string, now time.Time) error {
 			return &Rejection{Condition: "invalid-wait", Repair: "until must be executed, passed or terminal"}
 		case seen[w]:
 			return &Rejection{Condition: "invalid-wait", Repair: "duplicate wait"}
+		case w.Until == "terminal" && q.OnSatisfied != "":
+			// A reservation also ends by failing, being cancelled or being partially
+			// retired; whether its successor may go then is a judgment, not a fact.
+			return &Rejection{Condition: "invalid-wait", Repair: "--on-satisfied needs phase waits (executed or passed); decide a terminal wait yourself when the predecessor ends"}
 		}
 		seen[w] = true
 	}
@@ -177,7 +181,7 @@ type activeHold struct {
 
 // currentHolds reads every effective structured hold of live assignments.
 func currentHolds(ctx context.Context, tx *sql.Tx, repo string) (map[string]activeHold, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT d.reservation_key,d.blocks_phase,d.waits_for,d.on_satisfied FROM dispatch_decisions d JOIN dispatch_reservations r
+	rows, err := tx.QueryContext(ctx, `SELECT d.reservation_key,d.blocks_phase,d.waits_for,CASE WHEN d.on_satisfied_revision=d.revision THEN 'proceed' ELSE '' END FROM dispatch_decisions d JOIN dispatch_reservations r
  ON r.repo_id=d.repo_id AND r.item_id=d.reservation_key AND r.generation=d.generation AND r.canonical_item_id=d.item_id
  WHERE d.repo_id=? AND r.state='dispatched' AND d.action='hold' AND d.waits_for!='[]' AND d.waits_revision=d.revision`, repo)
 	if err != nil {
@@ -362,7 +366,7 @@ func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResul
 		}
 		// The result may satisfy the last wait of a pre-authorized hold: release
 		// it in the same transaction so no Dispatcher round trip is needed.
-		n, err := releaseSatisfiedHolds(ctx, tx, s.Repo)
+		n, err := releaseSatisfiedHolds(ctx, tx, s.Repo, time.Now())
 		released = n > 0
 		return err
 	})

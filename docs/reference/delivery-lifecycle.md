@@ -281,8 +281,10 @@ wraps a command explicitly, with identity/custody and decision checks:
 
 A hold refuses the operation unless the hold is scoped with `--blocks-phase`
 and the operation names a different `phase`: a hold on `merge` does not stop a
-test run or a watch on the owner's own precondition, while an unscoped hold, or
-an operation that names no phase, is refused.
+test run or a watch on the owner's own precondition. Phase names are
+hierarchical, so `merge:pr1972` is the held phase too. An unscoped hold, an
+operation that names no phase and one whose phase is not a well-formed phase
+name are refused.
 
 Optional `phase`, `revision` and `resume_step` are bounded single-line references
 saved with the operation and included in its request digest. Changed provenance

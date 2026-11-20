@@ -76,13 +76,15 @@ func terminalDecisionCommands() []*cobra.Command {
 		}
 		defer bc.Close()
 		events := terminalevents.Store{DB: bc.db, Repo: bc.repoID}
-		// An owner reading its own decision applies a pre-authorized release whose
-		// waits are met, so it never acts on a stale hold. The MCP read tool stays
-		// a pure read.
-		if _, err = events.ReleaseSatisfied(cmd.Context()); err != nil {
-			return err
-		}
 		d, err := events.CurrentDecision(cmd.Context(), key, generation, session)
+		if err == nil && d.Action == "hold" && d.OnSatisfied == "proceed" && d.WaitsSatisfied {
+			// An owner reading its own satisfied, pre-authorized hold applies the
+			// release so it never acts on a stale hold. Best effort: a failure
+			// leaves the hold as read. The MCP read tool stays a pure read.
+			if n, rerr := events.ReleaseSatisfied(cmd.Context()); rerr == nil && n > 0 {
+				d, err = events.CurrentDecision(cmd.Context(), key, generation, session)
+			}
+		}
 		if err != nil {
 			return err
 		}
