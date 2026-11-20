@@ -67,6 +67,10 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 	decide("PROSE", 7, "hold", "[]", 0)
 	msg(8, 100000-3*3600, "dispatcher", "T-WAITS", "say")
 	decide("WAITS", 8, "hold", `[{"reservation":"BUSY","phase":"merge","until":"executed"}]`, 1)
+	// All three started under their decision; what differs is what came after.
+	for _, k := range []string{"QUIET", "BUSY", "ASKED"} {
+		exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',2100,?,?,'milestone','started','[]','normal')`, "worker-"+k, "T-"+k)
+	}
 
 	report, err := s.Sweep(ctx, SweepOptions{})
 	if err != nil {
@@ -231,8 +235,9 @@ func TestSweepFollowsADecisionToTheOwnersFirstAction(t *testing.T) {
 		exec(`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_session,delivered_at) VALUES('repo-test',?,?,?,1,?,?,'decision-resolved',?,?,'x',?)`,
 			"worker-"+k, "e-"+k, k, "native-"+k, "T-"+k, id, id, decided+5)
 	}
-	// ACTED started four minutes after its decision; WATCH parked on a tracked watch.
-	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-ACTED','T-ACTED','say','deploy started','[]','normal')`, decided+240)
+	// ACTED recorded a milestone four minutes after its decision; WATCH parked on
+	// a tracked watch it started for this assignment.
+	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-ACTED','T-ACTED','milestone','deploy started','[]','normal')`, decided+240)
 	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-WATCH','T-WATCH','owned-operation',?,'[]','normal')`, decided+30,
 		`{"request":{"reservation":"WATCH","generation":1,"worker_session":"native-WATCH","request_key":"deploy-watch"},"state":"started"}`)
 	report, err := s.Sweep(ctx, SweepOptions{})
@@ -384,5 +389,94 @@ func TestSweepFindsOpenIssuesNoActiveReservationCovers(t *testing.T) {
 	// A closed Issue with a live reservation is the existing delivery drift.
 	if report, err = s.Sweep(ctx, SweepOptions{Issues: []IssueObservation{obs("LIVE", "CLOSED", 99990)}}); err != nil || !slices.Contains(sweepRow(t, report, "LIVE").Drift, "closed-issue-active-reservation") {
 		t.Fatalf("closed Issue with a live reservation: %+v %v", report, err)
+	}
+}
+
+// What counts as "started" must belong to the current Worker, the current
+// decision and a real step. For an hour nothing was deployed; none of these
+// may read as a start, and one real start must.
+func TestSweepFirstActionIsAttributedToTheCurrentHandoff(t *testing.T) {
+	run := func(t *testing.T, inject func(exec func(string, ...any), decided int64)) SweepRow {
+		t.Helper()
+		now := time.Unix(100000, 0)
+		s := newDispatchStore(t, &now)
+		ctx := context.Background()
+		exec := func(q string, args ...any) {
+			t.Helper()
+			if _, err := s.db.Exec(q, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.Reserve(ctx, "IDLE", "github:o/r#IDLE", "dispatcher", "", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test','T-IDLE','worker-IDLE',1000,1000,'',0)`)
+		exec(`UPDATE dispatch_reservations SET canonical_item_id='T-'||item_id,state='dispatched',worker_thread_id='native-'||item_id,reserved_at=1000`)
+		decided := int64(100000 - 3600)
+		exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(11,'repo-test',?,'dispatcher','T-IDLE','say','go','[]','normal')`, decided)
+		exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES('repo-test','IDLE',1,'T-IDLE',1,11,'proceed','c','worker-IDLE')`)
+		exec(`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_session,delivered_at) VALUES('repo-test','worker-IDLE','e-IDLE','IDLE',1,'native-IDLE','T-IDLE','decision-resolved',11,11,'x',?)`, decided+5)
+		inject(exec, decided)
+		report, err := s.Sweep(ctx, SweepOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sweepRow(t, report, "IDLE")
+	}
+	notStarted := map[string]func(func(string, ...any), int64){
+		// Posted in the decision's second, but before it.
+		"message before the decision in the same second": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(5,'repo-test',?,'worker-IDLE','T-IDLE','milestone','old task completed','[]','normal')`, decided)
+		},
+		"a reply that only acknowledges": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','say','received; still waiting to start the deploy','[]','normal')`, decided+45)
+		},
+		"a record written by someone else": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO attestations(repo_id,item_id,kind,command,exit_code,output_hash,output_path,created_at,agent_id) VALUES('repo-test','T-IDLE','test','unit',0,'hash','path',?,'dispatcher')`, decided+40)
+			exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','deploy',1,'T-IDLE','all','passed','',11,'dispatcher',?)`, decided+50)
+		},
+		"a watch started before the decision and still running": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','owned-operation',?,'[]','normal')`, decided-300,
+				`{"request":{"reservation":"IDLE","generation":1,"worker_session":"native-IDLE","request_key":"old-ci"},"state":"started"}`)
+		},
+		"an operation of another assignment": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','owned-operation',?,'[]','normal')`, decided+60,
+				`{"request":{"reservation":"OTHER","generation":1,"worker_session":"native-OTHER","request_key":"deploy"},"state":"started"}`)
+		},
+	}
+	for name, inject := range notStarted {
+		t.Run(name, func(t *testing.T) {
+			if row := run(t, inject); row.FirstActionAt != 0 || !slices.Contains(row.Drift, "decision-unacted") {
+				t.Fatalf("read as started: first_action=%d (%ds) drift=%v notes=%v", row.FirstActionAt, row.FirstActionSeconds, row.Drift, row.Notes)
+			}
+		})
+	}
+	t.Run("an acknowledging reply is recorded as read", func(t *testing.T) {
+		row := run(t, notStarted["a reply that only acknowledges"])
+		if row.DecisionAckedAt != 100000-3600+45 {
+			t.Fatalf("decision_acked_at=%d", row.DecisionAckedAt)
+		}
+	})
+	started := map[string]func(func(string, ...any), int64){
+		"the deploy operation started for this assignment": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','owned-operation',?,'[]','normal')`, decided+90,
+				`{"request":{"reservation":"IDLE","generation":1,"worker_session":"native-IDLE","request_key":"deploy","phase":"deploy"},"state":"started"}`)
+		},
+		"the environment lock claimed": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test','ENV-001','worker-IDLE',?,?,'',0)`, decided+90, decided+90)
+		},
+		"its own phase result": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','deploy',1,'T-IDLE','all','passed','',11,'worker-IDLE',?)`, decided+90)
+		},
+		"its own attestation": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO attestations(repo_id,item_id,kind,command,exit_code,output_hash,output_path,created_at,agent_id) VALUES('repo-test','T-IDLE','test','unit',0,'hash','path',?,'worker-IDLE')`, decided+90)
+		},
+	}
+	for name, inject := range started {
+		t.Run(name, func(t *testing.T) {
+			if row := run(t, inject); row.FirstActionSeconds != 90 || slices.Contains(row.Drift, "decision-unacted") {
+				t.Fatalf("a real start was missed: first_action=%d (%ds) drift=%v", row.FirstActionAt, row.FirstActionSeconds, row.Drift)
+			}
+		})
 	}
 }

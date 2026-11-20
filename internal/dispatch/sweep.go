@@ -87,11 +87,13 @@ type SweepRow struct {
 	// canonical thread, an attestation, a phase result or an owned operation.
 	LastProgressAt int64 `json:"last_progress_at"`
 	QuietSeconds   int64 `json:"quiet_seconds"`
-	// DecisionAckedAt is when the owner acknowledged the current decision's
-	// wake: it has read the decision. FirstActionAt is the owner's first recorded
-	// fact at or after the decision (a message on its thread, an owned operation,
-	// an attestation or a phase result): it has started. FirstActionSeconds is
-	// how long that took. Zero: not yet.
+	// DecisionAckedAt is when the Worker showed it read the current decision: it
+	// acknowledged the wake or said something on its thread afterwards.
+	// FirstActionAt is when it started: the earliest owned operation it began
+	// for this assignment, milestone, attestation, phase result or claim of its
+	// own after the decision. A message is reading, not starting; another
+	// agent's record and an operation begun before the decision are neither.
+	// FirstActionSeconds is how long starting took. Zero: not yet.
 	DecisionAckedAt    int64 `json:"decision_acked_at,omitempty"`
 	FirstActionAt      int64 `json:"first_action_at,omitempty"`
 	FirstActionSeconds int64 `json:"first_action_seconds,omitempty"`
@@ -277,18 +279,51 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 			if wakes > 0 && delivered == 0 && now-row.DecisionAt > int64(opts.DecisionAfter.Seconds()) {
 				row.Drift = append(row.Drift, "decision-undelivered")
 			}
-			// The owner's first recorded fact at or after the current decision: the
-			// earliest of a message on its thread (an owned operation's start is
-			// one), an attestation, and a phase result.
+			// What follows the current decision must be attributable to it: recorded
+			// by this assignment's Worker, after the decision, and for an automatic
+			// release (which keeps the old outcome message) strictly after it.
+			var decidedBy string
+			err = s.db.QueryRowContext(ctx, `SELECT decided_by FROM dispatch_decision_history WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=? AND revision=?`,
+				s.repoID, r.ItemID, r.Generation, r.CanonicalItemID, row.DecisionRevision).Scan(&decidedBy)
+			if err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+			from := row.DecisionAt
+			if decidedBy == "waits-satisfied" {
+				from++
+			}
+			// The Worker: whoever claimed the canonical item under this reservation.
+			const worker = `(SELECT agent_id FROM claims WHERE repo_id=? AND item_id=? AND claimed_at>=? UNION SELECT agent_id FROM claim_history WHERE repo_id=? AND item_id=? AND claimed_at>=?)`
+			who := []any{s.repoID, r.CanonicalItemID, r.ReservedAt, s.repoID, r.CanonicalItemID, r.ReservedAt}
+			// Read: the Worker acknowledged the wake, or said anything on its thread
+			// after the decision. Saying "received, still waiting" is reading, not
+			// starting.
+			var said int64
+			if err = s.db.QueryRowContext(ctx, `SELECT COALESCE(min(m.ts),0) FROM messages m WHERE m.repo_id=? AND m.thread=? AND m.id>? AND m.ts>=? AND m.agent_id IN `+worker,
+				append([]any{s.repoID, r.CanonicalItemID, outcome, from}, who...)...).Scan(&said); err != nil {
+				return nil, err
+			}
+			if said > 0 && (row.DecisionAckedAt == 0 || said < row.DecisionAckedAt) {
+				row.DecisionAckedAt = said
+			}
+			// Started: the earliest thing the Worker did, not said. An owned
+			// operation it started for this assignment, a milestone it recorded, an
+			// attestation or phase result of its own, or a claim it took (the
+			// environment lock before a deploy). An operation started before the
+			// decision belongs to the work before it.
 			if err = s.db.QueryRowContext(ctx, `SELECT COALESCE(min(t),0) FROM (
- SELECT min(m.ts) t FROM messages m WHERE m.repo_id=? AND m.thread=? AND m.ts>=? AND m.agent_id!=?
- AND (EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=?)
-  OR EXISTS(SELECT 1 FROM claim_history c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=?))
- UNION ALL SELECT min(created_at) FROM attestations WHERE repo_id=? AND item_id=? AND kind!='release' AND created_at>=?
- UNION ALL SELECT min(recorded_at) FROM dispatch_phase_results WHERE repo_id=? AND reservation_key=? AND generation=? AND recorded_at>=?)`,
-				s.repoID, r.CanonicalItemID, row.DecisionAt, r.ReservedBy, r.ReservedAt, r.ReservedAt,
-				s.repoID, r.CanonicalItemID, row.DecisionAt,
-				s.repoID, r.ItemID, r.Generation, row.DecisionAt).Scan(&row.FirstActionAt); err != nil {
+ SELECT min(m.ts) t FROM messages m WHERE m.repo_id=? AND m.thread=? AND m.id>? AND m.ts>=? AND m.agent_id IN `+worker+`
+  AND (m.kind='milestone' OR (m.kind='owned-operation' AND json_valid(m.body) AND json_extract(m.body,'$.state')='started'
+   AND json_extract(m.body,'$.request.reservation')=? AND json_extract(m.body,'$.request.generation')=? AND json_extract(m.body,'$.request.worker_session')=?))
+ UNION ALL SELECT min(created_at) FROM attestations WHERE repo_id=? AND item_id=? AND kind!='release' AND created_at>=? AND agent_id IN `+worker+`
+ UNION ALL SELECT min(recorded_at) FROM dispatch_phase_results WHERE repo_id=? AND reservation_key=? AND generation=? AND recorded_at>=? AND recorded_by IN `+worker+`
+ UNION ALL SELECT min(claimed_at) FROM (SELECT agent_id,claimed_at FROM claims WHERE repo_id=? UNION ALL SELECT agent_id,claimed_at FROM claim_history WHERE repo_id=?) WHERE claimed_at>=? AND agent_id IN `+worker+`)`,
+				append(append(append(append(append(append(append(
+					[]any{s.repoID, r.CanonicalItemID, outcome, from}, who...),
+					r.ItemID, r.Generation, r.WorkerThreadID,
+					s.repoID, r.CanonicalItemID, from), who...),
+					s.repoID, r.ItemID, r.Generation, from), who...),
+					s.repoID, s.repoID, from), who...)...).Scan(&row.FirstActionAt); err != nil {
 				return nil, err
 			}
 			if row.FirstActionAt > 0 {
@@ -309,13 +344,14 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 			if structured == 0 && now-row.DecisionAt > int64(opts.HoldAfter.Seconds()) {
 				row.Drift = append(row.Drift, "hold-without-checkable-wait")
 			}
-		case d.OperationState == "started-unresolved":
-			// A tracked operation in flight is the owner acting.
 		case handedOver && row.FirstActionAt == 0 && now-row.DecisionAt > int64(opts.UnactedAfter.Seconds()):
 			// Set going (first decision, or released from a hold) and nothing
-			// recorded since: the handoff has not reached the owner's first step.
+			// started since: the handoff has not reached the owner's first step. An
+			// operation still running from before the decision does not answer it.
 			// An amended proceed for an owner already working is left to owner-quiet.
 			row.Drift = append(row.Drift, "decision-unacted")
+		case d.OperationState == "started-unresolved":
+			// A tracked operation in flight explains a quiet ledger.
 		case row.QuietSeconds > int64(opts.QuietAfter.Seconds()):
 			row.Drift = append(row.Drift, "owner-quiet")
 		}

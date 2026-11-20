@@ -1147,14 +1147,26 @@ rows come first.
 | `open-issue-unreserved` | An observed open Issue with no reservation in this ledger | Dispatcher: admission |
 | `sweep-read-failed` | This reservation could not be read (the error is in `notes`); the other rows are complete | Dispatcher reads it with `dispatch delivery` |
 
-Each row also carries `decision_acked_at` (the owner acknowledged the current
-decision's wake: it has read it) and `first_action_at` with
-`first_action_seconds`: the earliest fact the owner recorded at or after the
-current decision (a message on its thread, an owned operation, an attestation
-or a phase result), and how long that took. A dependency is handed over when
-the released owner starts its next step, so this is the number to measure a
-handoff by. A proceed that only amends an owner already working is not a
-handoff: silence after it is `owner-quiet`, not `decision-unacted`.
+Each row also separates reading a decision from acting on it:
+
+- `decision_acked_at`: the Worker acknowledged the current decision's wake, or
+  said something on its thread afterwards. A reply such as "received, still
+  waiting" is reading.
+- `first_action_at`, `first_action_seconds`: the earliest thing the Worker
+  started after the current decision, and how long that took. It counts an
+  owned operation begun for this reservation and generation, a `milestone`
+  message, an attestation or phase result recorded by the Worker itself, and a
+  claim the Worker took (the environment lock before a deploy). It does not
+  count a plain message, anything recorded by another agent, anything posted
+  before the decision (even in the same second), or an operation that was
+  already running when the decision arrived.
+
+A dependency is handed over when the released owner starts its next step, so
+`first_action_seconds` is the number to measure a handoff by.
+`decision-unacted` is raised only for a handoff: the assignment's first
+decision, or a proceed that follows a hold. A proceed that amends an owner
+already working is left to `owner-quiet`. A watch still running from before
+the decision keeps `owner-quiet` silent but does not answer `decision-unacted`.
 
 `--issue-observations FILE` (MCP `issues`) takes the caller's own list of
 `{"source_ref","state":"OPEN"|"CLOSED","verified_at"}` for the Issues it is

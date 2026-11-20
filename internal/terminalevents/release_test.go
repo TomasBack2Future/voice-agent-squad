@@ -769,6 +769,8 @@ func TestHeldWorkerPollingFirstReceivesTheReleaseNotTheRetiredHold(t *testing.T)
 		if err = worker.Ack(ctx, events[0].ID, "resumed at revision 2"); err != nil {
 			t.Fatalf("heldWakeDelivered=%v: %v", heldWakeDelivered, err)
 		}
+	}
+}
 
 // The handoff runs once whatever happens around it: with a Dispatcher that
 // handles nothing, the producer's result releases the dependent; a receiver
