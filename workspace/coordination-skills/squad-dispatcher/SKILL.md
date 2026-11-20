@@ -306,7 +306,11 @@ forms; the essentials:
 - A wait that must stop an owner is a hold with `--wait-for
   RESERVATION:PHASE:executed|passed` (or `RESERVATION::terminal`), `--blocks-phase`
   for the phase it stops, `--on-satisfied proceed` when the order is already
-  decided, and `--wait-time-box` when you promise to revisit. A hold that blocks
+  decided, and `--wait-time-box` when you promise to revisit. The release marker
+  needs phase waits (`executed` or `passed`), not `terminal`: whether a successor
+  may go when its predecessor ended is yours to judge. It lapses when the time
+  box expires or the reservation changes Dispatcher, and the hold comes back to
+  you in the sweep. A hold that blocks
   one phase never stops implementation, tests, review or acceptance preparation.
   A hold described only in its condition text is not checkable by anyone: use it
   for a human hold, and name the instruction it comes from. These flags, `decision-reorder` and `phase-result` exist only when
