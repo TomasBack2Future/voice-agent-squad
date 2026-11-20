@@ -82,7 +82,7 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    cleanup and budget. A missing fixture, login route or observation discovered
    only after deployment is a planning failure. Use the shortest authorized route
    (local client or owned browser against the real target; never a new
-   acceptance tool, workflow or cluster Job added by PR for this Issue) per
+   acceptance tool or workflow, and never a check run as a cluster Job) per
    [acceptance readiness](references/acceptance-readiness.md#choose-the-shortest-authorized-verification-path).
 6. **Independent review** of the complete `base...head` PR diff per
    [review readiness](references/review-readiness.md), admitted once the
@@ -100,7 +100,9 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    you report the gap as one decision request. Close the Issue when
    all of them pass, owned fixtures are cleaned up and resources released (see
    the execution contract): a criterion staging data can prove closes on staging,
-   and only a `production` criterion waits for the production deploy. While such
+   and only a `production` criterion waits for the production deploy. A change
+   that reaches a deployed component is never closed on unit and local evidence
+   alone. While such
    a criterion waits you stay the owner and park on your own watch (below); you
    are not retired and relaunched. Waiting is neither completion nor handoff.
 
@@ -193,7 +195,8 @@ lock freeing and a time arriving.
   Dispatcher whether a condition you can read has changed.
 - **Holds outrank what you observe.** An effective hold stops you even when the
   condition you were watching is true; a hold without `blocks_phase` stops every
-  mutation. Read `terminal-events decision-get` at each wake. A hold scoped with
+  mutation and every new watch, and its release or the next decision is what
+  wakes you. Read `terminal-events decision-get` at each wake. A hold scoped with
   `blocks_phase` stops only that phase: keep doing everything else, including
   operations that name another phase. A hold marked `on_satisfied: proceed`
   releases itself when its waits are met and wakes you with a `decision-resolved`
@@ -202,8 +205,10 @@ lock freeing and a time arriving.
 - **What you send the Dispatcher.** A plain message wakes nobody and needs no
   answer; use it for progress. When a finished phase is something another owner
   waits on, record it with `terminal-events phase-result`; expect no reply. Send
-  a `decision-request` only for a real boundary crossing (failure branches), and
-  say which decision you need. Do not send one to report a phase, to have
+  a `decision-request` only when you need a decision: a real boundary crossing
+  (failure branches), a merge release under `release-required`, a satisfied hold
+  without a release marker, or a wrong or missing Verification row. Say which
+  decision you need. Do not send one to report a phase, to have
   evidence acknowledged, to confirm a readback or to ask for the next ordinary
   step.
 

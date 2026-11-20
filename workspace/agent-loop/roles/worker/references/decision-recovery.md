@@ -58,8 +58,8 @@ your assignment gives. Use `decision-request` only when you need a decision. A
 plain message is not a handoff and wakes nobody.
 
 When a phase finishes and the installed binary lists `terminal-events
-phase-result`, record its result before or with the report (with an older
-binary, put the same fields in the report and the decision request):
+phase-result`, you may record the result separately from the report (with an older
+binary, put the same fields in the report itself):
 `terminal-events phase-result --reservation KEY --generation N --worker-session
 ID --phase NAME --checks all|partial --verdict passed|failed|partial
 --deferred TEXT --outcome MESSAGE`. `--checks all` means every planned check of

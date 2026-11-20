@@ -143,8 +143,8 @@ Keep a recurring prompt focused on these stable duties and checkpoint locations;
 update current facts in the checkpoint instead of appending historical waits and
 version snapshots to the prompt. Report what advanced, what remains and who owns
 the next action. Finding stuck work is this Dispatcher's own sweep; an outside
-observer checks only that the Dispatcher is alive and its timer armed, and never
-becomes a second scheduler, sends corrections or repeats the acceptance.
+observer may check only that the Dispatcher is alive and its timer armed. It never
+becomes a second scheduler, finds stuck work, sends corrections or repeats the acceptance.
 
 Use [session continuity](session-continuity.md) for behavioral health checks and
 cross-provider/model takeover. Quiet time alone never triggers replacement.

@@ -115,11 +115,16 @@ Rules for the block:
   the same criterion, never a weaker one, or ask the user once with options. It is never discovered after deployment and never
   silently weakened later.
 - **Closure follows the layers.** The owner closes the Issue when every row
-  passes at its layer and cleanup is done. Rows at `unit`, `local` and `staging`
-  do not wait for a production release; only `production` rows do.
+  passes at its layer and cleanup is done. A change that reaches a deployed
+  component has at least one `staging` row, so it is never closed on unit and
+  local evidence alone; a local run is not live acceptance. Rows at `unit`,
+  `local` and `staging` do not wait for a production release; only `production`
+  rows do.
 - **Revision.** Changing a criterion, its layer or its pass condition increments
-  the block's revision with the reason and authority. An owner reports a wrong
-  or unreachable row as one decision request; it does not reinterpret it.
+  the block's revision with the reason and authority. An owner corrects a wrong
+  command, fixture or test name itself and records the correction. A wrong or
+  unreachable criterion, layer or pass condition is one decision request; the
+  owner does not reinterpret it.
 
 A small defect needs two or three rows; do not pad the table.
 

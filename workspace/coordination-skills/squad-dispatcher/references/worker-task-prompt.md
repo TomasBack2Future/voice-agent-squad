@@ -21,7 +21,8 @@ semantics, shared-resource order or risk.
    API/mailbox the Worker persists events for pending reconciliation. Never pass a
    native Claude UUID to an App thread API.
 2. **Outcome and end condition**: the user result and the Issue's Verification
-   block by locator and revision: every criterion with its layer (`unit`,
+   block, cited on its own line as `Verification block: <locator> @ v<N>` (the
+   assignment checker requires exactly this form): every criterion with its layer (`unit`,
    `local`, `staging`, `production`), method, pass and not pass. A merged PR, a
    cleared review finding or a passing substitute fixture is not the end
    condition. Closure follows the layers: only `production` rows wait for the
@@ -85,9 +86,10 @@ Invoke $studio-issue-worker. Process exactly <ISSUE-REF> using Squad item
 AGENTS.md and repository instructions first, then the design section
 <DESIGN-SECTION-LOCATOR> revision <DESIGN-REVISION> (READY) before product edits.
 
-Outcome: <USER RESULT>. Done means every row of the Issue's Verification block
-<LOCATOR> revision <vN> passes at its stated layer, owned fixtures are cleaned
-up and resources released. Commit the block's named tests and see them fail
+Outcome: <USER RESULT>.
+Verification block: <LOCATOR> @ v<N>
+Done means every row of that block passes at its stated layer, owned fixtures
+are cleaned up and resources released. Commit the block's named tests and see them fail
 before the fix. Rows at unit, local and staging close without a production
 release; only production rows wait for it, with you parked on the release stage.
 

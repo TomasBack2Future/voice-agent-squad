@@ -55,5 +55,5 @@ actual PR target/merge status, outstanding acceptance and next gate; say
 state. Follow the recipient for remaining work; do not wake/recreate the donor
 or require per-child staging deployments. Verify the recipient's continued
 ownership; a stopped recipient with pending children is an unresolved handoff/
-blocker to reconcile, never evidence that the batch finished. Existing foreground
+blocker to reconcile, never evidence that the batch finished. Existing tracked
 waits and non-interrupting intervention rules still apply.
