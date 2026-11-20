@@ -91,7 +91,10 @@ func (h markedHold) satisfied(ctx context.Context, q querier, repo string) (bool
 // an unmet wait, ambiguous custody or writes the schema refuses is left exactly
 // as it was for the Dispatcher's sweep, and the remaining holds still release.
 // It returns how many holds were released.
-func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string, now time.Time) (int, error) {
+func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string) (int, error) {
+	// The clock is read here, with the write lock already held: a time box that
+	// expired while this transaction waited for the lock is expired.
+	now := time.Now()
 	holds, err := markedHolds(ctx, tx, repo, now)
 	if err != nil {
 		return 0, err
@@ -116,7 +119,7 @@ func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string, now tim
 		if _, err = tx.ExecContext(ctx, `SAVEPOINT hold_release`); err != nil {
 			return released, err
 		}
-		done, err := h.release(ctx, tx, repo, worker, evidence)
+		done, err := h.release(ctx, tx, repo, worker, evidence, now)
 		if err != nil || !done {
 			// Undo this hold only. A write the schema refuses (for example a wake
 			// for a native fenced after the read above) must not undo the others.
@@ -136,7 +139,7 @@ func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string, now tim
 
 // release performs one hold's transition. It reports false, with no error,
 // when the hold changed under it (the CAS matched no row).
-func (h markedHold) release(ctx context.Context, tx *sql.Tx, repo, worker string, evidence []string) (bool, error) {
+func (h markedHold) release(ctx context.Context, tx *sql.Tx, repo, worker string, evidence []string, now time.Time) (bool, error) {
 	id := fmt.Sprintf("worker-terminal-v1/%s/%d/%s/decision-resolved/%d/waits-released-r%d", h.key, h.generation, h.session, h.outcome, h.revision+1)
 	if eventPattern.FindString(id) != id {
 		return false, nil
@@ -144,7 +147,8 @@ func (h markedHold) release(ctx context.Context, tx *sql.Tx, repo, worker string
 	d := Decision{Revision: h.revision + 1, OutcomeID: h.outcome, Action: "proceed", WorkerAgent: worker,
 		Condition: truncateRunes("waits satisfied ("+strings.Join(evidence, "; ")+"); released hold: "+h.condition, 500)}
 	res, err := tx.ExecContext(ctx, `UPDATE dispatch_decisions SET revision=?,action='proceed',condition=?,worker_agent=?,waits_for='[]',blocks_phase='',wait_deadline=0,waits_revision=?,on_satisfied_revision=0
- WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=? AND revision=? AND action='hold' AND on_satisfied_revision=revision`, d.Revision, d.Condition, worker, d.Revision, repo, h.key, h.generation, h.item, h.revision)
+ WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=? AND revision=? AND action='hold' AND on_satisfied_revision=revision
+ AND (wait_deadline=0 OR wait_deadline>=?)`, d.Revision, d.Condition, worker, d.Revision, repo, h.key, h.generation, h.item, h.revision, now.Unix())
 	if err != nil {
 		return false, err
 	}
@@ -152,6 +156,15 @@ func (h markedHold) release(ctx context.Context, tx *sql.Tx, repo, worker string
 		return false, nil
 	}
 	if err = recordDecisionHistory(ctx, tx, repo, h.key, h.generation, h.item, d, "[]", "waits-satisfied"); err != nil {
+		return false, err
+	}
+	// The release keeps the hold's outcome id, which is what delivery uses to tell
+	// a current decision from a superseded one. Close the hold's own wake here so
+	// it can be neither delivered nor acknowledged once revision+1 is effective,
+	// exactly as an ordinary newer decision retires the previous one.
+	if _, err = tx.ExecContext(ctx, `UPDATE terminal_event_receipts SET processed_at=?,processed_note=?
+ WHERE repo_id=? AND reservation_key=? AND generation=? AND kind='decision-resolved' AND outcome_id=? AND processed_at=0 AND event_id!=?`,
+		now.Unix(), fmt.Sprintf("superseded: hold released at revision %d", d.Revision), repo, h.key, h.generation, h.outcome, id); err != nil {
 		return false, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO terminal_event_receipts
@@ -175,56 +188,107 @@ func truncateRunes(s string, max int) string {
 	return s
 }
 
-// ReleaseSatisfied applies pre-authorized hold releases now. It is idempotent
-// and safe for any caller: it can only perform the transition the responsible
-// Dispatcher already decided, on facts recorded in the ledger.
+// ReleaseSatisfied applies pre-authorized hold releases now, waiting for the
+// write lock like any other write. It is idempotent and safe for any caller: it
+// can only perform the transition the responsible Dispatcher already decided,
+// on facts recorded in the ledger.
 func (s Store) ReleaseSatisfied(ctx context.Context) (int, error) {
-	now := time.Now()
-	// Decide on the read connection first: a write transaction is opened only
-	// when some marked hold is actually satisfied, never once per listener poll.
-	holds, err := markedHolds(ctx, s.DB, s.Repo, now)
+	return s.releaseSatisfied(ctx, true)
+}
+
+// releaseReady decides on the read connection whether any marked hold can be
+// released, so a write transaction is opened only then and never once per
+// listener poll: not for an unsatisfied hold, and not for one whose custody is
+// ambiguous and cannot be released anyway.
+func (s Store) releaseReady(ctx context.Context) (bool, error) {
+	holds, err := markedHolds(ctx, s.DB, s.Repo, time.Now())
 	if err != nil {
-		return 0, err
+		return false, err
 	}
-	ready := false
 	for _, h := range holds {
 		ok, _, err := h.satisfied(ctx, s.DB, s.Repo)
 		if err != nil {
-			return 0, err
+			return false, err
 		}
 		if !ok {
 			continue
 		}
-		// Ambiguous custody cannot be released; do not take the write lock for it
-		// on every poll.
 		if _, err = workerRecipient(ctx, s.DB, s.Repo, h.key, h.generation); errors.Is(err, ErrInvalidEvent) {
 			continue
 		} else if err != nil {
-			return 0, err
+			return false, err
 		}
-		ready = true
+		return true, nil
 	}
-	if !ready {
-		return 0, nil
-	}
-	released := 0
-	err = store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
-		var e error
-		released, e = releaseSatisfiedHolds(ctx, tx, s.Repo, now)
-		return e
-	})
-	if err == nil && released > 0 {
-		s.wakeReceivers(ctx)
-	}
-	return released, err
+	return false, nil
 }
 
-// releaseBestEffort applies pending releases around another operation: after a
-// phase result commits, before an acknowledgement, before a recipient reads its
-// pending events. A failure leaves the hold in place, where it stays visible as
-// hold-waits-satisfied drift; it never fails the operation it accompanies.
-func (s Store) releaseBestEffort(ctx context.Context) {
-	releaseCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, _ = s.ReleaseSatisfied(releaseCtx)
+func (s Store) releaseSatisfied(ctx context.Context, wait bool) (int, error) {
+	ready, err := s.releaseReady(ctx)
+	if err != nil || !ready {
+		return 0, err
+	}
+	released := 0
+	apply := func(tx *sql.Tx) error {
+		var e error
+		released, e = releaseSatisfiedHolds(ctx, tx, s.Repo)
+		return e
+	}
+	if wait {
+		err = store.WithTxRetry(ctx, s.DB, apply)
+	} else {
+		err = s.tryTx(ctx, apply)
+	}
+	if err != nil {
+		// The transaction rolled back, or the lock was busy: nothing was released.
+		return 0, err
+	}
+	if released > 0 {
+		s.wakeReceivers(ctx)
+	}
+	return released, nil
+}
+
+// tryTx runs fn in one write transaction only if the write lock is free right
+// now. The store's connections wait up to their busy timeout for the lock, and
+// that wait does not end with the context, so the attempt uses one connection
+// with the timeout switched off and restores it before the connection returns
+// to the pool. A busy lock is an error to the caller, who retries on a later
+// read.
+func (s Store) tryTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	conn, err := s.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	var busy int64
+	if err = conn.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&busy); err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, `PRAGMA busy_timeout=0`); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf(`PRAGMA busy_timeout=%d`, busy))
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// releaseBestEffort applies pending releases around another operation. After a
+// phase result commits and before an acknowledgement it waits for the write
+// lock like the write it accompanies. After a recipient has read its pending
+// events it only takes the lock if it is free (wait=false): a poll never waits
+// on a release it does not own. A failure leaves the hold in place, where it
+// stays visible as hold-waits-satisfied drift and is retried by the next read;
+// it never fails the operation it accompanies.
+func (s Store) releaseBestEffort(ctx context.Context, wait bool) {
+	_, _ = s.releaseSatisfied(context.WithoutCancel(ctx), wait)
 }

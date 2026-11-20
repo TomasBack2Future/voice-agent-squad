@@ -1061,7 +1061,11 @@ describing it only in prose: repeat `--wait-for RESERVATION:PHASE:executed`,
 `--blocks-phase PHASE` for the phase of this assignment the hold stops (empty
 means every phase) and optionally `--wait-time-box 25m`. MCP: `waits_for`
 (`reservation`, `phase`, `until`), `blocks_phase`, `wait_deadline` (unix
-seconds). Waits are valid only on a hold. In the same CAS transaction the
+seconds). Waits are valid only on a hold. A reservation key and a phase name
+may both contain colons (`merge:pr1972`, `deploy:staging:b7:a2`): the command
+line takes the last field as `until` and splits the rest at the reservation
+that exists in this ledger. If two splits both name existing reservations it
+refuses to guess; use `decision-reorder --request`, whose JSON names the fields. In the same CAS transaction the
 command refuses:
 
 - `wait-cycle`: following the unsatisfied waits of current holds from the new
@@ -1083,11 +1087,18 @@ structured hold: when its last wait becomes satisfied the hold becomes a
 `decision-resolved` wake, with no further Dispatcher step. The release runs in
 its own transaction, never inside another owner's write: immediately after a
 phase result is committed (through `phase-result` or `submit --kind
-phase-result`), before any recipient's acknowledgement, on any recipient's
-listener read, and on the held Worker's CLI `decision-get`; the MCP read tool
-never writes. Each hold is released independently, so one that cannot be
-released (ambiguous Worker custody, a wake the schema refuses) stays a hold and
-neither fails the operation it accompanies nor stops the others. It keeps the Dispatcher's
+phase-result`), before any recipient's acknowledgement, after any recipient's
+listener read, and on a CLI `decision-get` that read a satisfied in-force hold;
+the MCP read tool never writes. A listener read returns its own events first
+and then takes the write lock for a release only if it is free, so a poll never
+waits on a release it does not own; the next read retries. Each hold is
+released independently, so one that cannot be released (ambiguous Worker
+custody, a wake the schema refuses) stays a hold and neither fails the
+operation it accompanies nor stops the others. The time box is checked with the
+write lock held: one that expired while the release waited for the lock is
+expired. The released hold's own wake is retired in the same step, so only the
+release is delivered and acknowledging the old hold is refused, as after any
+newer decision. It keeps the Dispatcher's
 outcome message, drops the waits, records a `dispatch_decision_history` row
 with `decided_by` `waits-satisfied` and changes nothing else: scope, claims and
 merge policy stay as decided. A stale `--expected-revision` from the Dispatcher
@@ -1109,8 +1120,8 @@ decision, as before. Use it for an order the Dispatcher has already decided
 must be judged first.
 
 `squad dispatch sweep [--reserved-by AGENT] [--request-after 10m]
-[--decision-after 5m] [--quiet-after 3h] [--hold-after 2h]` (MCP
-`squad_dispatch_sweep` with `reserved_by` and `*_after_seconds`) reads every
+[--decision-after 5m] [--quiet-after 3h] [--hold-after 2h] [--operation-after
+12h]` (MCP `squad_dispatch_sweep` with `reserved_by` and `*_after_seconds`) reads every
 active reservation in one call, or only one Dispatcher's with `--reserved-by`,
 and writes nothing. Each row carries
 the `dispatch delivery` drift of that reservation plus the fleet checks below,
@@ -1132,7 +1143,9 @@ rows come first.
 
 A plain Worker message after the current decision appears under `notes`
 (`worker-report-without-event`), not under drift: ordinary progress needs no
-answer. A result another owner must consume is recorded with `phase-result`.
+answer. An owned operation recorded as started with no exit is normally a watch
+still running: it is the note `operation-in-flight`, and becomes the drift
+`owned-operation-unresolved` only when older than `--operation-after`. A result another owner must consume is recorded with `phase-result`.
 
 `terminal-events decision-reorder --request FILE` applies a JSON array of up to
 eight decision requests (the MCP field names) in one transaction, in array

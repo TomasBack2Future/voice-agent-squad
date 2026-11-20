@@ -71,6 +71,7 @@ func newDispatchSweepCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.DecisionAfter, "decision-after", 0, "Flag a current decision undelivered for this long (default 5m)")
 	cmd.Flags().DurationVar(&opts.QuietAfter, "quiet-after", 0, "Flag a proceeding owner with no recorded progress and no operation in flight for this long (default 3h)")
 	cmd.Flags().DurationVar(&opts.HoldAfter, "hold-after", 0, "Flag a hold without a structured wait older than this (default 2h)")
+	cmd.Flags().DurationVar(&opts.OperationAfter, "operation-after", 0, "Flag an owned operation started with no exit for this long (default 12h); a younger one is a note")
 	cmd.Flags().StringVar(&opts.ReservedBy, "reserved-by", "", "Only reservations owned by this Dispatcher agent id (default: every active reservation)")
 	return cmd
 }

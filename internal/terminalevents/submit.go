@@ -131,7 +131,7 @@ func (s Store) Submit(ctx context.Context, actor string, q SubmitRequest) (Submi
 		if q.Kind == "phase-result" {
 			// Same contract as RecordPhaseResult: once the result is committed, a
 			// dependent whose release is in force proceeds without a Dispatcher step.
-			s.releaseBestEffort(ctx)
+			s.releaseBestEffort(ctx, true)
 		}
 	}
 	return out, err

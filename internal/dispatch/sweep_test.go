@@ -137,6 +137,14 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || slices.Contains(sweepRow(t, report, "QUIET").Drift, "owner-quiet") {
 		t.Fatalf("owner with an operation in flight flagged quiet: %+v %v", report, err)
 	}
+	// A watch that is simply running is a note. Only one started long ago with no
+	// exit is worth checking for a lost process.
+	if row := sweepRow(t, report, "QUIET"); slices.Contains(row.Drift, "owned-operation-unresolved") || !slices.Contains(row.Notes, "operation-in-flight") {
+		t.Fatalf("a running watch was flagged as lost: %+v", row)
+	}
+	if report, err = s.Sweep(ctx, SweepOptions{OperationAfter: time.Hour}); err != nil || !slices.Contains(sweepRow(t, report, "QUIET").Drift, "owned-operation-unresolved") {
+		t.Fatalf("a watch older than the threshold was not flagged: %+v %v", report, err)
+	}
 	// A Dispatcher sweeps its own reservations, not leftovers of earlier controllers.
 	exec(`UPDATE dispatch_reservations SET reserved_by='retired-dispatcher' WHERE item_id IN ('PROSE','ASKED')`)
 	if report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher"}); err != nil || report.Active != 4 {

@@ -22,6 +22,10 @@ type SweepOptions struct {
 	// HoldAfter: a hold that names no structured wait, so nobody can observe
 	// when it ends.
 	HoldAfter time.Duration
+	// OperationAfter: an owned operation recorded as started with no exit for
+	// this long. A started operation is normally a watch still running; only an
+	// unusually old one is worth checking for a lost process.
+	OperationAfter time.Duration
 	// ReservedBy limits the sweep to one Dispatcher's reservations; empty reads
 	// every active reservation of the ledger.
 	ReservedBy string
@@ -39,6 +43,9 @@ func (o SweepOptions) withDefaults() SweepOptions {
 	}
 	if o.HoldAfter <= 0 {
 		o.HoldAfter = 2 * time.Hour
+	}
+	if o.OperationAfter <= 0 {
+		o.OperationAfter = 12 * time.Hour
 	}
 	return o
 }
@@ -115,9 +122,13 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 			DecisionAction: d.DecisionAction, RemainingCondition: d.RemainingCondition, Waits: d.Waits, NextOwner: d.NextOwner,
 			OperationState: d.OperationState, Drift: []string{}}
 		for _, code := range d.Drift {
-			if code == "worker-report-without-event" {
+			switch {
+			case code == "worker-report-without-event":
 				row.Notes = append(row.Notes, code)
-			} else {
+			case code == "owned-operation-unresolved" && now-d.OperationRecordedAt <= int64(opts.OperationAfter.Seconds()):
+				// Started, no exit yet: a watch doing its job, not a lost one.
+				row.Notes = append(row.Notes, "operation-in-flight")
+			default:
 				row.Drift = append(row.Drift, code)
 			}
 		}

@@ -379,7 +379,7 @@ func (s Store) RecordPhaseResult(ctx context.Context, actor string, p PhaseResul
 		// pre-authorized hold: release that hold now, in its own transaction, so
 		// no Dispatcher round trip is needed and nothing about another
 		// assignment's hold can ever fail this owner's result.
-		s.releaseBestEffort(ctx)
+		s.releaseBestEffort(ctx, true)
 	}
 	return p, err
 }

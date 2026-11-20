@@ -27,8 +27,8 @@ func storedDecision(t *testing.T, s Store, key string) (revision int64, action, 
 }
 
 // The 2026-11 stalls: a dependency result arrived and the held Worker stayed
-// idle until the Dispatcher noticed. A pre-authorized hold releases itself in
-// the transaction that records the result and wakes the held Worker.
+// idle until the Dispatcher noticed. A pre-authorized hold releases itself as
+// soon as the result is recorded and wakes the held Worker.
 func TestPreAuthorizedHoldReleasesWhenItsLastWaitIsRecorded(t *testing.T) {
 	s := waitFixture(t, "W", "P", "Q")
 	ctx := context.Background()
@@ -448,8 +448,8 @@ func TestAcknowledgementReleasesADependentWhoseAuthorizationIsInForce(t *testing
 }
 
 // submit --kind phase-result is the path Workers are told to use; it releases
-// in its own transaction exactly like phase-result.
-func TestSubmittedPhaseResultReleasesInTheSameTransaction(t *testing.T) {
+// right after its result commits, exactly like phase-result.
+func TestSubmittedPhaseResultReleasesTheDependent(t *testing.T) {
 	s := waitFixture(t, "W", "P")
 	ctx := context.Background()
 	if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "deploy", Until: "passed"})); err != nil {
@@ -590,5 +590,137 @@ func TestOneRefusedReleaseDoesNotUndoTheOthers(t *testing.T) {
 	}
 	if rev, action, _ := storedDecision(t, s, "W"); rev != 2 || action != "proceed" {
 		t.Fatalf("the other hold was not released: %d %s", rev, action)
+	}
+}
+
+// A time box that expires while the release waits for the write lock is
+// expired: the clock is read with the lock held, and the CAS checks it again.
+func TestTimeBoxExpiringWhileWaitingForTheWriteLockKeepsTheHold(t *testing.T) {
+	s := waitFixture(t, "W", "P")
+	ctx := context.Background()
+	q := autoHold(s, t, "W", Wait{Reservation: "P", Phase: "build", Until: "passed"})
+	q.WaitDeadline = time.Now().Unix() + 1
+	if _, err := s.Decide(ctx, "dispatcher", q); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo','P','build',1,'TASK-P','all','passed','',1,'worker-P',1)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	type result struct {
+		n   int
+		err error
+	}
+	finished := make(chan result, 1)
+	go func() { n, err := s.ReleaseSatisfied(ctx); finished <- result{n, err} }()
+	time.Sleep(time.Until(time.Unix(q.WaitDeadline+1, 0)) + 50*time.Millisecond)
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	res := <-finished
+	if rev, action, _ := storedDecision(t, s, "W"); res.err != nil || res.n != 0 || action != "hold" || rev != 1 {
+		t.Fatalf("released after its time box expired: released=%d revision=%d action=%s err=%v", res.n, rev, action, res.err)
+	}
+}
+
+// Once a hold is released its own wake is retired: only the release is
+// delivered, and acknowledging the old hold is refused, as it is after an
+// ordinary newer decision.
+func TestReleasedHoldRetiresItsOwnWake(t *testing.T) {
+	for _, delivered := range []bool{false, true} {
+		s := waitFixture(t, "W", "P")
+		ctx := context.Background()
+		if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "build", Until: "passed"})); err != nil {
+			t.Fatal(err)
+		}
+		worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker-W"}
+		first, err := worker.Pending(ctx, "incarnation", 0)
+		if err != nil || len(first) != 1 {
+			t.Fatalf("%+v %v", first, err)
+		}
+		if delivered {
+			if err = worker.Delivered(ctx, first[0].ID, "incarnation"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p := PhaseResult{Reservation: "P", Generation: 1, WorkerSession: "native-P", Phase: "build", Checks: "all", Verdict: "passed", OutcomeID: say(t, s, "worker-P", "TASK-P")}
+		if _, err = s.RecordPhaseResult(ctx, "worker-P", p); err != nil {
+			t.Fatal(err)
+		}
+		events, err := worker.Pending(ctx, "incarnation", 0)
+		if err != nil || len(events) != 1 || !strings.HasSuffix(events[0].ID, "/waits-released-r2") {
+			t.Fatalf("delivered=%v: want only the release, got %+v %v", delivered, events, err)
+		}
+		if err = worker.Delivered(ctx, first[0].ID, "incarnation"); err == nil {
+			t.Fatalf("delivered=%v: the retired hold wake was accepted as delivered", delivered)
+		}
+		if err = worker.Ack(ctx, first[0].ID, "processed old hold"); err == nil {
+			t.Fatalf("delivered=%v: the retired hold wake was acknowledged", delivered)
+		}
+		if err = worker.Delivered(ctx, events[0].ID, "incarnation"); err != nil {
+			t.Fatal(err)
+		}
+		if err = worker.Ack(ctx, events[0].ID, "resumed at revision 2"); err != nil {
+			t.Fatalf("delivered=%v: the release could not be acknowledged: %v", delivered, err)
+		}
+	}
+}
+
+// A recipient's own events never wait for the write lock a release would need:
+// with another writer holding the lock, an unrelated Worker's poll returns the
+// same events with or without a releasable hold in the ledger.
+func TestPollStaysPromptWhileAReleaseWaitsForTheWriteLock(t *testing.T) {
+	s := waitFixture(t, "W", "P", "U")
+	ctx := context.Background()
+	if _, err := s.Decide(ctx, "dispatcher", proceed(s, t, "U", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "build", Until: "passed"})); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker-U"}
+	pollUnderLock := func() ([]Event, time.Duration, error) {
+		t.Helper()
+		tx, err := s.DB.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { time.Sleep(600 * time.Millisecond); done <- tx.Commit() }()
+		pollCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		events, err := unrelated.Pending(pollCtx, "incarnation", time.Minute)
+		took := time.Since(start)
+		if lockErr := <-done; lockErr != nil {
+			t.Fatal(lockErr)
+		}
+		return events, took, err
+	}
+	if events, _, err := pollUnderLock(); err != nil || len(events) != 1 {
+		t.Fatalf("baseline: %d events, %v", len(events), err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo','P','build',1,'TASK-P','all','passed','',1,'worker-P',1)`); err != nil {
+		t.Fatal(err)
+	}
+	events, took, err := pollUnderLock()
+	if err != nil || len(events) != 1 {
+		t.Fatalf("a releasable hold elsewhere cost this Worker its events: %d events, %v", len(events), err)
+	}
+	// The accompanying release only takes a free lock; it must not have waited
+	// out the 600ms one.
+	if took > 450*time.Millisecond {
+		t.Fatalf("the poll waited %v for a release it does not own", took)
+	}
+	// The release was not lost: with the lock free, the next read applies it.
+	if _, err = unrelated.Pending(ctx, "incarnation", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if rev, action, _ := storedDecision(t, s, "W"); rev != 2 || action != "proceed" {
+		t.Fatalf("the deferred release was lost: %d %s", rev, action)
 	}
 }

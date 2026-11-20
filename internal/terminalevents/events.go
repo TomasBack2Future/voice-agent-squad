@@ -314,10 +314,19 @@ func (s Store) Pending(ctx context.Context, session string, retry time.Duration)
 	if s.Repo == "" || s.Recipient == "" || session == "" {
 		return nil, fmt.Errorf("repo, recipient and delivery session required")
 	}
-	// Any recipient's read applies a pending pre-authorized release, so one that
-	// could not be performed when the result was recorded (custody was ambiguous
-	// then) is not lost; it is delivered to its own Worker in that Worker's read.
-	s.releaseBestEffort(ctx)
+	events, err := s.pendingRead(ctx, session, retry)
+	if err == nil {
+		// Any recipient's read also applies a pending pre-authorized release, so
+		// one that could not be performed when the result was recorded (custody
+		// was ambiguous then, or the write lock was busy) is not lost. It runs
+		// after this recipient's own events are read and never delays or fails
+		// them; a released hold wakes its Worker, whose next read delivers it.
+		s.releaseBestEffort(ctx, false)
+	}
+	return events, err
+}
+
+func (s Store) pendingRead(ctx context.Context, session string, retry time.Duration) ([]Event, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT e.event_id,e.item_id,e.kind,e.outcome_id,e.source_message_id,e.delivered_at,e.processed_at
  FROM terminal_event_receipts e JOIN dispatch_reservations r
  ON r.repo_id=e.repo_id AND r.item_id=e.reservation_key AND r.generation=e.generation
@@ -388,7 +397,10 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 	// A dependent whose release is in force is consumed by releasing it; do that
 	// first, in its own transaction, so the gate below only ever sees holds that
 	// could not be released and a failed release cannot fail this acknowledgement.
-	s.releaseBestEffort(ctx)
+	// A caller the controller fence will refuse triggers nothing.
+	if s.controllerFence(ctx, s.DB, "") == nil {
+		s.releaseBestEffort(ctx, true)
+	}
 	return store.WithTxRetry(ctx, s.DB, func(tx *sql.Tx) error {
 		if err := s.controllerFence(ctx, tx, ""); err != nil {
 			return err

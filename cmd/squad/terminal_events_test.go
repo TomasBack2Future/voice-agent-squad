@@ -347,15 +347,42 @@ func TestDecisionGetRejectsMissingOrWrongSessionPrecisely(t *testing.T) {
 }
 
 func TestParseWaitSpecs(t *testing.T) {
-	got, err := parseWaits([]string{"DISPATCH-STUDIO-1940:s6-acceptance:executed", "release:v1:2::terminal"})
+	got, err := parseWaits([]string{"DISPATCH-STUDIO-1940:s6-acceptance:executed", "release:v1:2::terminal"}, nil)
 	if err != nil || len(got) != 2 || got[0].Reservation != "DISPATCH-STUDIO-1940" || got[0].Phase != "s6-acceptance" || got[0].Until != "executed" ||
 		got[1].Reservation != "release:v1:2" || got[1].Phase != "" || got[1].Until != "terminal" {
 		t.Fatalf("%+v %v", got, err)
 	}
 	for _, bad := range []string{"D", "D:x", ":x:executed"} {
-		if _, err := parseWaits([]string{bad}); err == nil {
+		if _, err := parseWaits([]string{bad}, nil); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
+	}
+}
+
+// Reservation keys and phase names both contain colons, so the split between
+// them is the one whose reservation exists in the ledger.
+func TestParseWaitSpecsResolvesColonsAgainstTheLedger(t *testing.T) {
+	ledger := map[string]bool{"A": true, "production:studio:7bd6": true, "X": true, "X:merge": true}
+	exists := func(key string) (bool, error) { return ledger[key], nil }
+	for spec, want := range map[string][3]string{
+		"A:merge:passed":                               {"A", "merge", "passed"},
+		"A:merge:pr42:passed":                          {"A", "merge:pr42", "passed"},
+		"A:deploy:staging:b7:a2:passed":                {"A", "deploy:staging:b7:a2", "passed"},
+		"A::terminal":                                  {"A", "", "terminal"},
+		"production:studio:7bd6:merge:executed":        {"production:studio:7bd6", "merge", "executed"},
+		"production:studio:7bd6:deploy:prod:b7:passed": {"production:studio:7bd6", "deploy:prod:b7", "passed"},
+		"production:studio:7bd6::terminal":             {"production:studio:7bd6", "", "terminal"},
+		// An unknown reservation keeps the documented single-field phase so the
+		// decision can name the missing reservation.
+		"NOPE:merge:passed": {"NOPE", "merge", "passed"},
+	} {
+		got, err := parseWaits([]string{spec}, exists)
+		if err != nil || len(got) != 1 || got[0].Reservation != want[0] || got[0].Phase != want[1] || got[0].Until != want[2] {
+			t.Errorf("%q: got %+v %v, want %v", spec, got, err, want)
+		}
+	}
+	if _, err := parseWaits([]string{"X:merge:pr1:passed"}, exists); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous split was guessed: %v", err)
 	}
 }
 
@@ -524,9 +551,10 @@ func TestCLIOnSatisfiedSweepAndDecisionGetRelease(t *testing.T) {
 	if out, err := run(append(set, "--wait-for", "A::terminal")...); err == nil || !strings.Contains(err.Error(), "invalid-wait") {
 		t.Fatalf("CLI accepted a pre-authorized terminal wait: %v %s", err, out)
 	}
-	out, err := run(append(set, "--wait-for", "A:merge:passed")...)
-	if err != nil || !strings.Contains(out, `"on_satisfied":"proceed"`) {
-		t.Fatalf("decision-set --on-satisfied: %v %s", err, out)
+	// A hierarchical phase name is accepted on the command line.
+	out, err := run(append(set, "--wait-for", "A:merge:pr42:passed")...)
+	if err != nil || !strings.Contains(out, `"on_satisfied":"proceed"`) || !strings.Contains(out, `"phase":"merge:pr42"`) {
+		t.Fatalf("decision-set --on-satisfied with a colon phase: %v %s", err, out)
 	}
 	out, err = run("dispatch", "sweep", "--reserved-by", dispatcher)
 	if err != nil || !strings.Contains(out, `"active":2`) || !strings.Contains(out, `"on_satisfied":"proceed"`) {
@@ -537,7 +565,7 @@ func TestCLIOnSatisfiedSweepAndDecisionGetRelease(t *testing.T) {
 	}
 	// The producer's phase is recorded behind the commands' back, so nothing has
 	// applied the release yet.
-	if _, err = env.DB.Exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES(?,'A','merge',1,'TASK-A','all','passed','',?,'worker-A',?)`, repoID, outcome, time.Now().Unix()); err != nil {
+	if _, err = env.DB.Exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES(?,'A','merge:pr42',1,'TASK-A','all','passed','',?,'worker-A',?)`, repoID, outcome, time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
 	request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "squad_terminal_decision_get", "arguments": map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B"}}})
