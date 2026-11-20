@@ -209,9 +209,12 @@ lock freeing and a time arriving.
   if you still have source work and are held, say so in one decision request
   rather than waiting. A hold marked `on_satisfied: proceed`
   releases itself when its waits are met and wakes you with a `decision-resolved`
-  event; read the new revision and start the step it frees in that same turn,
-  recording that you started (a progress message, or the operation itself). A
-  release you have read but not acted on is a stalled handoff. A satisfied hold without that
+  event; read the new revision and start the step it frees in that same turn.
+  Whenever a decision sets you going (your first decision, or a proceed after a
+  hold), make the start visible as a fact, not a reply: begin the step through
+  `operation run`, take the claim it needs, or record a `milestone` naming what
+  you started. A message saying you received the decision shows you read it,
+  nothing more; a release read but not started is a stalled handoff. A satisfied hold without that
   marker, and any hold whose time box expired, needs one `decision-request`
   citing the readback.
 - **What you send the Dispatcher.** A plain message wakes nobody and needs no
