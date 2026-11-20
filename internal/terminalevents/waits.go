@@ -175,13 +175,11 @@ func encodeWaits(w []Wait) string {
 type activeHold struct {
 	blocks string
 	waits  []Wait
-	// release: the Dispatcher pre-authorized this hold to proceed once satisfied.
-	release bool
 }
 
 // currentHolds reads every effective structured hold of live assignments.
 func currentHolds(ctx context.Context, tx *sql.Tx, repo string) (map[string]activeHold, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT d.reservation_key,d.blocks_phase,d.waits_for,CASE WHEN d.on_satisfied_revision=d.revision THEN 'proceed' ELSE '' END FROM dispatch_decisions d JOIN dispatch_reservations r
+	rows, err := tx.QueryContext(ctx, `SELECT d.reservation_key,d.blocks_phase,d.waits_for FROM dispatch_decisions d JOIN dispatch_reservations r
  ON r.repo_id=d.repo_id AND r.item_id=d.reservation_key AND r.generation=d.generation AND r.canonical_item_id=d.item_id
  WHERE d.repo_id=? AND r.state='dispatched' AND d.action='hold' AND d.waits_for!='[]' AND d.waits_revision=d.revision`, repo)
 	if err != nil {
@@ -190,23 +188,33 @@ func currentHolds(ctx context.Context, tx *sql.Tx, repo string) (map[string]acti
 	defer rows.Close()
 	out := map[string]activeHold{}
 	for rows.Next() {
-		var key, blocks, raw, onSatisfied string
-		if err = rows.Scan(&key, &blocks, &raw, &onSatisfied); err != nil {
+		var key, blocks, raw string
+		if err = rows.Scan(&key, &blocks, &raw); err != nil {
 			return nil, err
 		}
 		w, err := decodeWaits(raw)
 		if err != nil {
 			return nil, fmt.Errorf("decision %s waits: %w", key, err)
 		}
-		out[key] = activeHold{blocks: blocks, waits: w, release: onSatisfied == "proceed"}
+		out[key] = activeHold{blocks: blocks, waits: w}
 	}
 	return out, rows.Err()
 }
 
 // blocksNode reports whether a hold stops progress toward the waited phase.
-// A terminal wait is blocked by any hold; "" blocks every phase.
+// A terminal wait is blocked by any hold; "" blocks every phase. The relation
+// is the one operations are held by, so a cycle is never accepted here and
+// then enforced there.
 func (h activeHold) blocksNode(w Wait) bool {
-	return h.blocks == "" || w.Until == "terminal" || h.blocks == w.Phase
+	return h.blocks == "" || w.Until == "terminal" || samePhase(h.blocks, w.Phase)
+}
+
+// samePhase is the single phase relation: names are hierarchical with ":" as
+// the only separator, so "merge:pr1972" is the phase "merge" and the reverse.
+// "merge-pr1" or "premerge" are different names; phases are declared by their
+// owner, so a scope is a cooperative boundary, not an access control.
+func samePhase(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+":") || strings.HasPrefix(b, a+":")
 }
 
 // checkWaitGraph rejects a hold that waits on something already satisfied
@@ -400,10 +408,6 @@ func unconsumedDependents(ctx context.Context, tx *sql.Tx, repo, reservation str
 	}
 	var out []string
 	for key, h := range holds {
-		if h.release {
-			// A pre-authorized hold releases itself; it needs no new decision.
-			continue
-		}
 		cites := false
 		for _, w := range h.waits {
 			if w.Reservation == reservation && (w.Phase == phase || w.Until == "terminal") {

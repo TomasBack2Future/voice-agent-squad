@@ -103,7 +103,13 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 	for _, r := range active {
 		d, err := s.Delivery(ctx, r.ItemID, IssueObservation{})
 		if err != nil {
-			return nil, err
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			// One unreadable reservation must not hide the rest of the fleet.
+			report.Rows = append(report.Rows, SweepRow{Reservation: r.ItemID, SourceRef: r.SourceRef, Item: r.CanonicalItemID, State: r.State, Generation: r.Generation,
+				NextOwner: r.ReservedBy, OperationState: "unknown", Drift: []string{"sweep-read-failed"}, Notes: []string{err.Error()}})
+			continue
 		}
 		row := SweepRow{Reservation: r.ItemID, SourceRef: r.SourceRef, Item: r.CanonicalItemID, State: r.State, Generation: r.Generation,
 			DecisionAction: d.DecisionAction, RemainingCondition: d.RemainingCondition, Waits: d.Waits, NextOwner: d.NextOwner,
@@ -115,10 +121,13 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 				row.Drift = append(row.Drift, code)
 			}
 		}
+		// on_satisfied is shown only while the authorization is in force: the same
+		// predicate as terminalevents.effectiveRelease (current revision, current
+		// Dispatcher, inside the time box).
 		var outcome int64
 		var structured int
-		err = s.db.QueryRowContext(ctx, `SELECT revision,outcome_id,CASE WHEN on_satisfied_revision=revision AND waits_revision=revision THEN 'proceed' ELSE '' END,CASE WHEN waits_revision=revision AND waits_for!='[]' THEN 1 ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`,
-			s.repoID, r.ItemID, r.Generation, r.CanonicalItemID).Scan(&row.DecisionRevision, &outcome, &row.OnSatisfied, &structured)
+		err = s.db.QueryRowContext(ctx, `SELECT revision,outcome_id,CASE WHEN on_satisfied_revision=revision AND waits_revision=revision AND waits_for!='[]' AND (wait_deadline=0 OR wait_deadline>=?) AND EXISTS(SELECT 1 FROM messages m WHERE m.repo_id=dispatch_decisions.repo_id AND m.id=dispatch_decisions.outcome_id AND m.agent_id=?) THEN 'proceed' ELSE '' END,CASE WHEN waits_revision=revision AND waits_for!='[]' THEN 1 ELSE 0 END FROM dispatch_decisions WHERE repo_id=? AND reservation_key=? AND generation=? AND item_id=?`,
+			now, r.ReservedBy, s.repoID, r.ItemID, r.Generation, r.CanonicalItemID).Scan(&row.DecisionRevision, &outcome, &row.OnSatisfied, &structured)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}

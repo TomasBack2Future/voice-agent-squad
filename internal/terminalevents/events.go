@@ -389,6 +389,11 @@ func (s Store) Ack(ctx context.Context, id, note string) error {
 		if err := s.controllerFence(ctx, tx, ""); err != nil {
 			return err
 		}
+		// A dependent whose release is in force is consumed by releasing it now;
+		// any other satisfied dependent still needs its decision first.
+		if _, err := releaseSatisfiedHolds(ctx, tx, s.Repo, time.Now()); err != nil {
+			return err
+		}
 		if err := s.phaseConsumed(ctx, tx, id); err != nil {
 			return err
 		}

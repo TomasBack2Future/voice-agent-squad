@@ -1081,10 +1081,12 @@ hold into proceed; the owner answers it with a new decision.
 structured hold: when its last wait becomes satisfied the hold becomes a
 `proceed` decision with the next revision and the held Worker receives a
 `decision-resolved` wake, with no further Dispatcher step. The release happens
-in the transaction that records the satisfying phase result. A release that
-transaction could not perform (Worker custody was ambiguous then) is applied by
-the next listener read of any recipient, or by the held Worker's CLI
-`decision-get`; the MCP read tool never writes. It keeps the Dispatcher's
+in the transaction that records the satisfying phase result, through either
+`phase-result` or `submit --kind phase-result`. A release that transaction
+could not perform (Worker custody was ambiguous then) is applied by the next
+listener read of any recipient, by the Dispatcher's acknowledgement of the
+phase result, or by the held Worker's CLI `decision-get`; the MCP read tool
+never writes. It keeps the Dispatcher's
 outcome message, drops the waits, records a `dispatch_decision_history` row
 with `decided_by` `waits-satisfied` and changes nothing else: scope, claims and
 merge policy stay as decided. A stale `--expected-revision` from the Dispatcher
@@ -1094,9 +1096,12 @@ The authorization is narrow. It requires phase waits (`executed` or `passed`);
 a `terminal` wait is refused with the marker, because a reservation also ends
 by failing or being retired. It belongs to the revision that carried it, so a
 later revision written by any binary never inherits it. It lapses when the
-hold's time box expires or the reservation changes Dispatcher: the hold then
-stays, reported as `hold-waits-satisfied` or `hold-time-box-expired` for the
-responsible Dispatcher. Without the marker a satisfied hold needs a new
+hold's time box expires, when the reservation changes Dispatcher, and when a
+takeover or Worker handoff copies the decision to a new generation: the hold
+then stays, `on_satisfied` is no longer shown, and it is reported as
+`hold-waits-satisfied` or `hold-time-box-expired` for the responsible
+Dispatcher. Retrying the identical marked request after its release returns
+the stale-decision error rather than the earlier result. Without the marker a satisfied hold needs a new
 decision, as before. Use it for an order the Dispatcher has already decided
 ("after B's merge, go"); leave it off for a human hold or a gate whose result
 must be judged first.
@@ -1121,6 +1126,7 @@ rows come first.
 | `hold-waits-satisfied` | Every wait of a hold is met and it was not released (no marker, lapsed marker or ambiguous Worker custody) | Dispatcher |
 | `hold-without-checkable-wait` | A hold older than the threshold names no structured wait | Dispatcher: add the wait or lift the hold |
 | `owner-quiet` | A proceeding owner recorded no progress and has no owned operation in flight | Dispatcher inspects the session once |
+| `sweep-read-failed` | This reservation could not be read (the error is in `notes`); the other rows are complete | Dispatcher reads it with `dispatch delivery` |
 
 A plain Worker message after the current decision appears under `notes`
 (`worker-report-without-event`), not under drift: ordinary progress needs no
@@ -1173,9 +1179,11 @@ installed target (default: this binary, symlinks resolved). Only identity
 fields are printed, never full command lines. Installation is the installed
 target; adoption is each live process running it.
 
-Acknowledging a `phase-result` event is refused with `phase-result-unconsumed`
-while a live hold that cites it has every wait satisfied: publish each such
-dependent's next decision first. An acknowledgement alone is not consumption.
+Acknowledging a `phase-result` event first releases every dependent whose
+release authorization is in force, and is then refused with
+`phase-result-unconsumed` while any live hold that cites the result still has
+every wait satisfied: publish each such dependent's next decision first. An
+acknowledgement alone is not consumption.
 
 Only the current decision is delivered; an older delivered decision cannot be
 acknowledged as current. A released primary claim does not disable the wake:

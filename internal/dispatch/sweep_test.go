@@ -148,6 +148,22 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 		}
 	}
 	exec(`UPDATE dispatch_reservations SET reserved_by='dispatcher'`)
+	// One unreadable reservation is reported and does not hide the others.
+	exec(`UPDATE dispatch_decisions SET action='hold',waits_for='not json',waits_revision=revision WHERE reservation_key='BUSY'`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || !slices.Contains(sweepRow(t, report, "BUSY").Drift, "sweep-read-failed") || report.Active != len(report.Rows) {
+		t.Fatalf("unreadable reservation: %+v %v", report, err)
+	}
+	exec(`UPDATE dispatch_decisions SET action='proceed',waits_for='[]' WHERE reservation_key='BUSY'`)
+	// on_satisfied is shown only while the authorization is in force.
+	exec(`UPDATE dispatch_decisions SET revision=3,action='hold',waits_for='[{"reservation":"BUSY","phase":"deploy","until":"passed"}]',waits_revision=3,on_satisfied_revision=3 WHERE reservation_key='WAITS'`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "WAITS").OnSatisfied != "proceed" {
+		t.Fatalf("authorization in force not shown: %+v %v", sweepRow(t, report, "WAITS"), err)
+	}
+	exec(`UPDATE dispatch_decisions SET wait_deadline=1 WHERE reservation_key='WAITS'`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "WAITS").OnSatisfied != "" {
+		t.Fatalf("lapsed authorization still shown: %+v %v", sweepRow(t, report, "WAITS"), err)
+	}
+	exec(`UPDATE dispatch_decisions SET wait_deadline=0,revision=2,action='proceed',waits_for='[]',waits_revision=2,on_satisfied_revision=0 WHERE reservation_key='WAITS'`)
 	// Thresholds are the caller's.
 	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: time.Minute}); err != nil || !slices.Contains(sweepRow(t, report, "ASKED").Drift, "owner-quiet") {
 		t.Fatalf("custom threshold ignored: %+v %v", report, err)

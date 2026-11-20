@@ -415,3 +415,72 @@ func TestMCPReorderAndPhaseResultParity(t *testing.T) {
 		t.Fatalf("readback lacks satisfaction: %s", out)
 	}
 }
+
+// CLI and MCP parity for the release marker and the fleet sweep: a marked hold
+// set over MCP is released by the producer's phase result, the MCP read of the
+// decision stays a pure read, and the sweep reports the fleet over MCP.
+func TestMCPSelfReleasingHoldAndSweep(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	for _, k := range []string{"A", "B"} {
+		if _, err := env.DB.Exec(`INSERT INTO dispatch_reservations(repo_id,item_id,source_ref,reserved_by,reserved_at,updated_at,expires_at,state,generation,worker_thread_id,note,canonical_item_id) VALUES(?,?,?,?,1,1,0,'dispatched',1,?,'',?)`, env.RepoID, k, "github:o/r#"+k, env.AgentID, "native-"+k, "TASK-"+k); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := env.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES(?,?,?,1,2,'blocked')`, env.RepoID, "TASK-"+k, "worker-"+k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := chat.New(env.DB, env.RepoID)
+	msg := func(thread string) int64 {
+		if err := c.Post(ctx, chat.PostRequest{AgentID: env.AgentID, Thread: thread, Kind: "fyi", Body: "decision"}); err != nil {
+			t.Fatal(err)
+		}
+		var id int64
+		if err := env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	call := func(name string, args map[string]any) string {
+		request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+		var out bytes.Buffer
+		if err := runMCP(ctx, env.DB, env.RepoID, env.Root, strings.NewReader(string(request)+"\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	waitA := []map[string]any{{"reservation": "A", "phase": "merge", "until": "passed"}}
+	hold := map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B", "expected_revision": 0, "outcome_id": msg("TASK-B"), "action": "hold", "condition": "after A merges", "waits_for": waitA, "on_satisfied": "proceed", "agent_id": env.AgentID}
+	terminal := map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B", "expected_revision": 0, "outcome_id": hold["outcome_id"], "action": "hold", "condition": "after A ends", "waits_for": []map[string]any{{"reservation": "A", "until": "terminal"}}, "on_satisfied": "proceed", "agent_id": env.AgentID}
+	if out := call("squad_terminal_decision_set", terminal); !strings.Contains(out, "invalid-wait") {
+		t.Fatalf("MCP accepted a pre-authorized terminal wait: %s", out)
+	}
+	if out := call("squad_terminal_decision_set", hold); strings.Contains(out, `"isError":true`) || !strings.Contains(out, `on_satisfied`) {
+		t.Fatalf("MCP marked hold: %s", out)
+	}
+	if out := call("squad_dispatch_sweep", map[string]any{"reserved_by": env.AgentID}); strings.Contains(out, `"isError":true`) || !strings.Contains(out, `on_satisfied`) || !strings.Contains(out, `"active":2`) {
+		t.Fatalf("MCP sweep: %s", out)
+	}
+	if out := call("squad_dispatch_sweep", map[string]any{"reserved_by": "nobody"}); !strings.Contains(out, `"active":0`) {
+		t.Fatalf("MCP sweep owner filter: %s", out)
+	}
+	// The producer's own Worker records the phase; the dependent is released.
+	if _, err := env.DB.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,'worker-A','TASK-A','say','merged','[]','normal')`, env.RepoID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	var outcome int64
+	if err := env.DB.QueryRow("SELECT max(id) FROM messages").Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	if out := call("squad_terminal_phase_result", map[string]any{"reservation": "A", "generation": 1, "worker_session": "native-A", "phase": "merge", "checks": "all", "verdict": "passed", "outcome_id": outcome, "agent_id": "worker-A"}); strings.Contains(out, `"isError":true`) {
+		t.Fatalf("producer phase result: %s", out)
+	}
+	out := call("squad_terminal_decision_get", map[string]any{"reservation": "B", "generation": 1, "worker_session": "native-B"})
+	if !strings.Contains(out, `"action":"proceed"`) || !strings.Contains(out, `"revision":2`) {
+		t.Fatalf("dependent not released: %s", out)
+	}
+	var history int
+	if err := env.DB.QueryRow(`SELECT count(*) FROM dispatch_decision_history WHERE reservation_key='B'`).Scan(&history); err != nil || history != 2 {
+		t.Fatalf("history rows %d %v", history, err)
+	}
+}

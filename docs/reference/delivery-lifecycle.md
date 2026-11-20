@@ -282,7 +282,9 @@ wraps a command explicitly, with identity/custody and decision checks:
 A hold refuses the operation unless the hold is scoped with `--blocks-phase`
 and the operation names a different `phase`: a hold on `merge` does not stop a
 test run or a watch on the owner's own precondition. Phase names are
-hierarchical, so `merge:pr1972` is the held phase too. An unscoped hold, an
+hierarchical with `:` as the only separator, so `merge:pr1972` is the held
+phase too, while `merge-pr1972` is a different name. The phase is declared by
+the operation's owner: the scope is a cooperative boundary, not access control. An unscoped hold, an
 operation that names no phase and one whose phase is not a well-formed phase
 name are refused.
 

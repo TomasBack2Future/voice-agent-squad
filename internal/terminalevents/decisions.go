@@ -61,14 +61,14 @@ var ErrStaleDecision = errors.New("decision changed or missing: read terminal-ev
 
 // workerRecipient deliberately rejects ambiguous custody rather than guessing a
 // session identity. Released claims can receive decisions, never write authority.
-func workerRecipient(ctx context.Context, tx *sql.Tx, repo, key string, generation int64) (string, error) {
+func workerRecipient(ctx context.Context, tx querier, repo, key string, generation int64) (string, error) {
 	return workerRecipientIn(ctx, tx, repo, key, generation, "dispatched")
 }
 
 // workerRecipientIn resolves the sole claimant of an assignment in one of the
 // named reservation states; a late operation exit may still reach its original
 // Worker after the reservation completed.
-func workerRecipientIn(ctx context.Context, tx *sql.Tx, repo, key string, generation int64, states ...string) (string, error) {
+func workerRecipientIn(ctx context.Context, tx querier, repo, key string, generation int64, states ...string) (string, error) {
 	marks := make([]string, len(states))
 	args := []any{repo, key, generation}
 	for i, st := range states {
@@ -157,9 +157,9 @@ func (s Store) CurrentDecision(ctx context.Context, key string, generation int64
 		return d, &DecisionLookupError{"missing-worker-session", "--worker-session is required: decision-get never resolves a session implicitly"}
 	}
 	var rawWaits string
-	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.waits_for ELSE '[]' END,'[]'),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.blocks_phase ELSE '' END,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.wait_deadline ELSE 0 END,0),COALESCE(CASE WHEN d.on_satisfied_revision=d.revision AND d.waits_revision=d.revision THEN 'proceed' ELSE '' END,'')
+	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(d.revision,0),COALESCE(d.outcome_id,0),COALESCE(d.action,''),COALESCE(d.condition,''),COALESCE(d.worker_agent,''),COALESCE(d.merge_policy,'standing'),COALESCE(r.canonical_item_id,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.waits_for ELSE '[]' END,'[]'),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.blocks_phase ELSE '' END,''),COALESCE(CASE WHEN d.waits_revision=d.revision THEN d.wait_deadline ELSE 0 END,0),COALESCE(CASE WHEN `+effectiveRelease+` THEN 'proceed' ELSE '' END,'')
  FROM dispatch_reservations r LEFT JOIN dispatch_decisions d ON d.repo_id=r.repo_id AND d.reservation_key=r.item_id AND d.generation=r.generation AND d.item_id=r.canonical_item_id
- WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item, &rawWaits, &d.BlocksPhase, &d.WaitDeadline, &d.OnSatisfied)
+ WHERE r.repo_id=? AND r.item_id=? AND r.generation=? AND r.worker_thread_id=? AND r.state='dispatched'`, time.Now().Unix(), s.Repo, key, generation, session).Scan(&d.Revision, &d.OutcomeID, &d.Action, &d.Condition, &d.WorkerAgent, &d.MergePolicy, &item, &rawWaits, &d.BlocksPhase, &d.WaitDeadline, &d.OnSatisfied)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, s.diagnoseLookup(ctx, key, generation)
 	}

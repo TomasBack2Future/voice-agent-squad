@@ -61,7 +61,7 @@ func phaseOutside(phase, blocks string) bool {
 	if !phaseName.MatchString(phase) || !phaseName.MatchString(blocks) {
 		return false
 	}
-	return phase != blocks && !strings.HasPrefix(phase, blocks+":") && !strings.HasPrefix(blocks, phase+":")
+	return !samePhase(phase, blocks)
 }
 
 func (s Store) RunOperation(ctx context.Context, actor string, q OperationRequest, opts attest.RunOpts) (OperationResult, error) {

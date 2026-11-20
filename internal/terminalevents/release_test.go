@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/zsiec/squad/internal/attest"
 )
@@ -366,5 +367,130 @@ func TestPhaseScopedHoldAllowsOperationsOfOtherPhases(t *testing.T) {
 	opts := attest.RunOpts{ItemID: "TASK-W", Kind: attest.KindTest, AgentID: "worker-W", Command: "exit 0", RepoRoot: t.TempDir(), AttDir: filepath.Join(t.TempDir(), "evidence")}
 	if _, err := s.RunOperation(ctx, "worker-W", q, opts); err == nil {
 		t.Fatal("operation ran under an unscoped hold")
+	}
+}
+
+// The phase-result acknowledgement gate covers every satisfied hold that was
+// not released: a hold whose authorization lapsed (time box expired, another
+// Dispatcher, ambiguous custody) still needs its decision before the ACK.
+func TestLapsedAuthorizationKeepsThePhaseResultGate(t *testing.T) {
+	lapse := map[string]string{
+		"time box expired":   `UPDATE dispatch_decisions SET wait_deadline=1 WHERE reservation_key='W'`,
+		"dispatcher changed": `UPDATE dispatch_reservations SET reserved_by='successor' WHERE item_id='W'`,
+		"ambiguous custody":  `INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','TASK-W','intruder',1,2,'released')`,
+	}
+	for name, stmt := range lapse {
+		t.Run(name, func(t *testing.T) {
+			s := waitFixture(t, "W", "P")
+			ctx := context.Background()
+			if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "merge", Until: "executed"})); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.Exec(stmt); err != nil {
+				t.Fatal(err)
+			}
+			p := PhaseResult{Reservation: "P", Generation: 1, WorkerSession: "native-P", Phase: "merge", Checks: "all", Verdict: "passed", OutcomeID: say(t, s, "worker-P", "TASK-P")}
+			out, err := s.RecordPhaseResult(ctx, "worker-P", p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, action, _ := storedDecision(t, s, "W"); action != "hold" {
+				t.Fatal("a lapsed authorization released the hold")
+			}
+			dispatcher := Store{DB: s.DB, Repo: s.Repo, Recipient: "dispatcher"}
+			if _, err = dispatcher.Pending(ctx, "controller", 0); err != nil {
+				t.Fatal(err)
+			}
+			if err = dispatcher.Delivered(ctx, out.EventID, "controller"); err != nil {
+				t.Fatal(err)
+			}
+			if err = dispatcher.Ack(ctx, out.EventID, "noted"); rejection(err) != "phase-result-unconsumed" {
+				t.Fatalf("ACK passed with the dependent still held: %v", err)
+			}
+			// Neither the owner's read nor the fleet read may promise a release.
+			d, err := s.CurrentDecision(ctx, "W", 1, "native-W")
+			if name != "ambiguous custody" && (err != nil || d.OnSatisfied != "") {
+				t.Fatalf("owner read still shows an authorization that is not in force: %+v %v", d, err)
+			}
+		})
+	}
+}
+
+// An authorization in force is consumed by the acknowledgement itself when the
+// recording transaction could not release (custody was ambiguous then).
+func TestAcknowledgementReleasesADependentWhoseAuthorizationIsInForce(t *testing.T) {
+	s := waitFixture(t, "W", "P")
+	ctx := context.Background()
+	if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "merge", Until: "executed"})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO claim_history(repo_id,item_id,agent_id,claimed_at,released_at,outcome) VALUES('repo','TASK-W','intruder',1,2,'released')`); err != nil {
+		t.Fatal(err)
+	}
+	p := PhaseResult{Reservation: "P", Generation: 1, WorkerSession: "native-P", Phase: "merge", Checks: "all", Verdict: "passed", OutcomeID: say(t, s, "worker-P", "TASK-P")}
+	out, err := s.RecordPhaseResult(ctx, "worker-P", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := Store{DB: s.DB, Repo: s.Repo, Recipient: "dispatcher"}
+	if err = dispatcher.Delivered(ctx, out.EventID, "controller"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec(`DELETE FROM claim_history WHERE agent_id='intruder'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = dispatcher.Ack(ctx, out.EventID, "consumed"); err != nil {
+		t.Fatalf("ACK refused although the dependent could be released: %v", err)
+	}
+	if rev, action, _ := storedDecision(t, s, "W"); rev != 2 || action != "proceed" {
+		t.Fatalf("dependent not released by the acknowledgement: %d %s", rev, action)
+	}
+}
+
+// submit --kind phase-result is the path Workers are told to use; it releases
+// in its own transaction exactly like phase-result.
+func TestSubmittedPhaseResultReleasesInTheSameTransaction(t *testing.T) {
+	s := waitFixture(t, "W", "P")
+	ctx := context.Background()
+	if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "deploy", Until: "passed"})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, "worker-P", SubmitRequest{Reservation: "P", Generation: 1, WorkerSession: "native-P", Kind: "phase-result", Body: "deploy done", Phase: "deploy", Checks: "all", Verdict: "passed"}); err != nil {
+		t.Fatal(err)
+	}
+	if rev, action, _ := storedDecision(t, s, "W"); rev != 2 || action != "proceed" {
+		t.Fatalf("submitted result did not release the dependent: %d %s", rev, action)
+	}
+}
+
+// The cycle check and the operation fence use one phase relation: a wait on a
+// candidate-specific phase under a held phase closes the same cycle.
+func TestCycleCheckUsesTheHierarchicalPhaseRelation(t *testing.T) {
+	s := waitFixture(t, "A", "B")
+	ctx := context.Background()
+	if _, err := s.Decide(ctx, "dispatcher", hold(s, t, "A", 0, "merge", Wait{Reservation: "B", Phase: "merge", Until: "executed"})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Decide(ctx, "dispatcher", hold(s, t, "B", 0, "merge", Wait{Reservation: "A", Phase: "merge:pr1", Until: "executed"})); rejection(err) != "wait-cycle" {
+		t.Fatalf("hierarchical cycle accepted: %v", err)
+	}
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{{"merge", "merge", true}, {"merge", "merge:pr1", true}, {"merge:pr1", "merge", true}, {"merge", "merge-pr1", false}, {"merge", "premerge", false}, {"merge:pr1", "merge:pr2", false}} {
+		if samePhase(c.a, c.b) != c.same {
+			t.Fatalf("samePhase(%q,%q) != %v", c.a, c.b, c.same)
+		}
+	}
+}
+
+func TestReleaseConditionIsCutOnARuneBoundary(t *testing.T) {
+	long := strings.Repeat("等待合入", 60) // 720 bytes of three-byte runes
+	got := truncateRunes(long, 500)
+	if len(got) > 500 || len(got) < 498 || !utf8.ValidString(got) {
+		t.Fatalf("truncated to %d bytes, valid=%v", len(got), utf8.ValidString(got))
+	}
+	if truncateRunes("short", 500) != "short" {
+		t.Fatal("short text changed")
 	}
 }

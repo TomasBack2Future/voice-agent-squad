@@ -20,19 +20,27 @@ type markedHold struct {
 	waits                         []Wait
 }
 
-// markedHolds reads only holds that may release themselves: dispatched, a hold,
-// authorized at exactly the current revision, by the Dispatcher that owns the
-// reservation now, and inside their time box. An authorization does not
-// survive a newer revision, a controller change or an expired time box: each of
-// those returns the hold to the responsible Dispatcher. A hold whose waits
-// cannot be decoded is skipped, never an error for the caller's own work.
+// effectiveRelease is the one definition of "this hold's release authorization
+// is in force", over dispatch_decisions d joined to its reservation r, with the
+// current unix time as its single parameter: authorized at exactly the current
+// revision, by the Dispatcher that owns the reservation now, inside the time
+// box. It does not survive a newer revision, a controller change or an expired
+// time box; each returns the hold to the responsible Dispatcher. The release,
+// the owner's read of its decision and the sweep all use this predicate, so
+// none of them can believe in a release another would refuse. The dispatch
+// package repeats it for the sweep (it cannot import this one).
+const effectiveRelease = `(d.on_satisfied_revision=d.revision AND d.waits_revision=d.revision AND d.waits_for!='[]'
+ AND (d.wait_deadline=0 OR d.wait_deadline>=?)
+ AND EXISTS(SELECT 1 FROM messages m WHERE m.repo_id=d.repo_id AND m.id=d.outcome_id AND m.agent_id=r.reserved_by))`
+
+// markedHolds reads the live holds whose release authorization is in force. A
+// hold whose waits cannot be decoded is skipped, never an error for the
+// caller's own work.
 func markedHolds(ctx context.Context, q querier, repo string, now time.Time) ([]markedHold, error) {
 	rows, err := q.QueryContext(ctx, `SELECT d.reservation_key,d.generation,d.item_id,d.revision,d.outcome_id,d.condition,r.worker_thread_id,d.waits_for
  FROM dispatch_decisions d
  JOIN dispatch_reservations r ON r.repo_id=d.repo_id AND r.item_id=d.reservation_key AND r.generation=d.generation AND r.canonical_item_id=d.item_id
- JOIN messages m ON m.repo_id=d.repo_id AND m.id=d.outcome_id AND m.agent_id=r.reserved_by
- WHERE d.repo_id=? AND r.state='dispatched' AND d.action='hold' AND d.on_satisfied_revision=d.revision AND d.waits_revision=d.revision
- AND d.waits_for!='[]' AND (d.wait_deadline=0 OR d.wait_deadline>=?) ORDER BY d.reservation_key`, repo, now.Unix())
+ WHERE `+effectiveRelease+` AND d.repo_id=? AND r.state='dispatched' AND d.action='hold' ORDER BY d.reservation_key`, now.Unix(), repo)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +107,13 @@ func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string, now tim
 		if err != nil {
 			return released, err
 		}
+		id := fmt.Sprintf("worker-terminal-v1/%s/%d/%s/decision-resolved/%d/waits-released-r%d", h.key, h.generation, h.session, h.outcome, h.revision+1)
+		if eventPattern.FindString(id) != id {
+			// Unreachable for identities Decide accepted. Checked before any write
+			// so another assignment's malformed identity never fails the caller's
+			// own work; the hold stays for the Dispatcher.
+			continue
+		}
 		d := Decision{Revision: h.revision + 1, OutcomeID: h.outcome, Action: "proceed", WorkerAgent: worker,
 			Condition: truncateRunes("waits satisfied ("+strings.Join(evidence, "; ")+"); released hold: "+h.condition, 500)}
 		res, err := tx.ExecContext(ctx, `UPDATE dispatch_decisions SET revision=?,action='proceed',condition=?,worker_agent=?,waits_for='[]',blocks_phase='',wait_deadline=0,waits_revision=?,on_satisfied_revision=0
@@ -111,10 +126,6 @@ func releaseSatisfiedHolds(ctx context.Context, tx *sql.Tx, repo string, now tim
 		}
 		if err = recordDecisionHistory(ctx, tx, repo, h.key, h.generation, h.item, d, "[]", "waits-satisfied"); err != nil {
 			return released, err
-		}
-		id := fmt.Sprintf("worker-terminal-v1/%s/%d/%s/decision-resolved/%d/waits-released-r%d", h.key, h.generation, h.session, h.outcome, d.Revision)
-		if eventPattern.FindString(id) != id {
-			return released, ErrInvalidEvent
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO terminal_event_receipts
  (repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id)
@@ -155,7 +166,17 @@ func (s Store) ReleaseSatisfied(ctx context.Context) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		ready = ready || ok
+		if !ok {
+			continue
+		}
+		// Ambiguous custody cannot be released; do not take the write lock for it
+		// on every poll.
+		if _, err = workerRecipient(ctx, s.DB, s.Repo, h.key, h.generation); errors.Is(err, ErrInvalidEvent) {
+			continue
+		} else if err != nil {
+			return 0, err
+		}
+		ready = true
 	}
 	if !ready {
 		return 0, nil

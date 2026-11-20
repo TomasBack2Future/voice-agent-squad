@@ -211,6 +211,11 @@ func (s Store) submitTx(ctx context.Context, tx *sql.Tx, actor string, q SubmitR
 			s.Repo, q.Reservation, q.Phase, q.Generation, item, q.Checks, q.Verdict, q.Deferred, messageID, actor, now); err != nil {
 			return out, err
 		}
+		// Same contract as RecordPhaseResult: a dependent whose release is in
+		// force proceeds in the transaction that records the result.
+		if _, err = releaseSatisfiedHolds(ctx, tx, s.Repo, time.Unix(now, 0)); err != nil {
+			return out, err
+		}
 	}
 	id := fmt.Sprintf("worker-terminal-v1/%s/%d/%s/%s/%d", q.Reservation, q.Generation, q.WorkerSession, q.Kind, messageID)
 	if q.RequestKey != "default" {
