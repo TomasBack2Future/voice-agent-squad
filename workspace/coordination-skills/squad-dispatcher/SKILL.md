@@ -277,8 +277,11 @@ timer stopped for a pause is re-armed only by the user's resume. If the client
 offers no such facility, record `periodic: unavailable` and report it; do not
 improvise one.
 
-Each wake runs `squad dispatch sweep --reserved-by <your agent id>` and acts only
-on flagged rows, within recorded authority. It is not a full cycle: run the
+Each wake reads the batch's Issue states from the code host in one call, writes
+them as `{"source_ref","state","verified_at"}` observations, and runs `squad
+dispatch sweep --reserved-by <your agent id> --issue-observations FILE`, so the
+read is as wide as the batch and not only as the live sessions. It acts only on
+flagged rows, within recorded authority. It is not a full cycle: run the
 steps of "Run one cycle" afterwards only when the sweep or a pending event shows
 something to reconcile, or authorized work is waiting for admission. A row whose
 owner is under a user pause or a human hold is recorded only: no correction, no
@@ -293,6 +296,9 @@ checks per reservation with `dispatch delivery` and record the capability gap.
 | `hold-waits-satisfied` | Judge the recorded verdict. Publish a proceed only if it supports the order and no human hold, pause or production gate covers the owner; otherwise keep the hold and state the reason. |
 | `hold-time-box-expired` | The waits are still unmet. Find out why (the producer's fact may be true but unrecorded: one correction to the producer to record its `phase-result`), then extend, reorder or escalate. Expiry alone never yields a proceed. |
 | `hold-without-checkable-wait` | An ordering hold of your own making: replace it with structured waits or lift it. A hold of human or unknown origin, a batch-owned child hold and a partial-retirement fence stay; record the instruction or contract it comes from, or ask once. |
+| `decision-unacted` | An owner was told to proceed, by you or by a released hold, and has recorded nothing since. Inspect that one session once: the release is not done until the owner has read the decision and started its step. Not reading its events: [session continuity](references/session-continuity.md). Read but not started: one correction naming the step. |
+| `open-issue-no-active-owner` | The Issue is open and its execution has ended. Give it a continuation owner and one next action now, or record the condition it waits on and who lifts it. |
+| `open-issue-unreserved` | An Issue of your batch that nobody was ever assigned: admission. |
 | `owner-quiet` | Inspect that one session once (bounded screen read). Working: leave it. Waiting on something it can observe without a tracked watch: one correction. Waiting on you or on a person: resolve below. |
 | `operation-exit-unhandled` | The owner's watch ended and the owner did not continue: one correction to reconcile the actual result. |
 | `owned-operation-unresolved` | A watch started long ago with no recorded exit (a younger one is only the note `operation-in-flight` and needs nothing). Check once that its task is still running; running: leave it; gone: one correction to reconcile. |
@@ -311,8 +317,11 @@ Then check the batch, not only the live sessions:
   you copied from an earlier cycle.
 - **A release is followed to its first action.** A satisfied dependency is done
   when the released owner has read the new decision and started the agreed
-  deploy, acceptance or repair, not when the result was recorded. An owner
-  released with no action recorded afterwards is the next thing to look at.
+  deploy, acceptance or repair, not when the result was recorded. The sweep
+  reports it as `decision-unacted` and gives each row's `first_action_seconds`;
+  keep that number, the count of ready-but-not-started stages and the number of
+  repeated acceptances per original defect in the checkpoint, next to the
+  batch's closed and reopened counts, so a round can be compared with the last.
 - **Ready but not started.** A stage whose inputs are all recorded and which
   nobody has begun (merged members with no deploy run; a deployed candidate with
   no acceptance started) is a missing decision of yours: make it now, within
