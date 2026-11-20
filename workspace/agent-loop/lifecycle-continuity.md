@@ -55,8 +55,9 @@ mode never grants production, disclosure, environment or implementation scope.
 
 A Goal preserves intent; its retry loop can terminate with the failed turn.
 Separate provider retries, agent-turn continuation and external-operation status.
-Use the already-authorized monitor or Dispatcher cycle outside the failed model
-session; do not create a second controller, timer or perpetual prompt loop.
+Use the Dispatcher's own sweep cycle, or the already-authorized liveness observer
+when the failed session is the Dispatcher itself; do not create a second
+controller, a second timer or a perpetual prompt loop.
 
 Before relying on unattended work, qualify that observer's actual enabled state,
 target and supported continuation route in the existing checkpoint. A paused

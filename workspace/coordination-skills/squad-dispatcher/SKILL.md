@@ -5,11 +5,15 @@ description: "Run one bounded central-dispatch reconciliation cycle for Squad: o
 
 # Squad Dispatcher
 
-The Dispatcher is the single central planner. It gives each owner one complete,
-bounded assignment and then intervenes only where one owner cannot decide alone:
-cross-owner dependencies, shared resources and merge order, and real changes to
-scope, authority or risk. Every invocation is one finite, idempotent
-reconciliation cycle; return after it and keep no long-lived goal.
+The Dispatcher is the single central planner. Its goal is standing: every Issue
+admitted to its batch is closed after verification, with a correct arrangement
+along the way. It gives each owner one complete, bounded assignment, decides
+what ships together and who goes first, and intervenes only where one owner
+cannot decide alone: cross-owner order, shared resources, and real changes to
+scope, authority or risk. Workers do the work and watch their own preconditions;
+the Dispatcher does not relay facts they can read. Each invocation is one
+finite, idempotent cycle, and the Dispatcher's own sweep timer brings the next
+one.
 
 Read the workspace `AGENTS.md` first; its authority, pause, environment and
 runtime rules are binding. Apply [runtime-independent roles](../../agent-loop/runtime-compatibility.md):
@@ -37,8 +41,9 @@ production Deployer uses its release skill, not the Issue Worker envelope).
 - Do not create a Grok reviewer task, invoke or poll the external reviewer,
   publish review results, or treat Squad evidence as a merge gate. The owning
   Worker invokes the local wrapper; the GitHub App is only the publisher identity.
-- Do not create a timer, nested Dispatcher, monitor process or polling loop. The
-  local dashboard is read-only human UI, never dispatch authority.
+- Run exactly one recurring self-wake, the [sweep timer](#sweep-timer). Create no
+  other timer, nested Dispatcher, monitor process or polling loop. The local
+  dashboard is read-only human UI, never dispatch authority.
 
 Allowed writes: Issues within the recorded issue-management authority, the
 canonical Issue design/admission section and necessary issue-local corrections,
@@ -63,10 +68,12 @@ Spend decisions on real coordination, not on ordinary progress.
 | Situation | Dispatcher action |
 | --- | --- |
 | Ordinary step inside the assignment (edit, test, rebase, CI wait, review, readback, in-scope repair, cleanup) | None. The owner proceeds. |
+| Progress message, phase report, evidence or readback from an owner | None. Do not acknowledge, accept or approve it with a message or a decision; read it when a decision of yours depends on it. |
 | Assessment whose follow-on execution is already within authority ("evaluate, then run if X") | Admit both in the first assignment with the condition; no second approval. |
-| Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, upstream key restored) | Record it as a start condition in that owner's assignment; no hold, no later "your turn". |
-| Completed phase that must release another owner who is held or has no such start condition | Producer submits a decision request with the phase result; you CAS the recipient's decision and verify readback. |
-| Ordering between owners that neither can observe or decide (shared merge window, conflicting shared writes, release batch membership) | Effective decision: hold with structured waits, merge release, or reorder. |
+| Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, release tag, upstream key restored, a time) | Record it as a start condition in that owner's assignment; the owner parks on its own tracked watch. No hold, no later "your turn", no relay when it becomes true. |
+| Order between owners that you have already decided ("B merges after A", "accept after the batch deploys") | One hold with structured waits and `--on-satisfied proceed`. The producer's `phase-result` releases it and wakes the owner; you take no further step. |
+| Order that depends on a result you must judge first, or a human gate | Hold with structured waits and no release marker; answer it when `dispatch sweep` reports `hold-waits-satisfied`. |
+| Batch membership, release order, conflicting shared writes, a bounded merge window | Effective decision: the [batch plan](#batch-plan), merge release, or reorder. |
 | Shared environment contention | None; the owner uses foreground `claim --wait`. |
 | Scope, product semantics, authority, budget or risk actually changes | One effective decision after verifying evidence; ask the user only for new authority. |
 | Cross-owner handoff or same-Issue phase change of a read-only owner | Supported transfer/continuation with CAS, identity check and owner readback. |
@@ -139,7 +146,11 @@ expansion may still need the user.
 
 Apply [design admission](references/design-admission.md) before a new
 implementation assignment: verify a current READY design section and revision
-against the product and related active Issues; reuse still-valid decisions.
+against the product and related active Issues; reuse still-valid decisions. An
+Issue is READY only with its [Verification block](references/design-admission.md#verification-block):
+what to fix, the tests that must fail first, and for every criterion its layer,
+method, pass and not pass. Write the block yourself when the Issue lacks one;
+do not launch an owner to discover its own closure standard.
 Routine choices (storage location, naming consistent with existing intent) are
 Dispatcher planning work, not external blockers. Ask the user only for a material
 product tradeoff, new permission or scope expansion, with concrete options.
@@ -182,12 +193,13 @@ broader product changes, production operations or another repository.
   dependency transition the owner cannot observe itself. Re-read the target after
   sending; never repeat a wake on later cycles. Do not wake resource waiters:
   foreground `claim --wait` and the holder's release notification are the wake.
-- **Answer pending decisions in the same cycle.** Read `dispatch delivery` drift
-  (`worker-report-without-event`, `decision-request-acknowledged-without-decision`,
-  `hold-waits-satisfied`, `hold-time-box-expired`) and answer each with the
-  effective decision now. A hold whose waits are met never auto-proceeds; an idle
-  owner waiting on a satisfied hold is Dispatcher latency to remove, not a reason
-  to send another prompt.
+- **Answer real requests in the same cycle.** A `decision-request` that names a
+  boundary crossing gets the effective decision now. One that only reports a
+  phase or asks for an ordinary step gets a single correction pointing the owner
+  to its assignment, not a new revision. A hold without a release marker never
+  proceeds by itself: an idle owner waiting on such a satisfied hold is
+  Dispatcher latency to remove, and a reason to mark the next such hold for
+  release.
 - **Keep decisions few and complete.** Each new revision should change something
   real. Any new revision revokes an earlier merge release, so when re-deciding an
   owner that holds a still-valid release, repeat its `--merge-*` flags (Squad
@@ -206,9 +218,12 @@ broader product changes, production operations or another repository.
   reviewer stays independent and unchanged. Recurrence of the same mechanism
   requires a compact design reassessment. Own the safe model change and actual
   runtime readback per [session continuity](references/session-continuity.md#review-failure-model-transition).
-- **Closeout.** After required gates pass, the owning Worker closes the Issue and
-  reports; there is no routine ready-to-close step. Reconcile the actual closure,
-  acceptance, cleanup and custody afterwards. Partial delivery keeps the Issue
+- **Closeout.** After every criterion passes at its stated layer, the owning
+  Worker closes the Issue and reports; there is no routine ready-to-close step.
+  A criterion staging data can prove closes on staging; only a criterion marked
+  `production` waits for the production deploy, with its owner parked on the
+  release stage. Reconcile the actual closure, acceptance, cleanup and custody
+  afterwards. Partial delivery keeps the Issue
   OPEN with a concrete continuation owner/action, or an evidenced external
   prerequisite and next check, in the existing checkpoint; retiring an execution
   does not end the Dispatcher's responsibility for its unfinished Issue. Never
@@ -219,6 +234,67 @@ broader product changes, production operations or another repository.
   time, phase, remaining condition, next owner/action, evidence); mark older
   summaries superseded. A stale summary is not a reason to restart a Worker.
 
+## Batch plan
+
+Deciding what ships together and who goes first is the Dispatcher's main output.
+Keep one current plan per release batch in the existing checkpoint:
+
+- **Members**: the Issues and PRs in the batch, and the selection basis. Group by
+  shared release component and by acceptance that needs the same candidate. A
+  late Issue joins only with a recorded reason; never grow a batch that is ready.
+- **Order**: merge order only where changes conflict or one needs the other's
+  result; everything else merges independently. Name who goes first and why.
+- **Release owner**: exactly one owner deploys the batch (a Deployer or one
+  designated Worker). An implementation Worker is not turned into the release
+  owner of other Issues in the middle of its own.
+- **Verification layer per member**: from each Issue's Verification block, which
+  criteria close on unit or local evidence, which need the staged candidate, and
+  which need production because staging data cannot prove them.
+
+Encode the plan as decisions the ledger can check, not as prose. The release
+owner records `phase-result` for each stage (`merge:<pr>`, `deploy:staging-<sha>`,
+`deploy:production-<tag>`). A member that must wait for a stage holds on exactly
+that phase with `--blocks-phase` for the phase it stops and `--on-satisfied
+proceed`, so it keeps implementing, testing and preparing meanwhile and resumes
+by itself when the stage is recorded. A member with nothing to wait for holds on
+nothing. Members stay bound and parked through the release wait; do not retire
+an owner because its next step is a deploy someone else runs.
+
+## Sweep timer
+
+Stuck work is found by the Dispatcher itself, on its own clock. Arm one
+recurring self-wake through the runtime's native scheduler (default every 20
+minutes) at takeover and verify it is armed; record its identity and interval
+in the checkpoint; keep exactly one; stop it when the batch is closed or the
+user pauses the work. An outside observer may check that this Dispatcher is
+alive, and nothing more: it does not find stuck work or send corrections.
+
+Each wake runs `squad dispatch sweep` and acts only on flagged rows:
+
+| Drift | Action in this cycle |
+| --- | --- |
+| `decision-request-unanswered` | Answer it (see Running owners). |
+| `decision-undelivered` | The owner's receiver or session is unhealthy: apply [session continuity](references/session-continuity.md); do not resend by terminal input. |
+| `hold-waits-satisfied`, `hold-time-box-expired` | Publish the decision the hold was waiting for. |
+| `hold-without-checkable-wait` | Replace the prose hold with structured waits, or lift it. A human hold stays, with its instruction reference in the condition. |
+| `owner-quiet` | Inspect that one session once (bounded screen read). Working: leave it. Waiting on something it can observe without a tracked watch: one correction. Waiting on you or on a person: resolve below. |
+| `operation-exit-unhandled`, `owned-operation-unresolved` | The owner's watch ended or was lost and the owner did not continue: one correction to reconcile the actual result. |
+
+Then check the batch, not only the live sessions:
+
+- **Closure count.** Admitted Issues against Issues closed after verification.
+  Every open one has an owner, one next action and the condition it waits on.
+- **Ready but not started.** A stage whose inputs are all recorded and which
+  nobody has begun (merged members with no deploy run; a deployed candidate with
+  no acceptance started) is a missing decision of yours: make it now.
+- **Waiting on a person.** Any item waiting on the user for more than four hours
+  is raised to the user once, with the concrete question and options. First
+  challenge the label: "needs the user" and "cannot be constructed" are claims
+  to verify, and most are technical steps an owner can take.
+
+A quiet sweep reports nothing. Never message a healthy owner because a timer
+fired.
+
 ## Effective decisions, merge order and phase results
 
 The [command reference](../../../docs/reference/commands.md) owns the exact
@@ -226,9 +302,11 @@ forms; the essentials:
 
 - A wait that must stop an owner is a hold with `--wait-for
   RESERVATION:PHASE:executed|passed` (or `RESERVATION::terminal`), `--blocks-phase`
-  for the phase it stops and `--wait-time-box` when you promise to revisit. A hold
-  that blocks one phase never stops implementation, tests, review or acceptance
-  preparation. These flags, `decision-reorder` and `phase-result` exist only when
+  for the phase it stops, `--on-satisfied proceed` when the order is already
+  decided, and `--wait-time-box` when you promise to revisit. A hold that blocks
+  one phase never stops implementation, tests, review or acceptance preparation.
+  A hold described only in its condition text is not checkable by anyone: use it
+  for a human hold, and name the instruction it comes from. These flags, `decision-reorder` and `phase-result` exist only when
   the installed binary lists them; otherwise apply the same order by hand (CAS the
   predecessor, read back, then CAS the successor) and record the capability gap.
 - **Merge order.** When a bounded merge window is genuinely needed, set
@@ -252,8 +330,9 @@ forms; the essentials:
   timeouts have no verdict and cannot use that route.
 - **Phase results.** Distinguish checks executed, verdict passed/failed,
   re-verification on a later candidate, and Issue closure. Name phases by what was
-  checked (`acceptance:s7`, `merge:pr1972`). Consuming a result means updating
-  every dependent decision it releases; an ACK alone is not consumption. Before
+  checked (`acceptance:s7`, `merge:pr1972`). A dependent marked for release
+  consumes the result by itself. For any other dependent, consuming a result
+  means updating its decision; an ACK alone is not consumption. Before
   keeping a wait condition, compare it with the owner's latest result and drop a
   condition already satisfied.
 - **Reorder.** Make the predecessor's change effective first, then establish the
@@ -406,7 +485,7 @@ keystrokes.
 
 ## Reporting
 
-The heartbeat is quiet unless the user needs to know: a Worker created, an Issue
+A cycle is quiet unless the user needs to know: a Worker created, an Issue
 completed, a real failure, an abnormal or transferred lock, or genuinely required
 user action. Unchanged scans, healthy progress, ordinary rebase/CI and claim
 waiting are not notifications.

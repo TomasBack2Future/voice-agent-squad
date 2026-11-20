@@ -5,12 +5,13 @@ description: "Resolve exactly one explicitly assigned Voice Agent Studio GitHub 
 
 # Studio Single-Issue Worker
 
-Follow the generic Worker's [work order and failure branches](../../agent-loop/roles/worker/SKILL.md#work-order)
-for this one Studio Issue: understand the original problem, verify the failure
-mechanism, repair completely, verify the key conditions, prepare acceptance while
-implementing, review independently, deliver as authorized, then accept, clean up
-and close. This skill adds Studio identity, authority, boundaries, review and
-delivery specifics. Do not create a goal unless the user explicitly requests one.
+The generic [Worker skill](../../agent-loop/roles/worker/SKILL.md) owns the
+process for this one Studio Issue: the work order, failure branches, watching
+your own preconditions, checkpoints, phase reports and closure by verification
+layer. Read it first. This skill adds only what is true for Studio: identity and
+claim, authority, product boundaries, the Grok review and Studio delivery. Where
+both speak, the generic skill decides process and this one decides Studio facts.
+Do not create a goal unless the user explicitly requests one.
 
 Read workspace `AGENTS.md`, repository instructions, the live GitHub Issue and
 [lifecycle](references/lifecycle.md) before mutation. Phase references:
@@ -65,15 +66,12 @@ native-session fences.
 4. Use a clean isolated worktree and `codex/issue-<number>-<slug>` branch;
    preserve unrelated dirty worktrees.
 
-Batch progress polling belongs to the Dispatcher. Do not send periodic progress
-pings; record progress in the ledger and the owned GitHub progress comment. Send
-one issue-local message only when a concrete scope/admission blocker needs a
-decision, with all companion paths and evidence, and keep working on what it does
-not block. Apply a received correction at a safe step boundary without
-restarting valid work. Record the originating Dispatcher; after durable closure,
-verified handoff or a new terminal blocker, persist the deduplicated event and
-notify through a verified message API/mailbox, never by injecting cmux terminal
-input. Callback delivery is not acceptance or proven termination.
+Record progress in the ledger and the owned GitHub progress comment; it needs no
+answer. Apply a received correction at a safe step boundary without restarting
+valid work. Record the originating Dispatcher; after durable closure, verified
+handoff or a new terminal blocker, persist the deduplicated event and notify
+through a verified message API/mailbox, never by injecting cmux terminal input.
+Callback delivery is not acceptance or proven termination.
 
 ## Standing authorization
 
@@ -117,9 +115,14 @@ bypasses an enforced App-pinned `grok-review` Check.
   Kubernetes access merely to read application logs.
 - Never print secrets, signed URLs, private payloads, raw logs or customer records;
   prefer synthetic fixtures and sanitized counts/hashes.
-- One-off acceptance uses a local client or owned browser against the real target
-  and needs no tool PR. Shell commands, browser replay, result capture and terminal
-  notification are Worker responsibilities whenever authorized tools support them.
+- Acceptance uses a local client, an existing CLI or an owned browser against the
+  real target. Do not add an `accept-*`, `inspect-*`, `probe-*` or similar
+  workflow, script or cluster Job to the repository to verify this Issue, and do
+  not make one a prerequisite of acceptance; reuse an existing maintained
+  executor only where a credential or network path exists solely inside the
+  protected environment. Shell commands, browser replay, result capture and
+  terminal notification are Worker responsibilities whenever authorized tools
+  support them.
 
 ## External Grok reviewer
 
@@ -161,17 +164,20 @@ stays non-success, record a precise blocker and do not claim the environment.
 
 ## Delivery
 
-- Convert every Issue requirement into executable local and environment evidence
-  before freezing the head. For changed workflow/tool behavior, update its
-  contract tests and ensure the applicable CI job actually runs them; never delete,
-  skip or weaken assertions to get green CI. An unexecuted suite is not a pass.
+- Before freezing the head, every row of the Issue's Verification block has its
+  evidence or its prepared route: `unit` rows are committed Go or frontend tests
+  that failed before the fix and run in the applicable CI job, `local` rows have
+  been run, `staging` and `production` rows have their fixture, access path and
+  cleanup ready. For changed workflow/tool behavior, update its contract tests;
+  never delete, skip or weaken assertions to get green CI. An unexecuted suite is
+  not a pass.
 - Pass quick local checks (format/diff, compilation/type checking, targeted
   regressions) and self-review before sampling. Commit only this Issue's changes.
   Full tests remain pre-merge gates and may run concurrently with review on the
   same frozen revision. A head is not frozen while any known code, test, CI,
   documentation, deployment, operator-skill or acceptance-tool correction remains.
 - Open one ready PR with root cause, behavior, tests, rollout impact and a
-  non-closing `Refs #N`. Watch checks with blocking commands, not model polling.
+  non-closing `Refs #N`. Watch checks through a tracked watch, not model polling.
   Rebase when the target advances and never reuse stale review evidence.
 - Merge once the exact head is current, mergeable, policy-compliant and green.
   When `terminal-events decision-get` reports `merge_policy: release-required`, a
@@ -197,11 +203,13 @@ stays non-success, record a precise blocker and do not claim the environment.
   requires tuple reconciliation, not bypass; failed recovery keeps ENV protected.
   After safe rollback continue this Issue's follow-up PR.
 - Release `ENV` on every safe terminal path and notify waiters. Close the Issue and
-  mark the item done only after exact-revision acceptance, the required log
-  disposition in [staging](references/staging.md) and cleanup succeed. There is no
-  routine ready-to-close approval; escalate only a concrete unmet gate, acceptance
-  waiver, material scope change or unresolved custody. A current human hold or
-  bounded merge order still applies.
+  mark the item done when every Verification row passes at its layer on the exact
+  revision that layer names, with the required log disposition in
+  [staging](references/staging.md) and cleanup done. Rows staging data can prove
+  close on staging; only `production` rows wait for the production release, with
+  you parked on that stage. There is no routine ready-to-close approval; escalate
+  only a concrete unmet gate, acceptance waiver, material scope change or
+  unresolved custody. A current human hold or bounded merge order still applies.
 - Before a background wait, resume or phase report apply the
   [background-result rule](../../agent-loop/roles/worker/SKILL.md#completion),
   including for acceptance and cleanup.

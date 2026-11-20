@@ -72,7 +72,7 @@ class ScannerTests(unittest.TestCase):
 
 
 class AssignmentScenarioTests(unittest.TestCase):
-    CLOSEOUT = '自主结项，无例行预关单审批；不同 Issue 使用独立任务身份。'
+    CLOSEOUT = '自主结项，无例行预关单审批；不同 Issue 使用独立任务身份。验证标准 v1。'
 
     def test_studio_assignment_passes_and_squad_repair_needs_a_designation(self):
         studio = 'Issue github:o/voice-agent-studio#1801。' + self.CLOSEOUT
@@ -82,6 +82,24 @@ class AssignmentScenarioTests(unittest.TestCase):
         self.assertIn('squad-repair-without-designation', [r for r, _ in contract.assignment_findings(squad + ' no maintenance agent designated.')])
         designated = squad + ' 用户本轮指定维护 agent 修复。'
         self.assertEqual(contract.assignment_findings(designated), [])
+
+    def test_assignment_must_cite_the_verification_block(self):
+        bare = 'Issue github:o/voice-agent-studio#1801。自主结项，无例行预关单审批；不同 Issue 使用独立任务身份。'
+        self.assertIn('missing-verification-block', [r for r, _ in contract.assignment_findings(bare)])
+        cited = bare + " Done means every row of the Issue's Verification block Design / admission revision v2 passes at its stated layer."
+        self.assertEqual(contract.assignment_findings(cited), [])
+
+    def test_new_acceptance_tooling_is_caught(self):
+        for text in ['Add an acceptance workflow that runs the check as a k8s Job.',
+                     'Create a verification executor for this Issue and submit it as a PR.',
+                     'Write a verify workflow for the staging runner.',
+                     '新增一个验收工具并提交 PR']:
+            self.assertIn('acceptance-tool-pr', [r for r, _ in contract.findings(text)], text)
+        for ok in ['Do not add an acceptance workflow or cluster Job for this Issue.',
+                   'Never create a verification executor to prove one Issue.',
+                   'Add a regression test for the boundary value.',
+                   '不要新增验收工具']:
+            self.assertEqual(contract.findings(ok), [], ok)
 
     def test_regressed_template_is_caught(self):
         old = 'Studio #1 结项：先不要关单，提交 ready-to-close decision-request，等待 Dispatcher 批准。'

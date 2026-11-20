@@ -61,8 +61,62 @@ Record proportionate detail:
 - Issue consistency: related work, explicit dependencies, shared decisions,
   implementation boundaries and compatibility/migration requirements.
 - Acceptance: observable user scenarios, including relevant error/recovery
-  behavior; required environment capabilities and unresolved prerequisites.
+  behavior; required environment capabilities and unresolved prerequisites,
+  stated in the Verification block below.
 - Evidence references and remaining questions. Blocking questions preclude READY.
+
+### Verification block
+
+READY requires this block inside the section. It is the Issue standard: an owner
+and a reviewer can both tell from it what is being fixed, how it is checked and
+what the result means.
+
+```markdown
+### Verification (v1)
+
+Fix: <the failing behaviour, where it lives, the input or state that fails today>
+Reproduce locally: <command or steps that show the failure on the current revision>
+Tests that must fail before the fix: <named unit/contract tests to add, with the
+case each covers>
+
+| # | Criterion | Layer | How to verify | Pass | Not pass |
+| - | --------- | ----- | ------------- | ---- | -------- |
+| 1 | <observable result> | unit | <test command> | <exact observation> | <what a failure looks like> |
+| 2 | ... | local | <local client or browser against which real target, fixture> | ... | ... |
+| 3 | ... | staging | <what is read on the staged candidate, which existing data> | ... | ... |
+| 4 | ... | production | <why staging data cannot prove it; what is read after the deploy> | ... | ... |
+```
+
+Rules for the block:
+
+- **Lowest layer that proves it.** `unit`: a committed unit or contract test.
+  `local`: a local client, script or owned browser against the real target.
+  `staging`: the deployed candidate with data that exists on staging.
+  `production`: only when staging data cannot prove the criterion, with that
+  reason written in the row. Anything logic, boundary values, serialization
+  between a producer and its consumer, or old persisted shapes can express is a
+  `unit` row and a test that fails first; it is not left to be found on staging.
+- **Pass and not pass are observations**, written so two readers reach the same
+  verdict: a value, a status, a count, a rendered state. "Works", "no errors"
+  and "as expected" are not criteria. Not run, not triggered and zero traffic
+  are not pass.
+- **Verify locally with what exists.** The method is a local command, an
+  existing client or CLI, or an owned browser. A new acceptance tool, workflow
+  or cluster Job added by PR is never the method for one Issue. A product defect
+  still gets its regression test in the product PR.
+- **Constructible now.** Name the fixture or data each row uses and confirm it
+  exists or can be created within authority. A criterion nobody can construct
+  is resolved here, before launch: choose an equivalent observable, or ask the
+  user once with options. It is never discovered after deployment and never
+  silently weakened later.
+- **Closure follows the layers.** The owner closes the Issue when every row
+  passes at its layer and cleanup is done. Rows at `unit`, `local` and `staging`
+  do not wait for a production release; only `production` rows do.
+- **Revision.** Changing a criterion, its layer or its pass condition increments
+  the block's revision with the reason and authority. An owner reports a wrong
+  or unreachable row as one decision request; it does not reinterpret it.
+
+A small defect needs two or three rows; do not pad the table.
 
 These dispositions belong to this section; they are not assumed to exist as
 Squad enum values or GitHub labels. Do not confuse product/design READY with

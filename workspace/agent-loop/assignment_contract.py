@@ -11,6 +11,8 @@ FORBIDDEN = [
     ('pre-close-approval', re.compile(r"(?i)ready[- ]to[- ]close|预关单|pre[- ]close\s+(?:approval|gate|review)|先不要关单|等待\s*Dispatcher[^。\n]{0,20}批准|(?:wait|await)(?:ing)?\s+(?:for\s+)?(?:the\s+)?(?:Dispatcher|dispatcher)[^.\n]{0,30}(?:approv|release|go-ahead|permission)|(?:Dispatcher|dispatcher)[^.\n]{0,30}approv[^.\n]{0,30}(?:before|prior to)[^.\n]{0,20}clos")),
     ('completed-session-reuse', re.compile(r"(?i)(?:reuse|re-?use|resume|wake|re-?activate|re-?assign|复用|重用|唤醒|续用)[^。.\n]{0,40}(?:completed|finished|retired|已完成|已结束|结束)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)[^。.\n]{0,40}(?:for|承接|接手)[^。.\n]{0,30}(?:another|next|different|其他|另一|下一)[^。.\n]{0,10}Issue")),
     ('handoff-to-completed', re.compile(r"(?i)hand\s*off[^。.\n]{0,60}(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:交接|移交)[^。.\n]{0,30}(?:已完成|已结束)[^。.\n]{0,10}(?:worker|会话)")),
+    # A one-Issue acceptance must not grow a new tool, workflow or cluster Job.
+    ('acceptance-tool-pr', re.compile(r"(?i)\b(?:add|create|write|build|commit|submit|open|introduce)\b[^.\n]{0,50}?\b(?:acceptance|verification|verify|verifier)\b[^.\n]{0,25}?\b(?:workflow|k8s\s+job|kubernetes\s+job|cluster\s+job|tool\s+PR|executor|GitHub\s+Action)\b|(?:新增|新建|提交|编写|增加)[^。\n]{0,20}(?:验收|验证)[^。\n]{0,10}(?:工具|workflow|工作流|Job|执行器)")),
     ('squad-repair-to-business-worker', re.compile(r"(?i)(?:(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}worker|(?:squad|coordination)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}worker|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,20}(?:repair|fix|修复)[^。.\n]{0,40}(?:squad|coordination|协作))")),
 ]
 
@@ -77,9 +79,16 @@ SQUAD_TARGET = re.compile(r"voice-agent-squad|github:[^\s]*squad#\d+|Squad (?:to
 DESIGNATION = re.compile(r"(?i)(?:user[- ]designat\w*|designated by the user|用户[^。\n]{0,12}指定)[^。\n]{0,40}(?:maintenance[- ]agent|维护 ?agent|agent)|(?:maintenance[- ]agent|维护 ?agent)[^。\n]{0,30}(?:designated|指定)")
 
 
+# An assignment names its closure standard: the Issue's Verification block and
+# revision. Without it the owner would have to discover what "done" means.
+VERIFICATION = re.compile(r"(?i)verification\s+block[^\n]{0,160}?revision\s+v?\d+|验证(?:标准|块)[^\n]{0,60}?v\d+")
+
+
 def assignment_findings(text):
     """Findings for one generated Worker assignment, including repair ownership."""
     out = findings(text)
+    if not VERIFICATION.search(re.sub(r"\s+", " ", text)):
+        out.append(('missing-verification-block', "assignment does not cite the Issue's Verification block and revision"))
     designated = any(not NEGATION.search(re.sub(r"\s+", " ", text)[max(0, m.start() - 40):m.start()]) for m in DESIGNATION.finditer(text))
     if SQUAD_TARGET.search(text) and not designated:
         out.append(('squad-repair-without-designation', 'Squad-tool assignment names no user-designated maintenance agent'))
