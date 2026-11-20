@@ -493,6 +493,15 @@ func TestMCPSelfReleasingHoldAndSweep(t *testing.T) {
 	if out := call("squad_dispatch_sweep", map[string]any{"reserved_by": "nobody"}); !strings.Contains(out, `"active":0`) {
 		t.Fatalf("MCP sweep owner filter: %s", out)
 	}
+	// The MCP tool takes the same observations and thresholds as the command line.
+	stamp := time.Now().Unix()
+	issues := []map[string]any{{"source_ref": "github:o/r#A", "state": "OPEN", "verified_at": stamp}, {"source_ref": "github:o/r#NEW", "state": "OPEN", "verified_at": stamp}}
+	if out := call("squad_dispatch_sweep", map[string]any{"reserved_by": env.AgentID, "issues": issues, "unacted_after_seconds": 3600}); strings.Contains(out, `"isError":true`) || !strings.Contains(out, `"open_without_owner":1`) || !strings.Contains(out, `"open-issue-unreserved"`) || !strings.Contains(out, `"stale_observations":0`) {
+		t.Fatalf("MCP sweep with observations: %s", out)
+	}
+	if out := call("squad_dispatch_sweep", map[string]any{"issues": []map[string]any{{"source_ref": "github:o/r#A", "state": "MERGED", "verified_at": stamp}}}); !strings.Contains(out, "state must be OPEN or CLOSED") {
+		t.Fatalf("MCP sweep accepted a malformed observation: %s", out)
+	}
 	// The producer's own Worker records the phase; the dependent is released.
 	if _, err := env.DB.Exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,?,'worker-A','TASK-A','say','merged','[]','normal')`, env.RepoID, time.Now().Unix()); err != nil {
 		t.Fatal(err)

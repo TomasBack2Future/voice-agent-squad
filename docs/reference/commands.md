@@ -1141,26 +1141,36 @@ rows come first.
 | `decision-undelivered` | The current decision's wake exists and reached no Worker receiver | Dispatcher (receiver or session health) |
 | `hold-waits-satisfied` | Every wait of a hold is met and it was not released (no marker, lapsed marker or ambiguous Worker custody) | Dispatcher |
 | `hold-without-checkable-wait` | A hold older than the threshold names no structured wait | Dispatcher: add the wait or lift the hold |
-| `decision-unacted` | An owner told to proceed, by a decision or an automatic release, recorded nothing afterwards and has no owned operation in flight | Dispatcher inspects the session once: the handoff has not reached its first step |
+| `decision-unacted` | An owner set going (the assignment's first decision, or a proceed that follows a hold, including an automatic release) recorded nothing afterwards and has no owned operation in flight | Dispatcher inspects the session once: the handoff has not reached its first step |
 | `owner-quiet` | A proceeding owner recorded no progress and has no owned operation in flight | Dispatcher inspects the session once |
 | `open-issue-no-active-owner` | An observed open Issue whose reservation has ended (completed, or failed by partial retirement) | Dispatcher: a continuation owner and next action, or the recorded reason it waits |
 | `open-issue-unreserved` | An observed open Issue with no reservation in this ledger | Dispatcher: admission |
 | `sweep-read-failed` | This reservation could not be read (the error is in `notes`); the other rows are complete | Dispatcher reads it with `dispatch delivery` |
 
-Each row also carries `first_action_at` and `first_action_seconds`: the owner's
-first recorded fact after the current decision, and how long it took. A
-dependency is handed over when the released owner starts its next step, so this
-is the number to measure a handoff by.
+Each row also carries `decision_acked_at` (the owner acknowledged the current
+decision's wake: it has read it) and `first_action_at` with
+`first_action_seconds`: the earliest fact the owner recorded at or after the
+current decision (a message on its thread, an owned operation, an attestation
+or a phase result), and how long that took. A dependency is handed over when
+the released owner starts its next step, so this is the number to measure a
+handoff by. A proceed that only amends an owner already working is not a
+handoff: silence after it is `owner-quiet`, not `decision-unacted`.
 
 `--issue-observations FILE` (MCP `issues`) takes the caller's own list of
 `{"source_ref","state":"OPEN"|"CLOSED","verified_at"}` for the Issues it is
 responsible for, read from the code host in the same cycle. Rows then carry
 `issue_state` and `continuation`, a closed Issue with a live reservation is
 reported through the delivery drift, and open Issues that no active reservation
-covers are appended and counted in `open_without_owner`. An observation older
-than five minutes says nothing, as in `dispatch delivery`: it is evidence with
-an age, never closure authority. Without observations the sweep covers active
-reservations only.
+covers get a row and are counted in `open_without_owner`; a reservation never
+bound to a Worker and past its expiry covers nothing. The list is validated
+before anything is read: a missing `source_ref`, a state other than `OPEN` or
+`CLOSED` (any case), a `verified_at` that is not a past unix time, or more than
+500 entries fails the call. The last observation of a source wins. An
+observation older than five minutes says nothing, as in `dispatch delivery`: it
+is counted in `stale_observations` and that Issue is not judged, so
+`open_without_owner: 0` means "none" only when `stale_observations` is 0 too.
+Observations are evidence with an age, never closure authority. Without them
+the sweep covers active reservations only.
 
 A plain Worker message after the current decision appears under `notes`
 (`worker-report-without-event`), not under drift: ordinary progress needs no

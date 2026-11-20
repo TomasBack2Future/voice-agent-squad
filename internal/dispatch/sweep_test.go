@@ -113,8 +113,9 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour, UnactedAfter: 1000 * time.Hour}); err != nil || len(sweepRow(t, report, "WAITS").Drift) != 0 {
 		t.Fatalf("delivered release flagged: %+v %v", report, err)
 	}
-	// Delivered is not acted on: released three hours ago with nothing recorded
-	// since, the handoff has not reached the owner's first step.
+	// Delivered is not acted on: released from its hold three hours ago with
+	// nothing recorded since, the handoff has not reached the owner's first step.
+	exec(`INSERT INTO dispatch_decision_history(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,decided_by,decided_at) VALUES('repo-test','WAITS',1,'T-WAITS',1,8,'hold','c','dispatcher',?)`, 100000-3*3600)
 	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour}); err != nil || !slices.Contains(sweepRow(t, report, "WAITS").Drift, "decision-unacted") {
 		t.Fatalf("released owner with no action not flagged: %+v %v", sweepRow(t, report, "WAITS"), err)
 	}
@@ -254,6 +255,41 @@ func TestSweepFollowsADecisionToTheOwnersFirstAction(t *testing.T) {
 	if report, err = s.Sweep(ctx, SweepOptions{UnactedAfter: 2 * time.Hour}); err != nil || slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
 		t.Fatalf("flagged inside the threshold: %+v %v", report, err)
 	}
+	// Activity before the decision is not an answer to it.
+	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','say','earlier work','[]','normal')`, decided-30)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || !slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("activity before the decision counted as acting on it: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	// Reading the decision is shown, and is not the same as starting.
+	exec(`UPDATE terminal_event_receipts SET processed_at=?,processed_note='read' WHERE event_id='e-IDLE'`, decided+20)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "IDLE").DecisionAckedAt != decided+20 || !slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("acknowledged but not started: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	// A phase result or an attestation is a first action without any message,
+	// and the first fact counts, not the latest.
+	exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','deploy',1,'T-IDLE','all','passed','',11,'worker-IDLE',?)`, decided+60)
+	exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','accept',1,'T-IDLE','all','passed','',11,'worker-IDLE',?)`, decided+3000)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "IDLE").FirstActionSeconds != 60 || slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("first action is the earliest fact: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	exec(`DELETE FROM dispatch_phase_results`)
+	// A proceed that amends an owner already working is not a handoff: silence
+	// after it is the ordinary quiet check, not decision-unacted. A proceed that
+	// follows a hold is one.
+	exec(`UPDATE dispatch_decisions SET revision=2 WHERE reservation_key='IDLE'`)
+	exec(`INSERT INTO dispatch_decision_history(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,decided_by,decided_at) VALUES('repo-test','IDLE',1,'T-IDLE',1,11,'proceed','c','dispatcher',?)`, decided-600)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("an amended proceed was treated as a handoff: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	exec(`UPDATE dispatch_decision_history SET action='hold' WHERE reservation_key='IDLE' AND revision=1`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || !slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("a proceed after a hold was not treated as a handoff: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	// An assignment with no decision at all has nothing to act on.
+	exec(`DELETE FROM dispatch_decisions WHERE reservation_key='ACTED'`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || slices.Contains(sweepRow(t, report, "ACTED").Drift, "decision-unacted") || sweepRow(t, report, "ACTED").FirstActionAt != 0 {
+		t.Fatalf("no decision: %+v %v", sweepRow(t, report, "ACTED"), err)
+	}
 }
 
 // With the batch's Issue observations the sweep is as wide as the batch, not
@@ -282,14 +318,16 @@ func TestSweepFindsOpenIssuesNoActiveReservationCovers(t *testing.T) {
 	obs := func(key, state string, at int64) IssueObservation {
 		return IssueObservation{Source: "github:o/r#" + key, State: state, VerifiedAt: at}
 	}
-	issues := []IssueObservation{obs("LIVE", "OPEN", 99990), obs("PARTIAL", "OPEN", 99990), obs("DONEOPEN", "OPEN", 99990), obs("DONECLOSED", "CLOSED", 99990),
-		obs("OTHERS", "OPEN", 99990), obs("NEVER", "OPEN", 99990), obs("NEVERCLOSED", "CLOSED", 99990), obs("STALE", "OPEN", 90000)}
+	// The state is accepted as the code host spells it; the last observation of
+	// a source wins; padding is trimmed.
+	issues := []IssueObservation{obs("LIVE", "open", 99990), obs("PARTIAL", "CLOSED", 99980), obs("PARTIAL", "OPEN", 99990), obs("DONEOPEN", "OPEN", 99990), obs("DONECLOSED", "CLOSED", 99990),
+		obs("OTHERS", "OPEN", 99990), {Source: " github:o/r#NEVER ", State: "OPEN", VerifiedAt: 99990}, obs("NEVERCLOSED", "CLOSED", 99990), obs("STALE", "OPEN", 90000), obs("STALE2", "OPEN", 90000)}
 	report, err := s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher", Issues: issues})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Active != 1 || report.OpenWithoutOwner != 3 {
-		t.Fatalf("active %d open without owner %d: %+v", report.Active, report.OpenWithoutOwner, report.Rows)
+	if report.Active != 1 || report.OpenWithoutOwner != 3 || report.StaleObservations != 2 {
+		t.Fatalf("active %d open without owner %d stale %d: %+v", report.Active, report.OpenWithoutOwner, report.StaleObservations, report.Rows)
 	}
 	if row := sweepRow(t, report, "LIVE"); row.IssueState != "open" || slices.Contains(row.Drift, "open-issue-no-active-owner") {
 		t.Fatalf("live owner: %+v", row)
@@ -304,7 +342,7 @@ func TestSweepFindsOpenIssuesNoActiveReservationCovers(t *testing.T) {
 		switch {
 		case row.SourceRef == "github:o/r#NEVER":
 			unreserved = slices.Contains(row.Drift, "open-issue-unreserved") && row.State == "unreserved"
-		case row.Reservation == "DONECLOSED", row.Reservation == "OTHERS", row.SourceRef == "github:o/r#NEVERCLOSED", row.SourceRef == "github:o/r#STALE":
+		case row.Reservation == "DONECLOSED", row.Reservation == "OTHERS", row.SourceRef == "github:o/r#NEVERCLOSED", row.SourceRef == "github:o/r#STALE", row.SourceRef == "github:o/r#STALE2":
 			t.Fatalf("a closed, foreign or stale observation produced a row: %+v", row)
 		}
 	}
@@ -315,6 +353,34 @@ func TestSweepFindsOpenIssuesNoActiveReservationCovers(t *testing.T) {
 	if report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher"}); err != nil || len(report.Rows) != 1 || report.OpenWithoutOwner != 0 || report.Rows[0].IssueState != "" {
 		t.Fatalf("sweep without observations changed: %+v %v", report, err)
 	}
+	// A malformed list fails the call; it never replaces a row's ledger facts.
+	for name, bad := range map[string]IssueObservation{
+		"unknown state":    obs("LIVE", "MERGED", 99990),
+		"future timestamp": obs("LIVE", "OPEN", 100001),
+		"no timestamp":     obs("LIVE", "OPEN", 0),
+		"no source":        {State: "OPEN", VerifiedAt: 99990},
+	} {
+		if _, err = s.Sweep(ctx, SweepOptions{Issues: []IssueObservation{bad}}); err == nil {
+			t.Fatalf("%s: accepted", name)
+		}
+	}
+	if _, err = s.Sweep(ctx, SweepOptions{Issues: make([]IssueObservation, 501)}); err == nil {
+		t.Fatal("an unbounded observation list was accepted")
+	}
+	// A reservation never bound and past its expiry covers nothing.
+	if _, err = s.Reserve(ctx, "EXPIRED", "github:o/r#EXPIRED", "dispatcher", "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE dispatch_reservations SET expires_at=99000 WHERE item_id='EXPIRED'`)
+	report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher", Issues: []IssueObservation{obs("EXPIRED", "OPEN", 99990)}})
+	if err != nil || !slices.Contains(sweepRow(t, report, "EXPIRED").Drift, "open-issue-no-active-owner") || report.OpenWithoutOwner != 1 || len(report.Rows) != report.Active {
+		t.Fatalf("expired unbound reservation: %+v %v", report, err)
+	}
+	exec(`UPDATE dispatch_reservations SET expires_at=200000 WHERE item_id='EXPIRED'`)
+	if report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher", Issues: []IssueObservation{obs("EXPIRED", "OPEN", 99990)}}); err != nil || len(sweepRow(t, report, "EXPIRED").Drift) != 0 || report.OpenWithoutOwner != 0 {
+		t.Fatalf("a live unbound reservation was reported as uncovered: %+v %v", report, err)
+	}
+	exec(`DELETE FROM dispatch_reservations WHERE item_id='EXPIRED'`)
 	// A closed Issue with a live reservation is the existing delivery drift.
 	if report, err = s.Sweep(ctx, SweepOptions{Issues: []IssueObservation{obs("LIVE", "CLOSED", 99990)}}); err != nil || !slices.Contains(sweepRow(t, report, "LIVE").Drift, "closed-issue-active-reservation") {
 		t.Fatalf("closed Issue with a live reservation: %+v %v", report, err)
