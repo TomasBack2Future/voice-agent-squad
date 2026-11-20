@@ -71,10 +71,10 @@ Spend decisions on real coordination, not on ordinary progress.
 | Progress message, phase report, evidence or readback from an owner | None. Do not acknowledge, accept or approve it with a message or a decision; read it when a decision of yours depends on it. |
 | Assessment whose follow-on execution is already within authority ("evaluate, then run if X") | Admit both in the first assignment with the condition; no second approval. |
 | Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, release tag, upstream key restored, a time) | Record it as a start condition in that owner's assignment; the owner parks on its own tracked watch. No hold, no later "your turn", no relay when it becomes true. |
-| Order between owners that you have already decided ("B merges after A", "accept after the batch deploys") | One hold with structured waits and `--on-satisfied proceed`. The producer's `phase-result` releases it and wakes the owner; you take no further step. |
+| Order between owners that you have already decided ("B merges after A", "accept after the batch deploys") | One hold with phase waits, a time box and `--on-satisfied proceed`. The producer's `phase-result` releases it and wakes the owner; you take no further step. |
 | Order that depends on a result you must judge first, or a human gate | Hold with structured waits and no release marker; answer it when `dispatch sweep` reports `hold-waits-satisfied`. |
 | Batch membership, release order, conflicting shared writes, a bounded merge window | Effective decision: the [batch plan](#batch-plan), merge release, or reorder. |
-| Shared environment contention | None; the owner uses foreground `claim --wait`. |
+| Shared environment contention | None; the owner parks on `claim --wait` as a tracked task. |
 | Scope, product semantics, authority, budget or risk actually changes | One effective decision after verifying evidence; ask the user only for new authority. |
 | Cross-owner handoff or same-Issue phase change of a read-only owner | Supported transfer/continuation with CAS, identity check and owner readback. |
 | Human hold or pause | Record and preserve it; never manufacture a `proceed` to bypass it. |
@@ -190,9 +190,11 @@ broader product changes, production operations or another repository.
 - **Observe by default.** Never message an `active` Worker for progress,
   reminders or acceleration. Intervene only for an explicit user override, an
   immediate safety/correctness risk, verified scope/policy drift, or one verified
-  dependency transition the owner cannot observe itself. Re-read the target after
-  sending; never repeat a wake on later cycles. Do not wake resource waiters:
-  foreground `claim --wait` and the holder's release notification are the wake.
+  dependency transition the owner cannot observe itself. Send a correction once
+  per drift row and decision revision, by the supported message route, never by
+  terminal input; re-read the target after sending and never repeat it on later
+  cycles. Do not wake resource waiters: `claim --wait` and the holder's release
+  notification are the wake.
 - **Answer real requests in the same cycle.** A `decision-request` that names a
   boundary crossing gets the effective decision now. One that only reports a
   phase or asks for an ordinary step gets a single correction pointing the owner
@@ -220,10 +222,7 @@ broader product changes, production operations or another repository.
   runtime readback per [session continuity](references/session-continuity.md#review-failure-model-transition).
 - **Closeout.** After every criterion passes at its stated layer, the owning
   Worker closes the Issue and reports; there is no routine ready-to-close step.
-  A criterion staging data can prove closes on staging; only a criterion marked
-  `production` waits for the production deploy, with its owner parked on the
-  release stage. Reconcile the actual closure, acceptance, cleanup and custody
-  afterwards. Partial delivery keeps the Issue
+  Reconcile the actual closure, acceptance, cleanup and custody afterwards. Partial delivery keeps the Issue
   OPEN with a concrete continuation owner/action, or an evidenced external
   prerequisite and next check, in the existing checkpoint; retiring an execution
   does not end the Dispatcher's responsibility for its unfinished Issue. Never
@@ -248,38 +247,49 @@ Keep one current plan per release batch in the existing checkpoint:
   designated Worker). An implementation Worker is not turned into the release
   owner of other Issues in the middle of its own.
 - **Verification layer per member**: from each Issue's Verification block, which
-  criteria close on unit or local evidence, which need the staged candidate, and
-  which need production because staging data cannot prove them.
+  rows need the staged candidate and which need the production release, so each
+  member waits on exactly the stage its rows need and on nothing else.
 
-Encode the plan as decisions the ledger can check, not as prose. The release
-owner records `phase-result` for each stage (`merge:<pr>`, `deploy:staging-<sha>`,
-`deploy:production-<tag>`). A member that must wait for a stage holds on exactly
-that phase with `--blocks-phase` for the phase it stops and `--on-satisfied
-proceed`, so it keeps implementing, testing and preparing meanwhile and resumes
-by itself when the stage is recorded. A member with nothing to wait for holds on
-nothing. Members stay bound and parked through the release wait; do not retire
-an owner because its next step is a deploy someone else runs.
+Encode the plan as decisions the ledger can check, not as prose. Each stage has
+one named producer who records its `phase-result` under an agreed name
+(`merge:<pr>` by the PR's owner, `deploy:staging-<sha>` and
+`deploy:production-<tag>` by the release owner); put those names in the
+producer's assignment. A member that must wait for a stage holds on that phase
+as `passed` (a failed merge or deploy releases nobody), scoped to the phase it
+stops and marked for release, so it keeps implementing, testing and preparing
+meanwhile and resumes by itself. A member with nothing to wait for holds on
+nothing. A released hold is an ordinary `proceed`: it is never a merge release
+and adds no production, environment or scope authority. Members stay bound and
+parked through the release wait; do not retire an owner because its next step
+is a deploy someone else runs.
 
 ## Sweep timer
 
-Stuck work is found by the Dispatcher itself, on its own clock. Arm one
-recurring self-wake through the runtime's native scheduler (default every 20
-minutes) at takeover and verify it is armed; record its identity and interval
-in the checkpoint; keep exactly one; stop it when the batch is closed or the
-user pauses the work. An outside observer may check that this Dispatcher is
-alive, and nothing more: it does not find stuck work or send corrections.
+Stuck work is found by the Dispatcher itself, on its own clock. At takeover,
+unless a user pause covers this work, arm one recurring self-wake in this
+session (default every 20 minutes) with the client's own scheduled-prompt
+facility: a recurring or self-scheduled prompt in Claude Code, a heartbeat
+automation targeting this thread in Codex, the equivalent in Muse. Never a shell
+loop, a background process or a second session. Record its identity and
+interval in the checkpoint, keep exactly one, and confirm at each wake that it
+is still armed. Stop it when the batch is closed or the user pauses the work; a
+timer stopped for a pause is re-armed only by the user's resume. If the client
+offers no such facility, record `periodic: unavailable` and report it; do not
+improvise one. An outside observer may check that this Dispatcher is alive, and
+nothing more: it does not find stuck work or send corrections.
 
 Each wake runs `squad dispatch sweep --reserved-by <your agent id>` and acts only
-on flagged rows. These commands and `--on-satisfied` exist when the installed
-binary lists them; on an older binary apply the same checks per reservation with
-`dispatch delivery` and record the capability gap.
+on flagged rows, within recorded authority. These commands and `--on-satisfied`
+exist when the installed binary lists them; on an older binary apply the same
+checks per reservation with `dispatch delivery` and record the capability gap.
 
 | Drift | Action in this cycle |
 | --- | --- |
 | `decision-request-unanswered` | Answer it (see Running owners). |
 | `decision-undelivered` | The owner's receiver or session is unhealthy: apply [session continuity](references/session-continuity.md); do not resend by terminal input. |
-| `hold-waits-satisfied`, `hold-time-box-expired` | Publish the decision the hold was waiting for. |
-| `hold-without-checkable-wait` | Replace the prose hold with structured waits, or lift it. A human hold stays, with its instruction reference in the condition. |
+| `hold-waits-satisfied` | The waits are met: publish the decision the hold was waiting for. |
+| `hold-time-box-expired` | The waits are still unmet. Find out why (the producer's fact may be true but unrecorded: one correction to the producer to record its `phase-result`), then extend, reorder or escalate. Expiry alone never yields a proceed. |
+| `hold-without-checkable-wait` | A hold of your own making: replace it with structured waits or lift it. A hold of human or unknown origin stays; record its instruction reference, or ask once where it came from. |
 | `owner-quiet` | Inspect that one session once (bounded screen read). Working: leave it. Waiting on something it can observe without a tracked watch: one correction. Waiting on you or on a person: resolve below. |
 | `operation-exit-unhandled`, `owned-operation-unresolved` | The owner's watch ended or was lost and the owner did not continue: one correction to reconcile the actual result. |
 
@@ -289,14 +299,16 @@ Then check the batch, not only the live sessions:
   Every open one has an owner, one next action and the condition it waits on.
 - **Ready but not started.** A stage whose inputs are all recorded and which
   nobody has begun (merged members with no deploy run; a deployed candidate with
-  no acceptance started) is a missing decision of yours: make it now.
+  no acceptance started) is a missing decision of yours: make it now, within
+  recorded authority. A production stage without production authorization, a
+  frozen candidate, environment custody held by another owner and a human hold
+  or pause are not "ready": record what is missing and raise it once.
 - **Waiting on a person.** Any item waiting on the user for more than four hours
   is raised to the user once, with the concrete question and options. First
   challenge the label: "needs the user" and "cannot be constructed" are claims
   to verify, and most are technical steps an owner can take.
 
-A quiet sweep reports nothing. Never message a healthy owner because a timer
-fired.
+A quiet sweep reports nothing and sends nothing.
 
 ## Effective decisions, merge order and phase results
 
@@ -306,7 +318,9 @@ forms; the essentials:
 - A wait that must stop an owner is a hold with `--wait-for
   RESERVATION:PHASE:executed|passed` (or `RESERVATION::terminal`), `--blocks-phase`
   for the phase it stops, `--on-satisfied proceed` when the order is already
-  decided, and `--wait-time-box` when you promise to revisit. The release marker
+  decided, and always `--wait-time-box`: a wait whose producer never records its
+  result is otherwise invisible, and the expired box brings it back to you. The
+  release marker
   needs phase waits (`executed` or `passed`), not `terminal`: whether a successor
   may go when its predecessor ended is yours to judge. It lapses when the time
   box expires or the reservation changes Dispatcher, and the hold comes back to

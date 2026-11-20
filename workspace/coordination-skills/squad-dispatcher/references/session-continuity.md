@@ -227,8 +227,9 @@ for another:
 
 `handoff-complete` is a terminal ownership-transfer event and the donor ends after
 it; consumers retire or release the donor. Never publish it for a phase report,
-and never publish it twice for the same Worker generation. Phase reports that
-must unblock another reservation use a `decision-request` as already required.
+and never publish it twice for the same Worker generation. A finished phase that
+another reservation waits on is recorded with `terminal-events phase-result`; a
+`decision-request` is for a decision the owner actually needs.
 
 ## Takeover summary
 

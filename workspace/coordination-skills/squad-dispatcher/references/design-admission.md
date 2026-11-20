@@ -82,18 +82,23 @@ case each covers>
 | # | Criterion | Layer | How to verify | Pass | Not pass |
 | - | --------- | ----- | ------------- | ---- | -------- |
 | 1 | <observable result> | unit | <test command> | <exact observation> | <what a failure looks like> |
-| 2 | ... | local | <local client or browser against which real target, fixture> | ... | ... |
-| 3 | ... | staging | <what is read on the staged candidate, which existing data> | ... | ... |
+| 2 | ... | local | <how the candidate revision is run as an owned process; the request or UI steps against it> | ... | ... |
+| 3 | ... | staging | <what a local client or owned browser reads on the staged candidate, which existing data> | ... | ... |
 | 4 | ... | production | <why staging data cannot prove it; what is read after the deploy> | ... | ... |
 ```
 
 Rules for the block:
 
+- **One row per original criterion**, quoting its source. A criterion left out
+  of the block still binds its owner.
 - **Lowest layer that proves it.** `unit`: a committed unit or contract test.
-  `local`: a local client, script or owned browser against the real target.
-  `staging`: the deployed candidate with data that exists on staging.
+  `local`: the candidate revision run by the owner as an owned process, before
+  merge. `staging`: the deployed candidate with data that exists on staging.
   `production`: only when staging data cannot prove the criterion, with that
-  reason written in the row. Anything logic, boundary values, serialization
+  reason written in the row; it is a read after the production release, under
+  the production authorization the assignment names, and grants none itself.
+  At every layer the check is run from a local client, existing CLI or owned
+  browser. Anything logic, boundary values, serialization
   between a producer and its consumer, or old persisted shapes can express is a
   `unit` row and a test that fails first; it is not left to be found on staging.
 - **Pass and not pass are observations**, written so two readers reach the same
@@ -101,13 +106,13 @@ Rules for the block:
   and "as expected" are not criteria. Not run, not triggered and zero traffic
   are not pass.
 - **Verify locally with what exists.** The method is a local command, an
-  existing client or CLI, or an owned browser. A new acceptance tool, workflow
-  or cluster Job added by PR is never the method for one Issue. A product defect
-  still gets its regression test in the product PR.
+  existing client or CLI, or an owned browser. A new acceptance tool or workflow,
+  and a check run as a cluster Job, are never the method for one Issue. A
+  product defect still gets its regression test in the product PR.
 - **Constructible now.** Name the fixture or data each row uses and confirm it
   exists or can be created within authority. A criterion nobody can construct
-  is resolved here, before launch: choose an equivalent observable, or ask the
-  user once with options. It is never discovered after deployment and never
+  is resolved here, before launch: choose an equivalent observable that proves
+  the same criterion, never a weaker one, or ask the user once with options. It is never discovered after deployment and never
   silently weakened later.
 - **Closure follows the layers.** The owner closes the Issue when every row
   passes at its layer and cleanup is done. Rows at `unit`, `local` and `staging`
@@ -150,7 +155,7 @@ an obsolete assertion from a new product requirement: the Dispatcher may correct
 an assertion to match already-authorized semantics without another human approval;
 it may not weaken an invariant or choose new product behavior this way.
 Refresh affected decisions when those inputs change; do not reread the whole
-product on every heartbeat. For several children sharing a design, reference the
+product on every sweep. For several children sharing a design, reference the
 same decision and give each child bounded scope and acceptance ownership.
 
 Keep conceptual conflicts separate from scheduling edges: fix inconsistent

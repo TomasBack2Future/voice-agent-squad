@@ -8,9 +8,9 @@ and deduplicated wake-ups. Integration Workers own handoff validation, integrati
 review/CI, merge, staging acceptance and cleanup; they do not poll other task progress.
 When no actionable release work exists, the integration Worker records a durable
 waiting checkpoint and yields its turn, retaining ownership. Waiting is not completion.
-A developer records a frozen handoff offer on both items and sends one offer-ready
-event to the originating Dispatcher. The Dispatcher verifies the offer and wakes an
-idle integration owner once per reservation generation/head/event. Active owners
+A developer records a frozen handoff offer on both items and records it as a phase
+result the integration owner waits on; where that owner holds no such wait, the
+Dispatcher verifies the offer and wakes it once per reservation generation/head/event. Active owners
 receive no routine reminders. Direct ACK/commit/accepted transfer messages remain valid.
 Observe with `squad dispatch sweep` on the Dispatcher's own sweep timer; no second timer.
 
@@ -22,7 +22,8 @@ existing checkpoint. A running receiver proves a transport is present, not that
 every delivered event was handled or its dependency advanced. Reconcile durable
 delivery and handled cursors separately from Worker outcome and reservation state.
 An absent or stopped sweep timer, or one bound to an old session, is not periodic fallback:
-re-arm it in the current session at takeover.
+arm it in the current session at takeover unless a user pause covers the work; a timer
+stopped for a pause is re-armed only by the user's resume.
 Report that limit; preserve explicit pauses and do not silently enable, retarget,
 duplicate or replace a controller. Repair an evidenced route fault within existing
 authority, using the session-continuity contract for any actual migration.

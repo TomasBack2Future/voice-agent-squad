@@ -49,7 +49,8 @@ portable execution guarantees. Without qualified hooks, explicitly read the
 addressed mailbox and current decisions at startup/resume, before a consequential
 transition, and before closure. Use a supported session-owned receiver for idle
 wake and supervisor for renewal; manual checks are not unattended wake support.
-Do not add periodic model prompts or silently disable required conflict checks.
+Do not add periodic model prompts, other than the Dispatcher's single sweep timer,
+or silently disable required conflict checks.
 
 Use the repository's actual review policy. When independent local review is
 required, any qualified runtime may host the independent reviewer with the same

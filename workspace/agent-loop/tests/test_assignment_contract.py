@@ -83,23 +83,45 @@ class AssignmentScenarioTests(unittest.TestCase):
         designated = squad + ' 用户本轮指定维护 agent 修复。'
         self.assertEqual(contract.assignment_findings(designated), [])
 
-    def test_assignment_must_cite_the_verification_block(self):
-        bare = 'Issue github:o/voice-agent-studio#1801。自主结项，无例行预关单审批；不同 Issue 使用独立任务身份。'
-        self.assertIn('missing-verification-block', [r for r, _ in contract.assignment_findings(bare)])
-        cited = bare + " Done means every row of the Issue's Verification block Design / admission revision v2 passes at its stated layer."
-        self.assertEqual(contract.assignment_findings(cited), [])
+    def test_implementation_assignment_must_cite_the_verification_block(self):
+        base = 'Issue github:o/voice-agent-studio#1801。自主结项，无例行预关单审批；不同 Issue 使用独立任务身份。'
+        rule = lambda text: [r for r, _ in contract.assignment_findings(text)]
+        self.assertIn('missing-verification-block', rule(base))
+        for cited in [" Done means every row of the Issue's Verification block Design / admission revision v2 passes at its stated layer.",
+                      ' Closure standard: Verification (v2) in the Issue.',
+                      ' Verification block rev 3 applies.',
+                      ' 验证标准 v1。']:
+            self.assertEqual(rule(base + cited), [], cited)
+        for absent in [' There is no Verification block yet; revision 3 of the design applies.',
+                       ' Verification block: none, see design revision 2.',
+                       ' Verification is by the usual checks.']:
+            self.assertIn('missing-verification-block', rule(base + absent), absent)
+        # Other roles carry their own completion contract.
+        self.assertEqual(rule('Investigate why the staging runner lost its pull secret and report evidence. 无例行预关单审批。'), [])
 
     def test_new_acceptance_tooling_is_caught(self):
+        rule = lambda text: [r for r, _ in contract.findings(text)]
         for text in ['Add an acceptance workflow that runs the check as a k8s Job.',
                      'Create a verification executor for this Issue and submit it as a PR.',
                      'Write a verify workflow for the staging runner.',
-                     '新增一个验收工具并提交 PR']:
-            self.assertIn('acceptance-tool-pr', [r for r, _ in contract.findings(text)], text)
+                     'Add an acceptance tool via PR.',
+                     'Add an accept-session workflow to the repository for this check.',
+                     'Create a new workflow for acceptance.',
+                     'Test it in a Kubernetes Job.',
+                     '新增一个验收工具并提交 PR',
+                     '新增一个 Job 来验收']:
+            self.assertIn('acceptance-tool-pr', rule(text), text)
         for ok in ['Do not add an acceptance workflow or cluster Job for this Issue.',
                    'Never create a verification executor to prove one Issue.',
+                   'It is forbidden to add an acceptance workflow.',
                    'Add a regression test for the boundary value.',
-                   '不要新增验收工具']:
-            self.assertEqual(contract.findings(ok), [], ok)
+                   'Submit the PR, then run acceptance; the staging-deploy workflow deploys it.',
+                   'Create the fixture, run verification, and watch the deploy workflow finish.',
+                   'This Issue is to add retry to the existing acceptance executor.',
+                   'Do not test it in a Kubernetes Job.',
+                   '不要新增验收工具',
+                   '本 Issue 不需要新增验收工具']:
+            self.assertEqual(rule(ok), [], ok)
 
     def test_regressed_template_is_caught(self):
         old = 'Studio #1 结项：先不要关单，提交 ready-to-close decision-request，等待 Dispatcher 批准。'

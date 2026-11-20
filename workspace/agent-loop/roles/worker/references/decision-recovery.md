@@ -42,18 +42,20 @@ it instead of dispatching again. Preserve ambiguous operations and their locks.
 ## Structured waits and phase results
 
 When the current decision is a hold with `waits_for`, `decision-get` shows each
-wait's `satisfied` fact, `waits_satisfied` and `wait_overdue`. A hold whose
-waits are all met, or whose time box ended, is not permission to proceed: submit
-one `decision-request` citing that readback and keep working on what the hold
-does not block (`blocks_phase`). A hold that only blocks one phase (for example
+wait's `satisfied` fact, `waits_satisfied`, `wait_overdue` and `on_satisfied`. A hold
+marked `on_satisfied: proceed` releases itself when its waits are met and wakes
+you with the new revision. Any other hold whose waits are all met, and any hold
+whose time box ended, is not permission to proceed: submit one
+`decision-request` citing that readback and keep working on what the hold does
+not block (`blocks_phase`). A hold that only blocks one phase (for example
 `merge`) never stops implementation, tests, review or acceptance preparation.
 
-When a phase finishes and the next step belongs to someone else (a merge you
-executed under a release, a CI or review result, an acceptance run), report it
-in the call that wakes that owner: `terminal-events submit --kind phase-result
---phase NAME --checks all|partial --verdict passed|failed|partial` with the
-report body (or `decision-request` when you need an answer). A plain message is
-not a handoff. Read back the next decision before acting on it.
+When a phase finishes and another owner waits on it (a merge you executed under
+a release, a deploy, an acceptance run), record it in one call:
+`terminal-events submit --kind phase-result --phase NAME --checks all|partial
+--verdict passed|failed|partial` with the report body, under the phase name
+your assignment gives. Use `decision-request` only when you need a decision. A
+plain message is not a handoff and wakes nobody.
 
 When a phase finishes and the installed binary lists `terminal-events
 phase-result`, record its result before or with the report (with an older
@@ -63,7 +65,7 @@ ID --phase NAME --checks all|partial --verdict passed|failed|partial
 --deferred TEXT --outcome MESSAGE`. `--checks all` means every planned check of
 that phase ran, whatever the verdict; name what moved to a later candidate in
 `--deferred` (for example a failed replay re-verified on the next candidate).
-The record wakes the Dispatcher and is what dependents wait on; a prose report
+The record is what dependents wait on, and releases those marked for it; a prose report
 or a receipt note alone does not release them. It is not acceptance or closure:
 keep the Issue OPEN, ENV custody and human holds unchanged. A result that
 cannot be recorded (older tool, rejected identity) is a capability gap to state

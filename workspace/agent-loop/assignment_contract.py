@@ -11,10 +11,37 @@ FORBIDDEN = [
     ('pre-close-approval', re.compile(r"(?i)ready[- ]to[- ]close|预关单|pre[- ]close\s+(?:approval|gate|review)|先不要关单|等待\s*Dispatcher[^。\n]{0,20}批准|(?:wait|await)(?:ing)?\s+(?:for\s+)?(?:the\s+)?(?:Dispatcher|dispatcher)[^.\n]{0,30}(?:approv|release|go-ahead|permission)|(?:Dispatcher|dispatcher)[^.\n]{0,30}approv[^.\n]{0,30}(?:before|prior to)[^.\n]{0,20}clos")),
     ('completed-session-reuse', re.compile(r"(?i)(?:reuse|re-?use|resume|wake|re-?activate|re-?assign|复用|重用|唤醒|续用)[^。.\n]{0,40}(?:completed|finished|retired|已完成|已结束|结束)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)[^。.\n]{0,40}(?:for|承接|接手)[^。.\n]{0,30}(?:another|next|different|其他|另一|下一)[^。.\n]{0,10}Issue")),
     ('handoff-to-completed', re.compile(r"(?i)hand\s*off[^。.\n]{0,60}(?:completed|finished|已完成)[^。.\n]{0,20}(?:worker|session|native|会话)|(?:交接|移交)[^。.\n]{0,30}(?:已完成|已结束)[^。.\n]{0,10}(?:worker|会话)")),
-    # A one-Issue acceptance must not grow a new tool, workflow or cluster Job.
-    ('acceptance-tool-pr', re.compile(r"(?i)\b(?:add|create|write|build|commit|submit|open|introduce)\b[^.\n]{0,50}?\b(?:acceptance|verification|verify|verifier)\b[^.\n]{0,25}?\b(?:workflow|k8s\s+job|kubernetes\s+job|cluster\s+job|tool\s+PR|executor|GitHub\s+Action)\b|(?:新增|新建|提交|编写|增加)[^。\n]{0,20}(?:验收|验证)[^。\n]{0,10}(?:工具|workflow|工作流|Job|执行器)")),
     ('squad-repair-to-business-worker', re.compile(r"(?i)(?:(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}worker|(?:squad|coordination)[^。.\n]{0,40}(?:repair|fix|修复)[^。.\n]{0,60}(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,60}worker|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,60}(?:squad|coordination|协作)[^。.\n]{0,40}(?:repair|fix|修复)|(?:dispatch|assign|派给|交给|分配|launch)[^。.\n]{0,30}worker[^。.\n]{0,20}(?:repair|fix|修复)[^。.\n]{0,40}(?:squad|coordination|协作))")),
 ]
+
+
+# A one-Issue acceptance must not grow a new tool or workflow, or run as a
+# cluster Job. Matching is clause-local (no crossing of , ; : or a sentence end)
+# so "submit the PR, then run acceptance; the deploy workflow ..." is not a hit;
+# work on an existing maintained tool and negated wording are exempt.
+_TOOL = r"(?:tool|workflow|k8s\s+job|kubernetes\s+job|cluster\s+job|job|executor|runner|script|github\s+action)s?"
+_CHECK = r"(?:acceptance|verification|verify|verifier|accept-[\w*-]+|inspect-[\w*-]+|probe-[\w*-]+)"
+_MAKE = r"(?:add|create|write|build|commit|submit|open|introduce)"
+TOOLING = [
+    re.compile(r"(?i)\b" + _MAKE + r"\b[^.,;:\n]{0,40}?\b" + _CHECK + r"\b[^.,;:\n]{0,12}?\b" + _TOOL + r"\b"),
+    re.compile(r"(?i)\b" + _MAKE + r"\b[^.,;:\n]{0,30}?\b" + _TOOL + r"\b[^.,;:\n]{0,20}?\b(?:for|to)\s+(?:run\s+|do\s+)?(?:the\s+)?(?:acceptance|verification|verify)\b"),
+    re.compile(r"(?i)\b(?:test|verify|accept|check|run)\b[^.,;:\n]{0,40}?\b(?:in|as|through|via)\s+an?\s+(?:new\s+)?(?:k8s|kubernetes|cluster)\s+job\b"),
+    re.compile(r"(?:新增|新建|提交|编写|增加|创建)[^。，；：\n]{0,20}(?:验收|验证)[^。，；：\n]{0,10}(?:工具|workflow|工作流|Job|执行器|脚本)"),
+    re.compile(r"(?:新增|新建|提交|编写|增加|创建)[^。，；：\n]{0,12}(?:Job|工作流|workflow)[^。，；：\n]{0,8}(?:来|用于|做)?(?:验收|验证)"),
+]
+TOOLING_NEGATION = re.compile(r"(?i)(?:\bno\b|\bnot\b|\bnever\b|\bwithout\b|\bdon't\b|\bforbidden\b|\bprohibited\b|不要|不得|禁止|不再|无需|无须|不必|不用|不需要)[^.。;；]{0,60}$")
+TOOLING_EXEMPT = re.compile(r"(?i)\bexisting\b|\bmaintained\b|现有|既有|已有")
+
+
+def tooling_findings(flat):
+    out = []
+    for pattern in TOOLING:
+        for m in pattern.finditer(flat):
+            before = flat[max(0, m.start() - 70):m.start()]
+            if TOOLING_NEGATION.search(before) or TOOLING_EXEMPT.search(m.group(0)) or IN_MATCH_NEGATION.search(m.group(0)):
+                continue
+            out.append(('acceptance-tool-pr', flat[max(0, m.start() - 20):m.end() + 40].strip()))
+    return out[:1] if out else out
 
 
 # Ordinary follow-on work gated behind another Dispatcher round-trip. Real
@@ -61,7 +88,7 @@ def findings(text):
             if NEGATION.search(before) or (rule != 'pre-close-approval' and re.search(r"(?i)\b(?:never|not)\b|不得|不要|禁止|无需|无须|不必|不用", m.group(0))) or re.match(r"[^。.;；]{0,12}(?:已取消|不再|无需|取消|is cancelled|no longer)", after):
                 continue
             out.append((rule, flat[max(0, m.start() - 20):m.end() + 40].strip()))
-    return out + gated_findings(flat)
+    return out + gated_findings(flat) + tooling_findings(flat)
 
 
 REQUIRED_CLAUSES = {
@@ -79,16 +106,27 @@ SQUAD_TARGET = re.compile(r"voice-agent-squad|github:[^\s]*squad#\d+|Squad (?:to
 DESIGNATION = re.compile(r"(?i)(?:user[- ]designat\w*|designated by the user|用户[^。\n]{0,12}指定)[^。\n]{0,40}(?:maintenance[- ]agent|维护 ?agent|agent)|(?:maintenance[- ]agent|维护 ?agent)[^。\n]{0,30}(?:designated|指定)")
 
 
-# An assignment names its closure standard: the Issue's Verification block and
-# revision. Without it the owner would have to discover what "done" means.
-VERIFICATION = re.compile(r"(?i)verification\s+block[^\n]{0,160}?revision\s+v?\d+|验证(?:标准|块)[^\n]{0,60}?v\d+")
+# An implementation assignment names its closure standard: the Issue's
+# Verification block and its revision. Other roles (Investigator, environment
+# recovery, Deployer) carry their own completion contract and are not checked.
+IMPLEMENTATION_ROLE = re.compile(r"studio-issue-worker|agent-loop-worker|voice-agent-studio#\d+|convoai-studio-importer#\d+")
+VERIFICATION = re.compile(r"(?i)verification(?:\s+block)?[^\n.。]{0,160}?(?:\brevision\s+v?\d+|\brev\.?\s*v?\d+|\(v\d+\)|\bv\d+\b)|验证(?:标准|块)[^\n。]{0,60}?v\d+")
+VERIFICATION_ABSENT = re.compile(r"(?i)(?:\bno\b|\bnot\b|\bnone\b|\bwithout\b|\bmissing\b|没有|缺少|尚无|无验证)")
+
+
+def cites_verification(flat):
+    for m in VERIFICATION.finditer(flat):
+        around = re.split(r"[.。;；]", flat[max(0, m.start() - 30):m.start()])[-1] + m.group(0)
+        if not VERIFICATION_ABSENT.search(around):
+            return True
+    return False
 
 
 def assignment_findings(text):
     """Findings for one generated Worker assignment, including repair ownership."""
     out = findings(text)
-    if not VERIFICATION.search(re.sub(r"\s+", " ", text)):
-        out.append(('missing-verification-block', "assignment does not cite the Issue's Verification block and revision"))
+    if IMPLEMENTATION_ROLE.search(text) and not cites_verification(re.sub(r"\s+", " ", text)):
+        out.append(('missing-verification-block', "implementation assignment does not cite the Issue's Verification block and revision"))
     designated = any(not NEGATION.search(re.sub(r"\s+", " ", text)[max(0, m.start() - 40):m.start()]) for m in DESIGNATION.finditer(text))
     if SQUAD_TARGET.search(text) and not designated:
         out.append(('squad-repair-without-designation', 'Squad-tool assignment names no user-designated maintenance agent'))

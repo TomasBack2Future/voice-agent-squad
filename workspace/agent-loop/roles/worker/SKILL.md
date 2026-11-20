@@ -66,9 +66,11 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    and code ownership before treating anything as a new requirement.
 4. **Verify each criterion at the lowest layer that proves it.** The Issue's
    Verification block gives every criterion a layer, a method, and what counts as
-   pass and not pass: `unit` (committed test), `local` (local client or owned
-   browser against the real target), `staging` (the deployed candidate with
-   staging data) or `production` (only where staging data cannot prove it).
+   pass and not pass: `unit` (committed test), `local` (the candidate revision
+   running as your owned process, before merge), `staging` (the deployed
+   candidate with staging data) or `production` (only where staging data cannot
+   prove it). At every layer the check itself is run from a local client,
+   existing CLI or owned browser.
    Turn the tests from step 2 green, run the profile's fast checks and, for
    durability, idempotency, concurrency, retry or migration changes, its risk
    probes before review. Choose further checks by the problem: real protocol or
@@ -93,7 +95,9 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    revision deployment. Production requires an explicit `production: true`
    assignment and the project production contract; staging never implies it.
 8. **Accept, clean up, close.** Check every criterion at its stated layer and
-   record pass or not pass against the block's own wording. Close the Issue when
+   record pass or not pass against the block's own wording. The block has one
+   row per original criterion; an original criterion it omits still binds, and
+   you report the gap as one decision request. Close the Issue when
    all of them pass, owned fixtures are cleaned up and resources released (see
    the execution contract): a criterion staging data can prove closes on staging,
    and only a `production` criterion waits for the production deploy. While such
@@ -172,16 +176,24 @@ release tag or candidate appearing, a provider key validating, an environment
 lock freeing and a time arriving.
 
 - **Park on a tracked watch, not on the Dispatcher.** Start the wait as a
-  client-native tracked background task through `squad operation run` (name its
-  `phase` and `resume_step`, give it a bounded timeout and a command that exits
-  when the condition is true or has definitely failed), then end the turn. Its
-  exit is delivered to this session and wakes it. On wake read the real result,
-  record it and take the next step of the work order. For environment contention
-  run `claim --wait` the same way: a long foreground wait is cut by the client's
-  command limit and leaves you idle.
+  client-native tracked background task, then end the turn; its exit wakes this
+  session. When the installed binary lists `operation run`, wrap the command in
+  it so the exit is also recorded and delivered durably: a request file with
+  your assignment's reservation, generation and native session, the current
+  decision revision from `decision-get`, a stable `request_key`, the `phase`
+  being watched, a `resume_step`, a bounded `timeout_seconds`, and a command
+  that exits when the condition is true or has definitely failed (format in the
+  [delivery lifecycle](../../../../docs/reference/delivery-lifecycle.md#owned-command-result-delivery)).
+  Without it, use the plain tracked background task. On wake read the real
+  result, record it and take the next step of the work order; on timeout,
+  classify the failure through the failure branches rather than restarting the
+  same watch. For environment contention run `claim --wait` the same way: a long
+  foreground wait is cut by the client's command limit and leaves you idle.
 - **Never spend model turns polling**, sleep in the foreground, or ask the
   Dispatcher whether a condition you can read has changed.
-- **Holds.** Read `terminal-events decision-get` at each wake. A hold scoped with
+- **Holds outrank what you observe.** An effective hold stops you even when the
+  condition you were watching is true; a hold without `blocks_phase` stops every
+  mutation. Read `terminal-events decision-get` at each wake. A hold scoped with
   `blocks_phase` stops only that phase: keep doing everything else, including
   operations that name another phase. A hold marked `on_satisfied: proceed`
   releases itself when its waits are met and wakes you with a `decision-resolved`

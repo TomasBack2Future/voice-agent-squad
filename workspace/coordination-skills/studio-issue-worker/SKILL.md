@@ -61,8 +61,8 @@ native-session fences.
    park with `claim --wait`; do not poll or look for other work.
 3. Keep the claim through implementation, PR corrections, guarded merge, exact
    revision verification and final Issue disposition. Ending a turn, an open PR
-   or a held ENV does not end the assignment; finish useful pre-gate work and use
-   foreground `claim --wait` for contention.
+   or a held ENV does not end the assignment; finish useful pre-gate work and park
+   on `claim --wait` as a tracked task for contention.
 4. Use a clean isolated worktree and `codex/issue-<number>-<slug>` branch;
    preserve unrelated dirty worktrees.
 
@@ -117,8 +117,8 @@ bypasses an enforced App-pinned `grok-review` Check.
   prefer synthetic fixtures and sanitized counts/hashes.
 - Acceptance uses a local client, an existing CLI or an owned browser against the
   real target. Do not add an `accept-*`, `inspect-*`, `probe-*` or similar
-  workflow, script or cluster Job to the repository to verify this Issue, and do
-  not make one a prerequisite of acceptance; reuse an existing maintained
+  workflow or script to the repository to verify this Issue. Do not run the
+  check as a cluster Job. Do not make either a prerequisite of acceptance; reuse an existing maintained
   executor only where a credential or network path exists solely inside the
   protected environment. Shell commands, browser replay, result capture and
   terminal notification are Worker responsibilities whenever authorized tools
@@ -167,8 +167,8 @@ stays non-success, record a precise blocker and do not claim the environment.
 - Before freezing the head, every row of the Issue's Verification block has its
   evidence or its prepared route: `unit` rows are committed Go or frontend tests
   that failed before the fix and run in the applicable CI job, `local` rows have
-  been run, `staging` and `production` rows have their fixture, access path and
-  cleanup ready. For changed workflow/tool behavior, update its contract tests;
+  been run against this head as your owned process, `staging` and `production`
+  rows have their fixture, access path and cleanup ready. For changed workflow/tool behavior, update its contract tests;
   never delete, skip or weaken assertions to get green CI. An unexecuted suite is
   not a pass.
 - Pass quick local checks (format/diff, compilation/type checking, targeted

@@ -34,8 +34,11 @@ semantics, shared-resource order or risk.
    itself through a tracked `operation run` watch (for example "after PR #N
    merges", "when deploy run R finishes", "when the provider key validates"),
    with no later notification from the Dispatcher; the batch stage it waits on,
-   if any, as a hold that releases itself; the acceptance method and actual
-   route (local client or owned browser against
+   if any, as a hold that releases itself; the phases other owners wait on,
+   which this owner records with `phase-result` under exactly the given names;
+   for `production` rows, the read-only route and the authorization reference
+   that covers it (the row itself grants nothing); the acceptance method and
+   actual route (local client or owned browser against
    the real target, credential route, observation, cleanup) and the evidence
    layers agreed against the Issue. Pre-authorize conditional follow-on work:
    "assess X; if condition C holds, execute Y within this scope".
@@ -99,6 +102,9 @@ scope or material scope expansion.
 Path: <EXPECTED SEQUENCE>. Start conditions you watch yourself with a tracked
 operation run watch, without waiting to be told: <CONDITIONS>. Batch stage you
 wait on, released automatically when recorded: <RESERVATION:PHASE or none>.
+Phases others wait on; record each with phase-result under exactly these names:
+<PHASE NAMES or none>. Production rows: read-only route <ROUTE> authorized by
+<REFERENCE>, or none.
 Acceptance route prepared during implementation: <METHOD, TARGET, CREDENTIAL
 ROUTE, OBSERVATION, CLEANUP>. Conditional work already authorized: <IF C THEN Y>.
 
@@ -111,7 +117,7 @@ Staging mode <legacy|staging-candidate-v1> with capability evidence <REF or
 not-activated>. Select ENV by component and operation from the project profile
 (ENV-001/002 legacy calls preserved; acquire cross-service sets in lexicographic
 order; a deadlock is never permission to release another task's claim). Use
-foreground claim --wait for contention. Production needs a separate explicit
+claim --wait as a tracked task for contention. Production needs a separate explicit
 production assignment. Merge policy: <standing|release-required>; under
 release-required, request the exact head/base release once when ready.
 

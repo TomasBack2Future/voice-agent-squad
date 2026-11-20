@@ -9,12 +9,11 @@ this document's batch deployment, branch or role contract.
 
 ## Admission and roles
 
-Batch progress monitoring and dependency wake-ups belong exclusively to the
-originating Dispatcher. Do not poll another Worker's progress. When only waiting
-for a child offer, persist the waiting checkpoint and yield while retaining primary
-ownership. Developers send one offer-ready event (generation/head/offer pointer)
-to the Dispatcher after recording the frozen offer; it verifies and wakes the idle
-recipient once. Direct handoff ACK/commit/accepted messages remain part of delivery.
+Batch membership and order belong to the originating Dispatcher. Do not poll another
+Worker's progress with model turns. When only waiting for a child offer, park on the
+structured wait for that offer's phase result, retaining primary ownership. Developers
+record the frozen offer as a phase result (generation/head/offer pointer); where the
+recipient holds no wait on it, the Dispatcher verifies and wakes the idle recipient once. Direct handoff ACK/commit/accepted messages remain part of delivery.
 
 The authorized Dispatcher records a frozen batch manifest and includes its exact
 revision in each prompt: batch ID, child Issues/items and reservation generations,
