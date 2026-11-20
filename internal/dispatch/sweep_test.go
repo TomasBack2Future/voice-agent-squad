@@ -67,6 +67,10 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 	decide("PROSE", 7, "hold", "[]", 0)
 	msg(8, 100000-3*3600, "dispatcher", "T-WAITS", "say")
 	decide("WAITS", 8, "hold", `[{"reservation":"BUSY","phase":"merge","until":"executed"}]`, 1)
+	// All three started under their decision; what differs is what came after.
+	for _, k := range []string{"QUIET", "BUSY", "ASKED"} {
+		exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',2100,?,?,'milestone','started','[]','normal')`, "worker-"+k, "T-"+k)
+	}
 
 	report, err := s.Sweep(ctx, SweepOptions{})
 	if err != nil {
@@ -110,8 +114,14 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 		t.Fatalf("undelivered release hidden: %+v %v", report, err)
 	}
 	exec(`UPDATE terminal_event_receipts SET delivered_session='x',delivered_at=99000 WHERE event_id LIKE '%/waits-released-r2'`)
-	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour}); err != nil || len(sweepRow(t, report, "WAITS").Drift) != 0 {
+	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour, UnactedAfter: 1000 * time.Hour}); err != nil || len(sweepRow(t, report, "WAITS").Drift) != 0 {
 		t.Fatalf("delivered release flagged: %+v %v", report, err)
+	}
+	// Delivered is not acted on: released from its hold three hours ago with
+	// nothing recorded since, the handoff has not reached the owner's first step.
+	exec(`INSERT INTO dispatch_decision_history(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,decided_by,decided_at) VALUES('repo-test','WAITS',1,'T-WAITS',1,8,'hold','c','dispatcher',?)`, 100000-3*3600)
+	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour}); err != nil || !slices.Contains(sweepRow(t, report, "WAITS").Drift, "decision-unacted") {
+		t.Fatalf("released owner with no action not flagged: %+v %v", sweepRow(t, report, "WAITS"), err)
 	}
 	// An owner whose hold ended a minute ago is not quiet, however long it was held.
 	exec(`UPDATE dispatch_decision_history SET decided_at=? WHERE reservation_key='WAITS'`, 100000-60)
@@ -191,5 +201,282 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 	// Thresholds are the caller's.
 	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: time.Minute}); err != nil || !slices.Contains(sweepRow(t, report, "ASKED").Drift, "owner-quiet") {
 		t.Fatalf("custom threshold ignored: %+v %v", report, err)
+	}
+}
+
+// A handoff is followed to the released owner's first recorded step, and the
+// time it took is reported for measurement.
+func TestSweepFollowsADecisionToTheOwnersFirstAction(t *testing.T) {
+	now := time.Unix(100000, 0)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"ACTED", "IDLE", "WATCH", "HELD"} {
+		if _, err := s.Reserve(ctx, k, "github:o/r#"+k, "dispatcher", "", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test',?,?,1000,1000,'',0)`, "T-"+k, "worker-"+k)
+	}
+	exec(`UPDATE dispatch_reservations SET canonical_item_id='T-'||item_id,state='dispatched',worker_thread_id='native-'||item_id,reserved_at=1000`)
+	decided := int64(100000 - 3600)
+	for i, k := range []string{"ACTED", "IDLE", "WATCH", "HELD"} {
+		id := int64(10 + i)
+		exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,'repo-test',?,'dispatcher',?,'say','go','[]','normal')`, id, decided, "T-"+k)
+		action := "proceed"
+		if k == "HELD" {
+			action = "hold"
+		}
+		exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES('repo-test',?,1,?,1,?,?,'c',?)`, k, "T-"+k, id, action, "worker-"+k)
+		exec(`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_session,delivered_at) VALUES('repo-test',?,?,?,1,?,?,'decision-resolved',?,?,'x',?)`,
+			"worker-"+k, "e-"+k, k, "native-"+k, "T-"+k, id, id, decided+5)
+	}
+	// ACTED recorded a milestone four minutes after its decision; WATCH parked on
+	// a tracked watch it started for this assignment.
+	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-ACTED','T-ACTED','milestone','deploy started','[]','normal')`, decided+240)
+	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-WATCH','T-WATCH','owned-operation',?,'[]','normal')`, decided+30,
+		`{"request":{"reservation":"WATCH","generation":1,"worker_session":"native-WATCH","request_key":"deploy-watch"},"state":"started"}`)
+	report, err := s.Sweep(ctx, SweepOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := sweepRow(t, report, "ACTED"); slices.Contains(row.Drift, "decision-unacted") || row.FirstActionAt != decided+240 || row.FirstActionSeconds != 240 {
+		t.Fatalf("an owner that acted: %+v", row)
+	}
+	if row := sweepRow(t, report, "IDLE"); !slices.Contains(row.Drift, "decision-unacted") || row.FirstActionAt != 0 {
+		t.Fatalf("an owner told to proceed that did nothing: %+v", row)
+	}
+	if row := sweepRow(t, report, "WATCH"); slices.Contains(row.Drift, "decision-unacted") || row.FirstActionSeconds != 30 {
+		t.Fatalf("an owner parked on a tracked watch: %+v", row)
+	}
+	if row := sweepRow(t, report, "HELD"); slices.Contains(row.Drift, "decision-unacted") {
+		t.Fatalf("a held owner is not expected to act: %+v", row)
+	}
+	// Inside the threshold nothing is flagged yet.
+	if report, err = s.Sweep(ctx, SweepOptions{UnactedAfter: 2 * time.Hour}); err != nil || slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("flagged inside the threshold: %+v %v", report, err)
+	}
+	// Activity before the decision is not an answer to it.
+	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','say','earlier work','[]','normal')`, decided-30)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || !slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("activity before the decision counted as acting on it: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	// Reading the decision is shown, and is not the same as starting.
+	exec(`UPDATE terminal_event_receipts SET processed_at=?,processed_note='read' WHERE event_id='e-IDLE'`, decided+20)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "IDLE").DecisionAckedAt != decided+20 || !slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("acknowledged but not started: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	// A phase result or an attestation is a first action without any message,
+	// and the first fact counts, not the latest.
+	exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','deploy',1,'T-IDLE','all','passed','',11,'worker-IDLE',?)`, decided+60)
+	exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','accept',1,'T-IDLE','all','passed','',11,'worker-IDLE',?)`, decided+3000)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || sweepRow(t, report, "IDLE").FirstActionSeconds != 60 || slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("first action is the earliest fact: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	exec(`DELETE FROM dispatch_phase_results`)
+	// A proceed that amends an owner already working is not a handoff: silence
+	// after it is the ordinary quiet check, not decision-unacted. A proceed that
+	// follows a hold is one.
+	exec(`UPDATE dispatch_decisions SET revision=2 WHERE reservation_key='IDLE'`)
+	exec(`INSERT INTO dispatch_decision_history(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,decided_by,decided_at) VALUES('repo-test','IDLE',1,'T-IDLE',1,11,'proceed','c','dispatcher',?)`, decided-600)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("an amended proceed was treated as a handoff: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	exec(`UPDATE dispatch_decision_history SET action='hold' WHERE reservation_key='IDLE' AND revision=1`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || !slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("a proceed after a hold was not treated as a handoff: %+v %v", sweepRow(t, report, "IDLE"), err)
+	}
+	// An assignment with no decision at all has nothing to act on.
+	exec(`DELETE FROM dispatch_decisions WHERE reservation_key='ACTED'`)
+	if report, err = s.Sweep(ctx, SweepOptions{}); err != nil || slices.Contains(sweepRow(t, report, "ACTED").Drift, "decision-unacted") || sweepRow(t, report, "ACTED").FirstActionAt != 0 {
+		t.Fatalf("no decision: %+v %v", sweepRow(t, report, "ACTED"), err)
+	}
+}
+
+// With the batch's Issue observations the sweep is as wide as the batch, not
+// as the live sessions: an open Issue whose execution ended, and one that
+// never had a reservation, are both found; a closed or stale one is not.
+func TestSweepFindsOpenIssuesNoActiveReservationCovers(t *testing.T) {
+	now := time.Unix(100000, 0)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"LIVE", "PARTIAL", "DONEOPEN", "DONECLOSED", "OTHERS"} {
+		if _, err := s.Reserve(ctx, k, "github:o/r#"+k, "dispatcher", "", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`UPDATE dispatch_reservations SET canonical_item_id='T-'||item_id,state='dispatched',worker_thread_id='native-'||item_id,reserved_at=1000`)
+	exec(`UPDATE dispatch_reservations SET state='failed' WHERE item_id='PARTIAL'`)
+	exec(`UPDATE dispatch_reservations SET state='completed' WHERE item_id IN ('DONEOPEN','DONECLOSED')`)
+	exec(`UPDATE dispatch_reservations SET state='completed',reserved_by='another-dispatcher' WHERE item_id='OTHERS'`)
+	exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test','T-LIVE','worker-LIVE',1000,1000,'',0)`)
+	obs := func(key, state string, at int64) IssueObservation {
+		return IssueObservation{Source: "github:o/r#" + key, State: state, VerifiedAt: at}
+	}
+	// The state is accepted as the code host spells it; the last observation of
+	// a source wins; padding is trimmed.
+	issues := []IssueObservation{obs("LIVE", "open", 99990), obs("PARTIAL", "CLOSED", 99980), obs("PARTIAL", "OPEN", 99990), obs("DONEOPEN", "OPEN", 99990), obs("DONECLOSED", "CLOSED", 99990),
+		obs("OTHERS", "OPEN", 99990), {Source: " github:o/r#NEVER ", State: "OPEN", VerifiedAt: 99990}, obs("NEVERCLOSED", "CLOSED", 99990), obs("STALE", "OPEN", 90000), obs("STALE2", "OPEN", 90000)}
+	report, err := s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher", Issues: issues})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Active != 1 || report.OpenWithoutOwner != 3 || report.StaleObservations != 2 {
+		t.Fatalf("active %d open without owner %d stale %d: %+v", report.Active, report.OpenWithoutOwner, report.StaleObservations, report.Rows)
+	}
+	if row := sweepRow(t, report, "LIVE"); row.IssueState != "open" || slices.Contains(row.Drift, "open-issue-no-active-owner") {
+		t.Fatalf("live owner: %+v", row)
+	}
+	for _, key := range []string{"PARTIAL", "DONEOPEN"} {
+		if row := sweepRow(t, report, key); !slices.Contains(row.Drift, "open-issue-no-active-owner") || row.IssueState != "open" || row.NextOwner != "dispatcher" {
+			t.Fatalf("%s: an open Issue whose execution ended was not handed back: %+v", key, row)
+		}
+	}
+	unreserved := false
+	for _, row := range report.Rows {
+		switch {
+		case row.SourceRef == "github:o/r#NEVER":
+			unreserved = slices.Contains(row.Drift, "open-issue-unreserved") && row.State == "unreserved"
+		case row.Reservation == "DONECLOSED", row.Reservation == "OTHERS", row.SourceRef == "github:o/r#NEVERCLOSED", row.SourceRef == "github:o/r#STALE", row.SourceRef == "github:o/r#STALE2":
+			t.Fatalf("a closed, foreign or stale observation produced a row: %+v", row)
+		}
+	}
+	if !unreserved {
+		t.Fatalf("an open Issue with no reservation was not found: %+v", report.Rows)
+	}
+	// Without observations the sweep is unchanged: live reservations only.
+	if report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher"}); err != nil || len(report.Rows) != 1 || report.OpenWithoutOwner != 0 || report.Rows[0].IssueState != "" {
+		t.Fatalf("sweep without observations changed: %+v %v", report, err)
+	}
+	// A malformed list fails the call; it never replaces a row's ledger facts.
+	for name, bad := range map[string]IssueObservation{
+		"unknown state":    obs("LIVE", "MERGED", 99990),
+		"future timestamp": obs("LIVE", "OPEN", 100001),
+		"no timestamp":     obs("LIVE", "OPEN", 0),
+		"no source":        {State: "OPEN", VerifiedAt: 99990},
+	} {
+		if _, err = s.Sweep(ctx, SweepOptions{Issues: []IssueObservation{bad}}); err == nil {
+			t.Fatalf("%s: accepted", name)
+		}
+	}
+	if _, err = s.Sweep(ctx, SweepOptions{Issues: make([]IssueObservation, 501)}); err == nil {
+		t.Fatal("an unbounded observation list was accepted")
+	}
+	// A reservation never bound and past its expiry covers nothing.
+	if _, err = s.Reserve(ctx, "EXPIRED", "github:o/r#EXPIRED", "dispatcher", "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE dispatch_reservations SET expires_at=99000 WHERE item_id='EXPIRED'`)
+	report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher", Issues: []IssueObservation{obs("EXPIRED", "OPEN", 99990)}})
+	if err != nil || !slices.Contains(sweepRow(t, report, "EXPIRED").Drift, "open-issue-no-active-owner") || report.OpenWithoutOwner != 1 || len(report.Rows) != report.Active {
+		t.Fatalf("expired unbound reservation: %+v %v", report, err)
+	}
+	exec(`UPDATE dispatch_reservations SET expires_at=200000 WHERE item_id='EXPIRED'`)
+	if report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher", Issues: []IssueObservation{obs("EXPIRED", "OPEN", 99990)}}); err != nil || len(sweepRow(t, report, "EXPIRED").Drift) != 0 || report.OpenWithoutOwner != 0 {
+		t.Fatalf("a live unbound reservation was reported as uncovered: %+v %v", report, err)
+	}
+	exec(`DELETE FROM dispatch_reservations WHERE item_id='EXPIRED'`)
+	// A closed Issue with a live reservation is the existing delivery drift.
+	if report, err = s.Sweep(ctx, SweepOptions{Issues: []IssueObservation{obs("LIVE", "CLOSED", 99990)}}); err != nil || !slices.Contains(sweepRow(t, report, "LIVE").Drift, "closed-issue-active-reservation") {
+		t.Fatalf("closed Issue with a live reservation: %+v %v", report, err)
+	}
+}
+
+// What counts as "started" must belong to the current Worker, the current
+// decision and a real step. For an hour nothing was deployed; none of these
+// may read as a start, and one real start must.
+func TestSweepFirstActionIsAttributedToTheCurrentHandoff(t *testing.T) {
+	run := func(t *testing.T, inject func(exec func(string, ...any), decided int64)) SweepRow {
+		t.Helper()
+		now := time.Unix(100000, 0)
+		s := newDispatchStore(t, &now)
+		ctx := context.Background()
+		exec := func(q string, args ...any) {
+			t.Helper()
+			if _, err := s.db.Exec(q, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.Reserve(ctx, "IDLE", "github:o/r#IDLE", "dispatcher", "", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test','T-IDLE','worker-IDLE',1000,1000,'',0)`)
+		exec(`UPDATE dispatch_reservations SET canonical_item_id='T-'||item_id,state='dispatched',worker_thread_id='native-'||item_id,reserved_at=1000`)
+		decided := int64(100000 - 3600)
+		exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(11,'repo-test',?,'dispatcher','T-IDLE','say','go','[]','normal')`, decided)
+		exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES('repo-test','IDLE',1,'T-IDLE',1,11,'proceed','c','worker-IDLE')`)
+		exec(`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_session,delivered_at) VALUES('repo-test','worker-IDLE','e-IDLE','IDLE',1,'native-IDLE','T-IDLE','decision-resolved',11,11,'x',?)`, decided+5)
+		inject(exec, decided)
+		report, err := s.Sweep(ctx, SweepOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sweepRow(t, report, "IDLE")
+	}
+	notStarted := map[string]func(func(string, ...any), int64){
+		// Posted in the decision's second, but before it.
+		"message before the decision in the same second": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(5,'repo-test',?,'worker-IDLE','T-IDLE','milestone','old task completed','[]','normal')`, decided)
+		},
+		"a reply that only acknowledges": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','say','received; still waiting to start the deploy','[]','normal')`, decided+45)
+		},
+		"a record written by someone else": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO attestations(repo_id,item_id,kind,command,exit_code,output_hash,output_path,created_at,agent_id) VALUES('repo-test','T-IDLE','test','unit',0,'hash','path',?,'dispatcher')`, decided+40)
+			exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','deploy',1,'T-IDLE','all','passed','',11,'dispatcher',?)`, decided+50)
+		},
+		"a watch started before the decision and still running": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','owned-operation',?,'[]','normal')`, decided-300,
+				`{"request":{"reservation":"IDLE","generation":1,"worker_session":"native-IDLE","request_key":"old-ci"},"state":"started"}`)
+		},
+		"an operation of another assignment": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','owned-operation',?,'[]','normal')`, decided+60,
+				`{"request":{"reservation":"OTHER","generation":1,"worker_session":"native-OTHER","request_key":"deploy"},"state":"started"}`)
+		},
+	}
+	for name, inject := range notStarted {
+		t.Run(name, func(t *testing.T) {
+			if row := run(t, inject); row.FirstActionAt != 0 || !slices.Contains(row.Drift, "decision-unacted") {
+				t.Fatalf("read as started: first_action=%d (%ds) drift=%v notes=%v", row.FirstActionAt, row.FirstActionSeconds, row.Drift, row.Notes)
+			}
+		})
+	}
+	t.Run("an acknowledging reply is recorded as read", func(t *testing.T) {
+		row := run(t, notStarted["a reply that only acknowledges"])
+		if row.DecisionAckedAt != 100000-3600+45 {
+			t.Fatalf("decision_acked_at=%d", row.DecisionAckedAt)
+		}
+	})
+	started := map[string]func(func(string, ...any), int64){
+		"the deploy operation started for this assignment": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-IDLE','T-IDLE','owned-operation',?,'[]','normal')`, decided+90,
+				`{"request":{"reservation":"IDLE","generation":1,"worker_session":"native-IDLE","request_key":"deploy","phase":"deploy"},"state":"started"}`)
+		},
+		"the environment lock claimed": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test','ENV-001','worker-IDLE',?,?,'',0)`, decided+90, decided+90)
+		},
+		"its own phase result": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO dispatch_phase_results(repo_id,reservation_key,phase,generation,item_id,checks,verdict,deferred,outcome_id,recorded_by,recorded_at) VALUES('repo-test','IDLE','deploy',1,'T-IDLE','all','passed','',11,'worker-IDLE',?)`, decided+90)
+		},
+		"its own attestation": func(exec func(string, ...any), decided int64) {
+			exec(`INSERT INTO attestations(repo_id,item_id,kind,command,exit_code,output_hash,output_path,created_at,agent_id) VALUES('repo-test','T-IDLE','test','unit',0,'hash','path',?,'worker-IDLE')`, decided+90)
+		},
+	}
+	for name, inject := range started {
+		t.Run(name, func(t *testing.T) {
+			if row := run(t, inject); row.FirstActionSeconds != 90 || slices.Contains(row.Drift, "decision-unacted") {
+				t.Fatalf("a real start was missed: first_action=%d (%ds) drift=%v", row.FirstActionAt, row.FirstActionSeconds, row.Drift)
+			}
+		})
 	}
 }

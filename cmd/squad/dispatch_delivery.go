@@ -55,7 +55,13 @@ func newDispatchDeliveryCmd() *cobra.Command {
 
 func newDispatchSweepCmd() *cobra.Command {
 	var opts dispatch.SweepOptions
+	var observations string
 	cmd := &cobra.Command{Use: "sweep", Short: "Read every active reservation and report which need attention and why; no ledger writes", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if observations != "" {
+			if err := readDeliveryJSON(observations, &opts.Issues); err != nil {
+				return err
+			}
+		}
 		bc, err := bootDeliveryRead()
 		if err != nil {
 			return err
@@ -72,7 +78,9 @@ func newDispatchSweepCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.QuietAfter, "quiet-after", 0, "Flag a proceeding owner with no recorded progress and no operation in flight for this long (default 3h)")
 	cmd.Flags().DurationVar(&opts.HoldAfter, "hold-after", 0, "Flag a hold without a structured wait older than this (default 2h)")
 	cmd.Flags().DurationVar(&opts.OperationAfter, "operation-after", 0, "Flag an owned operation started with no exit for this long (default 12h); a younger one is a note")
+	cmd.Flags().DurationVar(&opts.UnactedAfter, "unacted-after", 0, "Flag an owner told to proceed (or released) that recorded nothing for this long (default 15m)")
 	cmd.Flags().StringVar(&opts.ReservedBy, "reserved-by", "", "Only reservations owned by this Dispatcher agent id (default: every active reservation)")
+	cmd.Flags().StringVar(&observations, "issue-observations", "", "JSON array of timestamped Issue observations ({source_ref,state,verified_at}) for the batch; adds Issue state to rows and reports open Issues no active reservation covers")
 	return cmd
 }
 

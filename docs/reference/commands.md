@@ -1121,9 +1121,10 @@ decision, as before. Use it for an order the Dispatcher has already decided
 ("after B's merge, go"); leave it off for a human hold or a gate whose result
 must be judged first.
 
-`squad dispatch sweep [--reserved-by AGENT] [--request-after 10m]
-[--decision-after 5m] [--quiet-after 3h] [--hold-after 2h] [--operation-after
-12h]` (MCP `squad_dispatch_sweep` with `reserved_by` and `*_after_seconds`) reads every
+`squad dispatch sweep [--reserved-by AGENT] [--issue-observations FILE]
+[--request-after 10m] [--decision-after 5m] [--unacted-after 15m]
+[--quiet-after 3h] [--hold-after 2h] [--operation-after 12h]` (MCP
+`squad_dispatch_sweep` with `reserved_by`, `issues` and `*_after_seconds`) reads every
 active reservation in one call, or only one Dispatcher's with `--reserved-by`,
 and writes nothing. Each row carries
 the `dispatch delivery` drift of that reservation plus the fleet checks below,
@@ -1140,8 +1141,48 @@ rows come first.
 | `decision-undelivered` | The current decision's wake exists and reached no Worker receiver | Dispatcher (receiver or session health) |
 | `hold-waits-satisfied` | Every wait of a hold is met and it was not released (no marker, lapsed marker or ambiguous Worker custody) | Dispatcher |
 | `hold-without-checkable-wait` | A hold older than the threshold names no structured wait | Dispatcher: add the wait or lift the hold |
+| `decision-unacted` | An owner set going (the assignment's first decision, or a proceed that follows a hold, including an automatic release) recorded nothing afterwards and has no owned operation in flight | Dispatcher inspects the session once: the handoff has not reached its first step |
 | `owner-quiet` | A proceeding owner recorded no progress and has no owned operation in flight | Dispatcher inspects the session once |
+| `open-issue-no-active-owner` | An observed open Issue whose reservation has ended (completed, or failed by partial retirement) | Dispatcher: a continuation owner and next action, or the recorded reason it waits |
+| `open-issue-unreserved` | An observed open Issue with no reservation in this ledger | Dispatcher: admission |
 | `sweep-read-failed` | This reservation could not be read (the error is in `notes`); the other rows are complete | Dispatcher reads it with `dispatch delivery` |
+
+Each row also separates reading a decision from acting on it:
+
+- `decision_acked_at`: the Worker acknowledged the current decision's wake, or
+  said something on its thread afterwards. A reply such as "received, still
+  waiting" is reading.
+- `first_action_at`, `first_action_seconds`: the earliest thing the Worker
+  started after the current decision, and how long that took. It counts an
+  owned operation begun for this reservation and generation, a `milestone`
+  message, an attestation or phase result recorded by the Worker itself, and a
+  claim the Worker took (the environment lock before a deploy). It does not
+  count a plain message, anything recorded by another agent, anything posted
+  before the decision (even in the same second), or an operation that was
+  already running when the decision arrived.
+
+A dependency is handed over when the released owner starts its next step, so
+`first_action_seconds` is the number to measure a handoff by.
+`decision-unacted` is raised only for a handoff: the assignment's first
+decision, or a proceed that follows a hold. A proceed that amends an owner
+already working is left to `owner-quiet`. A watch still running from before
+the decision keeps `owner-quiet` silent but does not answer `decision-unacted`.
+
+`--issue-observations FILE` (MCP `issues`) takes the caller's own list of
+`{"source_ref","state":"OPEN"|"CLOSED","verified_at"}` for the Issues it is
+responsible for, read from the code host in the same cycle. Rows then carry
+`issue_state` and `continuation`, a closed Issue with a live reservation is
+reported through the delivery drift, and open Issues that no active reservation
+covers get a row and are counted in `open_without_owner`; a reservation never
+bound to a Worker and past its expiry covers nothing. The list is validated
+before anything is read: a missing `source_ref`, a state other than `OPEN` or
+`CLOSED` (any case), a `verified_at` that is not a past unix time, or more than
+500 entries fails the call. The last observation of a source wins. An
+observation older than five minutes says nothing, as in `dispatch delivery`: it
+is counted in `stale_observations` and that Issue is not judged, so
+`open_without_owner: 0` means "none" only when `stale_observations` is 0 too.
+Observations are evidence with an age, never closure authority. Without them
+the sweep covers active reservations only.
 
 A plain Worker message after the current decision appears under `notes`
 (`worker-report-without-event`), not under drift: ordinary progress needs no
