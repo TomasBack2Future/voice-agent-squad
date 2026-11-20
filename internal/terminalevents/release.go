@@ -154,7 +154,7 @@ func (h markedHold) release(ctx context.Context, tx *sql.Tx, repo, worker string
 	if err = recordDecisionHistory(ctx, tx, repo, h.key, h.generation, h.item, d, "[]", "waits-satisfied"); err != nil {
 		return false, err
 	}
-	res, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO terminal_event_receipts
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO terminal_event_receipts
  (repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id)
  VALUES(?,?,?,?,?,?,?,'decision-resolved',?,?)`, repo, worker, id, h.key, h.generation, h.session, h.item, h.outcome, h.outcome)
 	if err != nil {
