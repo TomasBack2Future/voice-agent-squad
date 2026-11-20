@@ -73,12 +73,11 @@ Spend decisions on real coordination, not on ordinary progress.
 | Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, release tag, upstream key restored, a time) | Record it as a start condition in that owner's assignment; the owner parks on its own tracked watch. No hold, no later "your turn", no relay when it becomes true. |
 | Order between owners that you have already decided ("B merges after A", "accept after the batch deploys") | One hold with `passed` phase waits, a time box and `--on-satisfied proceed`. The producer's `phase-result` releases it and wakes the owner; you take no further step. |
 | Order that depends on a result you must judge first | Hold with structured waits and no release marker; judge the result when `dispatch sweep` reports `hold-waits-satisfied`. |
-| Human gate or user pause | A plain hold naming the instruction it comes from. Never give it waits or a release marker; only the person lifts it. |
 | Batch membership, release order, conflicting shared writes, a bounded merge window | Effective decision: the [batch plan](#batch-plan), merge release, or reorder. |
 | Shared environment contention | None; the owner parks on `claim --wait` as a tracked task. |
 | Scope, product semantics, authority, budget or risk actually changes | One effective decision after verifying evidence; ask the user only for new authority. |
 | Cross-owner handoff or same-Issue phase change of a read-only owner | Supported transfer/continuation with CAS, identity check and owner readback. |
-| Human hold or pause | Record and preserve it; never manufacture a `proceed` to bypass it. |
+| Human gate, hold or user pause | In the same cycle replace the owner's current decision, including any hold carrying a release marker, with a plain hold naming the instruction it comes from. Never give it waits or a marker and never manufacture a `proceed` to bypass it; only the person lifts it. Re-issue the ordering hold after the resume. |
 
 A message describing a decision is not the effective decision. When one is
 needed, use `terminal-events decision-set` (or `decision-reorder`) with the exact
@@ -185,8 +184,10 @@ broader product changes, production operations or another repository.
   the next sweep is a session-health question for
   [session continuity](references/session-continuity.md), not a second message. Do not wake resource waiters: `claim --wait` and the holder's release
   notification are the wake.
-- **Answer real requests in the same cycle.** A `decision-request` that names a
-  boundary crossing gets the effective decision now. One that only reports a
+- **Answer real requests in the same cycle.** A `decision-request` that needs a
+  decision (a boundary crossing, a merge release, a satisfied hold without a
+  release marker, an expired time box, a wrong or missing Verification
+  criterion) gets the effective decision now. One that only reports a
   phase or asks for an ordinary step gets a single correction pointing the owner
   to its assignment, not a new revision.
 - **Keep decisions few and complete.** Each new revision should change something
@@ -243,7 +244,9 @@ plan is written: `merge:pr<N>` by the PR's owner, `deploy:staging:<batch>` and
 `deploy:production:<batch>` by the release owner. Name a stage by its batch, not
 by a revision or tag that does not exist yet; the candidate identity goes in the
 result's message, and a re-cut candidate records the same phase again. Put the
-names in the producer's assignment. A member that must wait for a stage holds on
+names in the producer's assignment; for a producer already running, publish them
+once as an effective decision on its reservation (repeating live `--merge-*`
+flags) and verify the readback. A member that must wait for a stage holds on
 it per the decision table and keeps working on everything the hold does not
 block; a member with nothing to wait for holds on nothing. A released hold is an
 ordinary `proceed`: it is never a merge release and adds no production,
@@ -253,8 +256,9 @@ else runs.
 
 ## Sweep timer
 
-Stuck work is found by the Dispatcher itself, on its own clock. At takeover,
-unless a user pause covers this work, first confirm the predecessor's timer is
+Stuck work is found by the Dispatcher itself, on its own clock. At launch, at
+takeover and whenever you own an open reservation with no armed timer, unless a
+user pause covers this work, first confirm the predecessor's timer is
 stopped (two timers are two controllers; if you cannot confirm it, record and
 report instead of arming), then arm one recurring self-wake in this session
 (default every 20 minutes) with the client's own scheduled-prompt facility: a
@@ -284,7 +288,7 @@ checks per reservation with `dispatch delivery` and record the capability gap.
 | `decision-undelivered` | The owner's receiver or session is unhealthy: apply [session continuity](references/session-continuity.md); do not resend by terminal input. |
 | `hold-waits-satisfied` | Judge the recorded verdict. Publish a proceed only if it supports the order and no human hold, pause or production gate covers the owner; otherwise keep the hold and state the reason. |
 | `hold-time-box-expired` | The waits are still unmet. Find out why (the producer's fact may be true but unrecorded: one correction to the producer to record its `phase-result`), then extend, reorder or escalate. Expiry alone never yields a proceed. |
-| `hold-without-checkable-wait` | A hold of your own making: replace it with structured waits or lift it. A hold of human or unknown origin stays; record its instruction reference, or ask once where it came from. |
+| `hold-without-checkable-wait` | An ordering hold of your own making: replace it with structured waits or lift it. A hold of human or unknown origin, a batch-owned child hold and a partial-retirement fence stay; record the instruction or contract it comes from, or ask once. |
 | `owner-quiet` | Inspect that one session once (bounded screen read). Working: leave it. Waiting on something it can observe without a tracked watch: one correction. Waiting on you or on a person: resolve below. |
 | `operation-exit-unhandled`, `owned-operation-unresolved` | The owner's watch ended or was lost and the owner did not continue: one correction to reconcile the actual result. |
 
@@ -298,10 +302,12 @@ Then check the batch, not only the live sessions:
   recorded authority. A production stage without production authorization, a
   frozen candidate, environment custody held by another owner and a human hold
   or pause are not "ready": record what is missing and raise it once.
-- **Waiting on a person.** Any item waiting on the user for more than four hours
-  is raised to the user once, with the concrete question and options. First
-  challenge the label: "needs the user" and "cannot be constructed" are claims
-  to verify, and most are technical steps an owner can take.
+- **Waiting on a person.** An item waiting for an answer or authorization from
+  the user for more than four hours is raised to the user once, with the concrete
+  question and options. First challenge the label: "needs the user" and "cannot
+  be constructed" are claims to verify, and most are technical steps an owner
+  can take. This is about unanswered needs, not about a hold or pause the user
+  set: those are recorded only.
 
 A quiet sweep reports nothing and sends nothing.
 
@@ -316,8 +322,9 @@ forms; the essentials:
   decided, and always `--wait-time-box`: a wait whose producer never records its
   result is otherwise invisible, and the expired box brings it back to you. The
   release marker
-  needs phase waits (`executed` or `passed`), not `terminal`: whether a successor
-  may go when its predecessor ended is yours to judge. It lapses when the time
+  needs phase waits, not `terminal`: whether a successor may go when its
+  predecessor ended is yours to judge. Use `passed`, unless the successor's step
+  is valid whatever the verdict. It lapses when the time
   box expires or the reservation changes Dispatcher, and the hold comes back to
   you in the sweep. A hold that blocks
   one phase never stops implementation, tests, review or acceptance preparation.

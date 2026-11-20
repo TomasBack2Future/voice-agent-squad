@@ -119,8 +119,9 @@ Staging mode <legacy|staging-candidate-v1> with capability evidence <REF or
 not-activated>. Select ENV by component and operation from the project profile
 (ENV-001/002 legacy calls preserved; acquire cross-service sets in lexicographic
 order; a deadlock is never permission to release another task's claim). Use
-claim --wait as a tracked task for contention. Production needs a separate explicit
-production assignment. Merge policy: <standing|release-required>; under
+claim --wait as a tracked task for contention. Production deployment or mutation
+needs a separate explicit production assignment; the read-only route above is the
+only production access this prompt gives. Merge policy: <standing|release-required>; under
 release-required, request the exact head/base release once when ready.
 
 Close the Issue yourself after acceptance, logs and cleanup; no routine

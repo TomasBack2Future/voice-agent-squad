@@ -187,9 +187,10 @@ lock freeing and a time arriving.
   that exits when the condition is true or has definitely failed (format in the
   [delivery lifecycle](../../../../docs/reference/delivery-lifecycle.md#owned-command-result-delivery)).
   Without it, use the plain tracked background task. On wake read the real
-  result, record it and take the next step of the work order; on timeout,
-  classify the failure through the failure branches rather than restarting the
-  same watch. For environment contention run `claim --wait` the same way: a long
+  result, record it and take the next step of the work order. On timeout read
+  the condition: if it is merely not yet true, start the watch again under a new
+  `request_key` and record why; if it failed or cannot become true, take the
+  failure branch. For environment contention run `claim --wait` the same way: a long
   foreground wait is cut by the client's command limit and leaves you idle.
 - **Never spend model turns polling**, sleep in the foreground, or ask the
   Dispatcher whether a condition you can read has changed.
@@ -200,14 +201,17 @@ lock freeing and a time arriving.
   `blocks_phase` stops only that phase: keep doing everything else, including
   operations that name another phase. A hold marked `on_satisfied: proceed`
   releases itself when its waits are met and wakes you with a `decision-resolved`
-  event; read the new revision and continue. Only a satisfied hold without that
-  marker needs one `decision-request` citing the readback.
+  event; read the new revision and continue. A satisfied hold without that
+  marker, and any hold whose time box expired, needs one `decision-request`
+  citing the readback.
 - **What you send the Dispatcher.** A plain message wakes nobody and needs no
   answer; use it for progress. When a finished phase is something another owner
   waits on, record it with `terminal-events phase-result`; expect no reply. Send
   a `decision-request` only when you need a decision: a real boundary crossing
-  (failure branches), a merge release under `release-required`, a satisfied hold
-  without a release marker, or a wrong or missing Verification row. Say which
+  (failure branches), a merge release under `release-required`, a satisfied or
+  expired hold without a release marker, or a wrong or missing Verification
+  criterion, layer or pass condition (a wrong command or fixture you correct
+  yourself). Say which
   decision you need. Do not send one to report a phase, to have
   evidence acknowledged, to confirm a readback or to ask for the next ordinary
   step.
