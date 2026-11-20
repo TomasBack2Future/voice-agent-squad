@@ -280,7 +280,9 @@ improvise one.
 Each wake reads the batch's Issue states from the code host in one call, writes
 them as `{"source_ref","state","verified_at"}` observations, and runs `squad
 dispatch sweep --reserved-by <your agent id> --issue-observations FILE`, so the
-read is as wide as the batch and not only as the live sessions. It acts only on
+read is as wide as the batch and not only as the live sessions. Read the
+states immediately before the sweep: an observation older than five minutes is
+not judged, and `stale_observations` above zero means the read must be repeated. It acts only on
 flagged rows, within recorded authority. It is not a full cycle: run the
 steps of "Run one cycle" afterwards only when the sweep or a pending event shows
 something to reconcile, or authorized work is waiting for admission. A row whose
@@ -296,7 +298,7 @@ checks per reservation with `dispatch delivery` and record the capability gap.
 | `hold-waits-satisfied` | Judge the recorded verdict. Publish a proceed only if it supports the order and no human hold, pause or production gate covers the owner; otherwise keep the hold and state the reason. |
 | `hold-time-box-expired` | The waits are still unmet. Find out why (the producer's fact may be true but unrecorded: one correction to the producer to record its `phase-result`), then extend, reorder or escalate. Expiry alone never yields a proceed. |
 | `hold-without-checkable-wait` | An ordering hold of your own making: replace it with structured waits or lift it. A hold of human or unknown origin, a batch-owned child hold and a partial-retirement fence stay; record the instruction or contract it comes from, or ask once. |
-| `decision-unacted` | An owner was told to proceed, by you or by a released hold, and has recorded nothing since. Inspect that one session once: the release is not done until the owner has read the decision and started its step. Not reading its events: [session continuity](references/session-continuity.md). Read but not started: one correction naming the step. |
+| `decision-unacted` | An owner was set going (its first decision, or a proceed after a hold, by you or by a released hold) and has recorded nothing since. The release is not done until the owner has read the decision and started its step. `decision_acked_at` empty, not reading its events: [session continuity](references/session-continuity.md). Read but not started: one correction naming the step. |
 | `open-issue-no-active-owner` | The Issue is open and its execution has ended. Give it a continuation owner and one next action now, or record the condition it waits on and who lifts it. |
 | `open-issue-unreserved` | An Issue of your batch that nobody was ever assigned: admission. |
 | `owner-quiet` | Inspect that one session once (bounded screen read). Working: leave it. Waiting on something it can observe without a tracked watch: one correction. Waiting on you or on a person: resolve below. |
