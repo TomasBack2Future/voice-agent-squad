@@ -769,5 +769,53 @@ func TestHeldWorkerPollingFirstReceivesTheReleaseNotTheRetiredHold(t *testing.T)
 		if err = worker.Ack(ctx, events[0].ID, "resumed at revision 2"); err != nil {
 			t.Fatalf("heldWakeDelivered=%v: %v", heldWakeDelivered, err)
 		}
+
+// The handoff runs once whatever happens around it: with a Dispatcher that
+// handles nothing, the producer's result releases the dependent; a receiver
+// interrupted after delivery and resumed in a new incarnation is handed the
+// same single release again, and acknowledges it once.
+func TestHandoffRunsOnceAcrossAnIdleDispatcherAndAnInterruptedReceiver(t *testing.T) {
+	s := waitFixture(t, "W", "P")
+	ctx := context.Background()
+	if _, err := s.Decide(ctx, "dispatcher", autoHold(s, t, "W", Wait{Reservation: "P", Phase: "acceptance", Until: "passed"})); err != nil {
+		t.Fatal(err)
+	}
+	// The acceptance owner reports PASS as a formal phase result. The Dispatcher
+	// never polls, acknowledges or decides anything below this line.
+	if _, err := s.Submit(ctx, "worker-P", SubmitRequest{Reservation: "P", Generation: 1, WorkerSession: "native-P", Kind: "phase-result", Body: "acceptance PASS", Phase: "acceptance", Checks: "all", Verdict: "passed"}); err != nil {
+		t.Fatal(err)
+	}
+	// The same report, retried, changes nothing.
+	p := PhaseResult{Reservation: "P", Generation: 1, WorkerSession: "native-P", Phase: "acceptance", Checks: "all", Verdict: "passed", OutcomeID: say(t, s, "worker-P", "TASK-P")}
+	if _, err := s.RecordPhaseResult(ctx, "worker-P", p); err != nil {
+		t.Fatal(err)
+	}
+	worker := Store{DB: s.DB, Repo: s.Repo, Recipient: "worker-W"}
+	first, err := worker.Pending(ctx, "incarnation-1", 0)
+	if err != nil || len(first) != 1 || !strings.HasSuffix(first[0].ID, "/waits-released-r2") {
+		t.Fatalf("release not delivered without the Dispatcher: %+v %v", first, err)
+	}
+	if err = worker.Delivered(ctx, first[0].ID, "incarnation-1"); err != nil {
+		t.Fatal(err)
+	}
+	// Interrupted before acknowledging; the resumed session is a new incarnation.
+	again, err := worker.Pending(ctx, "incarnation-2", time.Hour)
+	if err != nil || len(again) != 1 || again[0].ID != first[0].ID {
+		t.Fatalf("resumed receiver did not get the same release: %+v %v", again, err)
+	}
+	if err = worker.Delivered(ctx, again[0].ID, "incarnation-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.Ack(ctx, again[0].ID, "deploy started"); err != nil {
+		t.Fatal(err)
+	}
+	if rest, err := worker.Pending(ctx, "incarnation-2", 0); err != nil || len(rest) != 0 {
+		t.Fatalf("release delivered again after its acknowledgement: %+v %v", rest, err)
+	}
+	var history, releases int
+	_ = s.DB.QueryRow(`SELECT count(*) FROM dispatch_decision_history WHERE reservation_key='W'`).Scan(&history)
+	_ = s.DB.QueryRow(`SELECT count(*) FROM terminal_event_receipts WHERE reservation_key='W' AND event_id LIKE '%/waits-released-%'`).Scan(&releases)
+	if rev, action, _ := storedDecision(t, s, "W"); rev != 2 || action != "proceed" || history != 2 || releases != 1 {
+		t.Fatalf("not exactly one release: revision %d action %s history %d release wakes %d", rev, action, history, releases)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -562,6 +564,16 @@ func TestCLIOnSatisfiedSweepAndDecisionGetRelease(t *testing.T) {
 	}
 	if out, err = run("dispatch", "sweep", "--reserved-by", "someone-else"); err != nil || !strings.Contains(out, `"active":0`) {
 		t.Fatalf("dispatch sweep owner filter: %v %s", err, out)
+	}
+	// With the batch's Issue observations the sweep also reports an open Issue
+	// that has no reservation at all.
+	observations := filepath.Join(t.TempDir(), "issues.json")
+	stamp := strconv.FormatInt(time.Now().Unix(), 10)
+	if err = os.WriteFile(observations, []byte(`[{"source_ref":"github:o/r#A","state":"OPEN","verified_at":`+stamp+`},{"source_ref":"github:o/r#NEW","state":"OPEN","verified_at":`+stamp+`}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = run("dispatch", "sweep", "--reserved-by", dispatcher, "--issue-observations", observations); err != nil || !strings.Contains(out, `"open_without_owner":1`) || !strings.Contains(out, `"open-issue-unreserved"`) || !strings.Contains(out, `"issue_state":"open"`) {
+		t.Fatalf("dispatch sweep --issue-observations: %v %s", err, out)
 	}
 	// The producer's phase is recorded behind the commands' back, so nothing has
 	// applied the release yet.

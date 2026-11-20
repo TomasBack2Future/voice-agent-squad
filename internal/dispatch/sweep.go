@@ -26,9 +26,19 @@ type SweepOptions struct {
 	// this long. A started operation is normally a watch still running; only an
 	// unusually old one is worth checking for a lost process.
 	OperationAfter time.Duration
+	// UnactedAfter: a proceed decision (set by the Dispatcher or by an automatic
+	// release) after which the owner recorded nothing. A handoff is complete when
+	// the released owner starts its next step, not when the result was recorded.
+	UnactedAfter time.Duration
 	// ReservedBy limits the sweep to one Dispatcher's reservations; empty reads
 	// every active reservation of the ledger.
 	ReservedBy string
+	// Issues are the caller's timestamped observations of the Issues it is
+	// responsible for (its batch). With them the sweep reports each row's Issue
+	// state and finds what no live assignment covers: an Issue still open whose
+	// reservation has ended, and one that never had a reservation. They are
+	// evidence with an age, never closure authority.
+	Issues []IssueObservation
 }
 
 func (o SweepOptions) withDefaults() SweepOptions {
@@ -47,16 +57,23 @@ func (o SweepOptions) withDefaults() SweepOptions {
 	if o.OperationAfter <= 0 {
 		o.OperationAfter = 12 * time.Hour
 	}
+	if o.UnactedAfter <= 0 {
+		o.UnactedAfter = 15 * time.Minute
+	}
 	return o
 }
 
 // SweepRow is one active assignment with the facts a stuck check needs.
 type SweepRow struct {
-	Reservation        string         `json:"reservation"`
-	SourceRef          string         `json:"source_ref"`
-	Item               string         `json:"item,omitempty"`
-	State              string         `json:"state"`
-	Generation         int64          `json:"generation"`
+	Reservation string `json:"reservation"`
+	SourceRef   string `json:"source_ref"`
+	Item        string `json:"item,omitempty"`
+	State       string `json:"state"`
+	Generation  int64  `json:"generation"`
+	// IssueState is "open", "closed" or "unknown" (no fresh observation given);
+	// Continuation says who carries an open Issue (see dispatch delivery).
+	IssueState         string         `json:"issue_state,omitempty"`
+	Continuation       string         `json:"continuation,omitempty"`
 	DecisionAction     string         `json:"decision_action,omitempty"`
 	DecisionRevision   int64          `json:"decision_revision,omitempty"`
 	DecisionAt         int64          `json:"decision_at,omitempty"`
@@ -69,6 +86,10 @@ type SweepRow struct {
 	// canonical thread, an attestation, a phase result or an owned operation.
 	LastProgressAt int64 `json:"last_progress_at"`
 	QuietSeconds   int64 `json:"quiet_seconds"`
+	// FirstActionAt is the owner's first recorded fact after the current
+	// decision; FirstActionSeconds is how long that took. Zero: none yet.
+	FirstActionAt      int64 `json:"first_action_at,omitempty"`
+	FirstActionSeconds int64 `json:"first_action_seconds,omitempty"`
 	// OpenRequests are Worker decision requests the Dispatcher has not handled.
 	OpenRequests    int      `json:"open_requests"`
 	OldestRequestAt int64    `json:"oldest_request_at,omitempty"`
@@ -81,10 +102,13 @@ type SweepRow struct {
 
 // SweepReport is the whole fleet in one read.
 type SweepReport struct {
-	VerifiedAt int64      `json:"verified_at"`
-	Active     int        `json:"active"`
-	Flagged    int        `json:"flagged"`
-	Rows       []SweepRow `json:"rows"`
+	VerifiedAt int64 `json:"verified_at"`
+	Active     int   `json:"active"`
+	Flagged    int   `json:"flagged"`
+	// OpenWithoutOwner counts observed open Issues that no active reservation
+	// covers; their rows follow the active ones.
+	OpenWithoutOwner int        `json:"open_without_owner"`
+	Rows             []SweepRow `json:"rows"`
 }
 
 // Sweep reads every active reservation of this ledger and reports which ones
@@ -106,9 +130,15 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 		}
 		active = own
 	}
+	observed := make(map[string]IssueObservation, len(opts.Issues))
+	for _, o := range opts.Issues {
+		observed[o.Source] = o
+	}
+	covered := map[string]bool{}
 	report := &SweepReport{VerifiedAt: now, Active: len(active), Rows: make([]SweepRow, 0, len(active))}
 	for _, r := range active {
-		d, err := s.Delivery(ctx, r.ItemID, IssueObservation{})
+		covered[r.SourceRef] = true
+		d, err := s.Delivery(ctx, r.ItemID, observed[r.SourceRef])
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, err
@@ -121,6 +151,9 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 		row := SweepRow{Reservation: r.ItemID, SourceRef: r.SourceRef, Item: r.CanonicalItemID, State: r.State, Generation: r.Generation,
 			DecisionAction: d.DecisionAction, RemainingCondition: d.RemainingCondition, Waits: d.Waits, NextOwner: d.NextOwner,
 			OperationState: d.OperationState, Drift: []string{}}
+		if _, ok := observed[r.SourceRef]; ok {
+			row.IssueState, row.Continuation = d.IssueState, d.Continuation
+		}
 		for _, code := range d.Drift {
 			switch {
 			case code == "worker-report-without-event":
@@ -185,14 +218,83 @@ func (s *Store) Sweep(ctx context.Context, opts SweepOptions) (*SweepReport, err
 				row.Drift = append(row.Drift, "decision-undelivered")
 			}
 		}
+		if row.DecisionRevision > 0 {
+			// The owner's first message on its thread after the current decision
+			// (an owned operation's start is such a message).
+			if err = s.db.QueryRowContext(ctx, `SELECT COALESCE(min(m.ts),0) FROM messages m
+ WHERE m.repo_id=? AND m.thread=? AND m.ts>=? AND m.agent_id!=?
+ AND (EXISTS(SELECT 1 FROM claims c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=?)
+  OR EXISTS(SELECT 1 FROM claim_history c WHERE c.repo_id=m.repo_id AND c.item_id=m.thread AND c.agent_id=m.agent_id AND c.claimed_at>=?))`,
+				s.repoID, r.CanonicalItemID, row.DecisionAt, r.ReservedBy, r.ReservedAt, r.ReservedAt).Scan(&row.FirstActionAt); err != nil {
+				return nil, err
+			}
+			if row.FirstActionAt == 0 && row.LastProgressAt >= row.DecisionAt {
+				// A phase result or attestation without a message is an action too.
+				row.FirstActionAt = row.LastProgressAt
+			}
+			if row.FirstActionAt > 0 {
+				row.FirstActionSeconds = row.FirstActionAt - row.DecisionAt
+			}
+		}
 		switch {
 		case row.DecisionAction == "hold":
 			if structured == 0 && now-row.DecisionAt > int64(opts.HoldAfter.Seconds()) {
 				row.Drift = append(row.Drift, "hold-without-checkable-wait")
 			}
-		case d.OperationState != "started-unresolved" && row.QuietSeconds > int64(opts.QuietAfter.Seconds()):
+		case d.OperationState == "started-unresolved":
+			// A tracked operation in flight is the owner acting.
+		case row.DecisionRevision > 0 && row.FirstActionAt == 0 && now-row.DecisionAt > int64(opts.UnactedAfter.Seconds()):
+			// Told to proceed (or released) and nothing recorded since: the handoff
+			// has not reached the owner's first step.
+			row.Drift = append(row.Drift, "decision-unacted")
+		case row.QuietSeconds > int64(opts.QuietAfter.Seconds()):
 			row.Drift = append(row.Drift, "owner-quiet")
 		}
+		report.Rows = append(report.Rows, row)
+	}
+	// Observed open Issues that no active reservation covers: the reservation
+	// ended (partial retirement, a completed execution) or never existed. Without
+	// this the fleet read is only as wide as the live sessions.
+	for _, o := range opts.Issues {
+		if covered[o.Source] {
+			continue
+		}
+		covered[o.Source] = true
+		var key, owner string
+		err := s.db.QueryRowContext(ctx, `SELECT item_id,reserved_by FROM dispatch_reservations WHERE repo_id=? AND source_ref=?`, s.repoID, o.Source).Scan(&key, &owner)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		if err == sql.ErrNoRows {
+			if o.State == "OPEN" && o.VerifiedAt > 0 && o.VerifiedAt <= now && now-o.VerifiedAt <= int64((5*time.Minute).Seconds()) {
+				report.OpenWithoutOwner++
+				report.Rows = append(report.Rows, SweepRow{SourceRef: o.Source, State: "unreserved", IssueState: "open", Continuation: "unassigned",
+					NextOwner: opts.ReservedBy, OperationState: "unknown", Drift: []string{"open-issue-unreserved"}})
+			}
+			continue
+		}
+		if opts.ReservedBy != "" && owner != opts.ReservedBy {
+			continue
+		}
+		d, err := s.Delivery(ctx, key, o)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			report.Rows = append(report.Rows, SweepRow{Reservation: key, SourceRef: o.Source, State: "unknown", NextOwner: owner, OperationState: "unknown",
+				Drift: []string{"sweep-read-failed"}, Notes: []string{err.Error()}})
+			continue
+		}
+		if d.IssueState != "open" {
+			// Closed, or the observation is too old to say: nothing to carry.
+			continue
+		}
+		report.OpenWithoutOwner++
+		row := SweepRow{Reservation: key, SourceRef: o.Source, Item: d.Reservation.CanonicalItemID, State: d.Reservation.State, Generation: d.Reservation.Generation,
+			IssueState: d.IssueState, Continuation: d.Continuation, RemainingCondition: d.RemainingCondition, NextOwner: d.NextOwner,
+			OperationState: d.OperationState, LastProgressAt: max(d.LastOwnerActivityAt, d.LastResultAt, d.Reservation.UpdatedAt),
+			Drift: append([]string{"open-issue-no-active-owner"}, d.Drift...)}
+		row.QuietSeconds = max(now-row.LastProgressAt, 0)
 		report.Rows = append(report.Rows, row)
 	}
 	sort.SliceStable(report.Rows, func(i, j int) bool {

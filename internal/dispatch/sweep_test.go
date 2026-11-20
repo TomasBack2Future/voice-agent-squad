@@ -110,8 +110,13 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 		t.Fatalf("undelivered release hidden: %+v %v", report, err)
 	}
 	exec(`UPDATE terminal_event_receipts SET delivered_session='x',delivered_at=99000 WHERE event_id LIKE '%/waits-released-r2'`)
-	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour}); err != nil || len(sweepRow(t, report, "WAITS").Drift) != 0 {
+	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour, UnactedAfter: 1000 * time.Hour}); err != nil || len(sweepRow(t, report, "WAITS").Drift) != 0 {
 		t.Fatalf("delivered release flagged: %+v %v", report, err)
+	}
+	// Delivered is not acted on: released three hours ago with nothing recorded
+	// since, the handoff has not reached the owner's first step.
+	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: 1000 * time.Hour}); err != nil || !slices.Contains(sweepRow(t, report, "WAITS").Drift, "decision-unacted") {
+		t.Fatalf("released owner with no action not flagged: %+v %v", sweepRow(t, report, "WAITS"), err)
 	}
 	// An owner whose hold ended a minute ago is not quiet, however long it was held.
 	exec(`UPDATE dispatch_decision_history SET decided_at=? WHERE reservation_key='WAITS'`, 100000-60)
@@ -191,5 +196,127 @@ func TestSweepFlagsStuckAssignmentsAcrossTheFleet(t *testing.T) {
 	// Thresholds are the caller's.
 	if report, err = s.Sweep(ctx, SweepOptions{QuietAfter: time.Minute}); err != nil || !slices.Contains(sweepRow(t, report, "ASKED").Drift, "owner-quiet") {
 		t.Fatalf("custom threshold ignored: %+v %v", report, err)
+	}
+}
+
+// A handoff is followed to the released owner's first recorded step, and the
+// time it took is reported for measurement.
+func TestSweepFollowsADecisionToTheOwnersFirstAction(t *testing.T) {
+	now := time.Unix(100000, 0)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"ACTED", "IDLE", "WATCH", "HELD"} {
+		if _, err := s.Reserve(ctx, k, "github:o/r#"+k, "dispatcher", "", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test',?,?,1000,1000,'',0)`, "T-"+k, "worker-"+k)
+	}
+	exec(`UPDATE dispatch_reservations SET canonical_item_id='T-'||item_id,state='dispatched',worker_thread_id='native-'||item_id,reserved_at=1000`)
+	decided := int64(100000 - 3600)
+	for i, k := range []string{"ACTED", "IDLE", "WATCH", "HELD"} {
+		id := int64(10 + i)
+		exec(`INSERT INTO messages(id,repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES(?,'repo-test',?,'dispatcher',?,'say','go','[]','normal')`, id, decided, "T-"+k)
+		action := "proceed"
+		if k == "HELD" {
+			action = "hold"
+		}
+		exec(`INSERT INTO dispatch_decisions(repo_id,reservation_key,generation,item_id,revision,outcome_id,action,condition,worker_agent) VALUES('repo-test',?,1,?,1,?,?,'c',?)`, k, "T-"+k, id, action, "worker-"+k)
+		exec(`INSERT INTO terminal_event_receipts(repo_id,recipient,event_id,reservation_key,generation,worker_session,item_id,kind,outcome_id,source_message_id,delivered_session,delivered_at) VALUES('repo-test',?,?,?,1,?,?,'decision-resolved',?,?,'x',?)`,
+			"worker-"+k, "e-"+k, k, "native-"+k, "T-"+k, id, id, decided+5)
+	}
+	// ACTED started four minutes after its decision; WATCH parked on a tracked watch.
+	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-ACTED','T-ACTED','say','deploy started','[]','normal')`, decided+240)
+	exec(`INSERT INTO messages(repo_id,ts,agent_id,thread,kind,body,mentions,priority) VALUES('repo-test',?,'worker-WATCH','T-WATCH','owned-operation',?,'[]','normal')`, decided+30,
+		`{"request":{"reservation":"WATCH","generation":1,"worker_session":"native-WATCH","request_key":"deploy-watch"},"state":"started"}`)
+	report, err := s.Sweep(ctx, SweepOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := sweepRow(t, report, "ACTED"); slices.Contains(row.Drift, "decision-unacted") || row.FirstActionAt != decided+240 || row.FirstActionSeconds != 240 {
+		t.Fatalf("an owner that acted: %+v", row)
+	}
+	if row := sweepRow(t, report, "IDLE"); !slices.Contains(row.Drift, "decision-unacted") || row.FirstActionAt != 0 {
+		t.Fatalf("an owner told to proceed that did nothing: %+v", row)
+	}
+	if row := sweepRow(t, report, "WATCH"); slices.Contains(row.Drift, "decision-unacted") || row.FirstActionSeconds != 30 {
+		t.Fatalf("an owner parked on a tracked watch: %+v", row)
+	}
+	if row := sweepRow(t, report, "HELD"); slices.Contains(row.Drift, "decision-unacted") {
+		t.Fatalf("a held owner is not expected to act: %+v", row)
+	}
+	// Inside the threshold nothing is flagged yet.
+	if report, err = s.Sweep(ctx, SweepOptions{UnactedAfter: 2 * time.Hour}); err != nil || slices.Contains(sweepRow(t, report, "IDLE").Drift, "decision-unacted") {
+		t.Fatalf("flagged inside the threshold: %+v %v", report, err)
+	}
+}
+
+// With the batch's Issue observations the sweep is as wide as the batch, not
+// as the live sessions: an open Issue whose execution ended, and one that
+// never had a reservation, are both found; a closed or stale one is not.
+func TestSweepFindsOpenIssuesNoActiveReservationCovers(t *testing.T) {
+	now := time.Unix(100000, 0)
+	s := newDispatchStore(t, &now)
+	ctx := context.Background()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"LIVE", "PARTIAL", "DONEOPEN", "DONECLOSED", "OTHERS"} {
+		if _, err := s.Reserve(ctx, k, "github:o/r#"+k, "dispatcher", "", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`UPDATE dispatch_reservations SET canonical_item_id='T-'||item_id,state='dispatched',worker_thread_id='native-'||item_id,reserved_at=1000`)
+	exec(`UPDATE dispatch_reservations SET state='failed' WHERE item_id='PARTIAL'`)
+	exec(`UPDATE dispatch_reservations SET state='completed' WHERE item_id IN ('DONEOPEN','DONECLOSED')`)
+	exec(`UPDATE dispatch_reservations SET state='completed',reserved_by='another-dispatcher' WHERE item_id='OTHERS'`)
+	exec(`INSERT INTO claims(repo_id,item_id,agent_id,claimed_at,last_touch,intent,long) VALUES('repo-test','T-LIVE','worker-LIVE',1000,1000,'',0)`)
+	obs := func(key, state string, at int64) IssueObservation {
+		return IssueObservation{Source: "github:o/r#" + key, State: state, VerifiedAt: at}
+	}
+	issues := []IssueObservation{obs("LIVE", "OPEN", 99990), obs("PARTIAL", "OPEN", 99990), obs("DONEOPEN", "OPEN", 99990), obs("DONECLOSED", "CLOSED", 99990),
+		obs("OTHERS", "OPEN", 99990), obs("NEVER", "OPEN", 99990), obs("NEVERCLOSED", "CLOSED", 99990), obs("STALE", "OPEN", 90000)}
+	report, err := s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher", Issues: issues})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Active != 1 || report.OpenWithoutOwner != 3 {
+		t.Fatalf("active %d open without owner %d: %+v", report.Active, report.OpenWithoutOwner, report.Rows)
+	}
+	if row := sweepRow(t, report, "LIVE"); row.IssueState != "open" || slices.Contains(row.Drift, "open-issue-no-active-owner") {
+		t.Fatalf("live owner: %+v", row)
+	}
+	for _, key := range []string{"PARTIAL", "DONEOPEN"} {
+		if row := sweepRow(t, report, key); !slices.Contains(row.Drift, "open-issue-no-active-owner") || row.IssueState != "open" || row.NextOwner != "dispatcher" {
+			t.Fatalf("%s: an open Issue whose execution ended was not handed back: %+v", key, row)
+		}
+	}
+	unreserved := false
+	for _, row := range report.Rows {
+		switch {
+		case row.SourceRef == "github:o/r#NEVER":
+			unreserved = slices.Contains(row.Drift, "open-issue-unreserved") && row.State == "unreserved"
+		case row.Reservation == "DONECLOSED", row.Reservation == "OTHERS", row.SourceRef == "github:o/r#NEVERCLOSED", row.SourceRef == "github:o/r#STALE":
+			t.Fatalf("a closed, foreign or stale observation produced a row: %+v", row)
+		}
+	}
+	if !unreserved {
+		t.Fatalf("an open Issue with no reservation was not found: %+v", report.Rows)
+	}
+	// Without observations the sweep is unchanged: live reservations only.
+	if report, err = s.Sweep(ctx, SweepOptions{ReservedBy: "dispatcher"}); err != nil || len(report.Rows) != 1 || report.OpenWithoutOwner != 0 || report.Rows[0].IssueState != "" {
+		t.Fatalf("sweep without observations changed: %+v %v", report, err)
+	}
+	// A closed Issue with a live reservation is the existing delivery drift.
+	if report, err = s.Sweep(ctx, SweepOptions{Issues: []IssueObservation{obs("LIVE", "CLOSED", 99990)}}); err != nil || !slices.Contains(sweepRow(t, report, "LIVE").Drift, "closed-issue-active-reservation") {
+		t.Fatalf("closed Issue with a live reservation: %+v %v", report, err)
 	}
 }
