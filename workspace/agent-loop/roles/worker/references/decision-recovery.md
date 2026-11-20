@@ -48,7 +48,8 @@ you with the new revision. Any other hold whose waits are all met, and any hold
 whose time box ended, is not permission to proceed: submit one
 `decision-request` citing that readback and keep working on what the hold does
 not block (`blocks_phase`). A hold that only blocks one phase (for example
-`merge`) never stops implementation, tests, review or acceptance preparation.
+`deploy`) never stops tests, review, acceptance preparation or your watches;
+source edits are refused under any hold where the write fence applies.
 
 When a phase finishes and another owner waits on it (a merge you executed under
 a release, a deploy, an acceptance run), record it in one call:

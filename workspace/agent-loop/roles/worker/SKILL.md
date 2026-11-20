@@ -198,8 +198,11 @@ lock freeing and a time arriving.
   condition you were watching is true; a hold without `blocks_phase` stops every
   mutation and every new watch, and its release or the next decision is what
   wakes you. Read `terminal-events decision-get` at each wake. A hold scoped with
-  `blocks_phase` stops only that phase: keep doing everything else, including
-  operations that name another phase. A hold marked `on_satisfied: proceed`
+  `blocks_phase` stops that phase's operations: keep testing, reviewing,
+  preparing acceptance and running watches and operations that name another
+  phase. Source edits are refused under any hold where the write fence applies;
+  if you still have source work and are held, say so in one decision request
+  rather than waiting. A hold marked `on_satisfied: proceed`
   releases itself when its waits are met and wakes you with a `decision-resolved`
   event; read the new revision and continue. A satisfied hold without that
   marker, and any hold whose time box expired, needs one `decision-request`

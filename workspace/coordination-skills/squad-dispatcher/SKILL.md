@@ -71,7 +71,8 @@ Spend decisions on real coordination, not on ordinary progress.
 | Progress message, phase report, evidence or readback from an owner | None. Do not acknowledge, accept or approve it with a message or a decision; read it when a decision of yours depends on it. |
 | Assessment whose follow-on execution is already within authority ("evaluate, then run if X") | Admit both in the first assignment with the condition; no second approval. |
 | Dependency the owner can observe itself (CI terminal, PR merged, deployment finished, release tag, upstream key restored, a time) | Record it as a start condition in that owner's assignment; the owner parks on its own tracked watch. No hold, no later "your turn", no relay when it becomes true. |
-| Order between owners that you have already decided ("B merges after A", "accept after the batch deploys") | One hold with `passed` phase waits, a time box and `--on-satisfied proceed`. The producer's `phase-result` releases it and wakes the owner; you take no further step. |
+| Stage order you have already decided ("accept after the batch deploys", "start after A's migration passed") | One hold with `passed` phase waits, a time box and `--on-satisfied proceed`. The producer's `phase-result` releases it and wakes the owner; you take no further step. Use it where the owner has no source work left for that wait: under the Worker write fence a hold, scoped or not, refuses source edits. |
+| Merge order between owners who are still working | `--merge-policy release-required` with a `proceed`, and the merge release when the predecessor has merged. The owner keeps editing, testing and reviewing; only its merge waits. Not a hold. |
 | Order that depends on a result you must judge first | Hold with structured waits and no release marker; judge the result when `dispatch sweep` reports `hold-waits-satisfied`. |
 | Batch membership, release order, conflicting shared writes, a bounded merge window | Effective decision: the [batch plan](#batch-plan), merge release, or reorder. |
 | Shared environment contention | None; the owner parks on `claim --wait` as a tracked task. |
@@ -240,10 +241,13 @@ Keep one current plan per release batch in the existing checkpoint:
 
 Encode the plan as decisions the ledger can check, not as prose. Each stage has
 one named producer who records its `phase-result` under a name fixed when the
-plan is written: `merge:pr<N>` by the PR's owner, `deploy:staging:<batch>` and
-`deploy:production:<batch>` by the release owner. Name a stage by its batch, not
-by a revision or tag that does not exist yet; the candidate identity goes in the
-result's message, and a re-cut candidate records the same phase again. Put the
+plan is written: `merge:pr<N>` by the PR's owner, `deploy:staging:<batch>:a1`
+and `deploy:production:<batch>:a1` by the release owner. Name a stage by its
+batch and attempt, not by a revision or tag that does not exist yet; the
+candidate identity goes in the result's message. A re-cut candidate is a new
+attempt with a new name (`:a2`): a wait on a phase that already has a result is
+refused as already satisfied, so publish the new name to the producer and
+re-issue the members' holds on it. Put the
 names in the producer's assignment; for a producer already running, publish them
 once as an effective decision on its reservation (repeating live `--merge-*`
 flags) and verify the readback. A member that must wait for a stage holds on
@@ -290,7 +294,8 @@ checks per reservation with `dispatch delivery` and record the capability gap.
 | `hold-time-box-expired` | The waits are still unmet. Find out why (the producer's fact may be true but unrecorded: one correction to the producer to record its `phase-result`), then extend, reorder or escalate. Expiry alone never yields a proceed. |
 | `hold-without-checkable-wait` | An ordering hold of your own making: replace it with structured waits or lift it. A hold of human or unknown origin, a batch-owned child hold and a partial-retirement fence stay; record the instruction or contract it comes from, or ask once. |
 | `owner-quiet` | Inspect that one session once (bounded screen read). Working: leave it. Waiting on something it can observe without a tracked watch: one correction. Waiting on you or on a person: resolve below. |
-| `operation-exit-unhandled`, `owned-operation-unresolved` | The owner's watch ended or was lost and the owner did not continue: one correction to reconcile the actual result. |
+| `operation-exit-unhandled` | The owner's watch ended and the owner did not continue: one correction to reconcile the actual result. |
+| `owned-operation-unresolved` | A watch started long ago with no recorded exit (a younger one is only the note `operation-in-flight` and needs nothing). Check once that its task is still running; running: leave it; gone: one correction to reconcile. |
 
 Then check the batch, not only the live sessions:
 
@@ -327,7 +332,9 @@ forms; the essentials:
   is valid whatever the verdict. It lapses when the time
   box expires or the reservation changes Dispatcher, and the hold comes back to
   you in the sweep. A hold that blocks
-  one phase never stops implementation, tests, review or acceptance preparation.
+  one phase never stops tests, review, acceptance preparation or the owner's
+  watches; source edits are refused under any hold where the Worker write fence
+  applies, which is why merge order uses the merge policy instead.
   A hold described only in its condition text is not checkable by anyone: use it
   for a human hold, and name the instruction it comes from. These flags, `decision-reorder` and `phase-result` exist only when
   the installed binary lists them; otherwise apply the same order by hand (CAS the
