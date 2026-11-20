@@ -83,6 +83,36 @@ class AssignmentScenarioTests(unittest.TestCase):
         designated = squad + ' 用户本轮指定维护 agent 修复。'
         self.assertEqual(contract.assignment_findings(designated), [])
 
+    def test_implementation_assignment_carries_the_verification_line(self):
+        base = 'Invoke $studio-issue-worker. Process exactly github:o/voice-agent-studio#1801. ' + self.CLOSEOUT
+        rule = lambda text: [r for r, _ in contract.assignment_findings(text)]
+        self.assertIn('missing-verification-block', rule(base))
+        for line in ['Verification block: Issue body, section "Design / admission" @ v2',
+                     'Verification block: https://github.com/o/voice-agent-studio/issues/1801#issuecomment-7017013845 @ v3',
+                     '- Verification block: Issue body, section 3.2 @ v12',
+                     '  Verification block: design section revision d4 @v1']:
+            self.assertEqual(rule(base + '\n' + line + '\n'), [], line)
+        for absent in ['Verification block: none yet',
+                       'Verification block: @ v2',
+                       'Verification block: Issue body @ v0',
+                       'Verification is by the usual checks, design revision v2.',
+                       "Done means every row of the Issue's Verification block revision v2 passes."]:
+            self.assertIn('missing-verification-block', rule(base + '\n' + absent + '\n'), absent)
+        # Other roles carry their own completion contract, even when they name an Issue.
+        for other in ['Investigate why github:o/voice-agent-studio#1801 lost its pull secret and report evidence.',
+                      'Invoke $squad-env-recovery for ENV-002; holder of voice-agent-studio#1801 is stopped.',
+                      'Invoke $studio-deploy-production for release v0.7.80.']:
+            self.assertEqual(rule(other + ' 无例行预关单审批。'), [], other)
+
+    def test_ordinary_verification_wording_never_blocks_a_launch(self):
+        # The scanner does not guess at acceptance-tooling wording.
+        for ok in ['Add the failing unit test to verify job retry.',
+                   'Create two Sessions and verify job status in the UI.',
+                   'Submit the PR and run the verification script from your machine.',
+                   '新增单元测试验证导入 Job 幂等',
+                   'Do not add an acceptance workflow or run the check as a cluster Job.']:
+            self.assertEqual(contract.findings(ok), [], ok)
+
     def test_regressed_template_is_caught(self):
         old = 'Studio #1 结项：先不要关单，提交 ready-to-close decision-request，等待 Dispatcher 批准。'
         self.assertIn('pre-close-approval', [r for r, _ in contract.assignment_findings(old)])

@@ -20,16 +20,26 @@ semantics, shared-resource order or risk.
    session but are not a message transport; without a verified message
    API/mailbox the Worker persists events for pending reconciliation. Never pass a
    native Claude UUID to an App thread API.
-2. **Outcome and end condition**: the user result and every required acceptance
-   criterion with its source. A merged PR, a cleared review finding or a passing
-   substitute fixture is not the end condition.
+2. **Outcome and end condition**: the user result and the Issue's Verification
+   block, cited on its own line as `Verification block: <locator> @ v<N>` (the
+   assignment checker requires exactly this form): every criterion with its layer (`unit`,
+   `local`, `staging`, `production`), method, pass and not pass. A merged PR, a
+   cleared review finding or a passing substitute fixture is not the end
+   condition. Closure follows the layers: only `production` rows wait for the
+   production deploy.
 3. **Owner scope**: owned resources and fixtures, permitted operations (source,
    PR, merge, staging, production, model calls, configuration writes, Issue
    close), target environments, explicit exclusions, and retained fixtures or
    custody that must survive.
-4. **Normal path**: the expected sequence, start conditions the owner observes
-   itself (for example "after PR #N merges", "when the provider key validates"),
-   the acceptance method and actual route (local client or owned browser against
+4. **Normal path**: the expected sequence; start conditions the owner watches
+   itself through a tracked `operation run` watch (for example "after PR #N
+   merges", "when deploy run R finishes", "when the provider key validates"),
+   with no later notification from the Dispatcher; the batch stage it waits on,
+   if any, as a hold that releases itself; the phases other owners wait on,
+   which this owner records with `phase-result` under exactly the given names;
+   for `production` rows, the read-only route and the authorization reference
+   that covers it (the row itself grants nothing); the acceptance method and
+   actual route (local client or owned browser against
    the real target, credential route, observation, cleanup) and the evidence
    layers agreed against the Issue. Pre-authorize conditional follow-on work:
    "assess X; if condition C holds, execute Y within this scope".
@@ -76,9 +86,12 @@ Invoke $studio-issue-worker. Process exactly <ISSUE-REF> using Squad item
 AGENTS.md and repository instructions first, then the design section
 <DESIGN-SECTION-LOCATOR> revision <DESIGN-REVISION> (READY) before product edits.
 
-Outcome: <USER RESULT>. Done means every criterion below passes on the exact
-deployed revision, owned fixtures are cleaned up and resources released:
-<AC LIST WITH SOURCES>.
+Outcome: <USER RESULT>.
+Verification block: <LOCATOR> @ v<N>
+Done means every row of that block passes at its stated layer, owned fixtures
+are cleaned up and resources released. Commit the block's named tests and see them fail
+before the fix. Rows at unit, local and staging close without a production
+release; only production rows wait for it, with you parked on the release stage.
 
 Scope: you own <RESOURCES/FIXTURES>; permitted: implementation, tests, PR,
 policy-compliant merge, staging claim/deployment/rollback, acceptance, Issue/PR
@@ -88,7 +101,12 @@ authorization for this Issue; ask only for a concrete missing credential, user-o
 interaction, new sensitive-data disclosure, production mutation outside this
 scope or material scope expansion.
 
-Path: <EXPECTED SEQUENCE>. Start conditions you observe yourself: <CONDITIONS>.
+Path: <EXPECTED SEQUENCE>. Start conditions you watch yourself with a tracked
+operation run watch, without waiting to be told: <CONDITIONS>. Batch stage you
+wait on, released automatically when recorded: <RESERVATION:PHASE or none>.
+Phases others wait on; record each with phase-result under exactly these names:
+<PHASE NAMES or none>. Production rows: read-only route <ROUTE> authorized by
+<REFERENCE>, or none.
 Acceptance route prepared during implementation: <METHOD, TARGET, CREDENTIAL
 ROUTE, OBSERVATION, CLEANUP>. Conditional work already authorized: <IF C THEN Y>.
 
@@ -101,8 +119,9 @@ Staging mode <legacy|staging-candidate-v1> with capability evidence <REF or
 not-activated>. Select ENV by component and operation from the project profile
 (ENV-001/002 legacy calls preserved; acquire cross-service sets in lexicographic
 order; a deadlock is never permission to release another task's claim). Use
-foreground claim --wait for contention. Production needs a separate explicit
-production assignment. Merge policy: <standing|release-required>; under
+claim --wait as a tracked task for contention. Production deployment or mutation
+needs a separate explicit production assignment; the read-only route above is the
+only production access this prompt gives. Merge policy: <standing|release-required>; under
 release-required, request the exact head/base release once when ready.
 
 Close the Issue yourself after acceptance, logs and cleanup; no routine

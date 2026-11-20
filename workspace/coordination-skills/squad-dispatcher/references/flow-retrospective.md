@@ -61,9 +61,9 @@ Worker, or terminate a shared backend. Check only the owned operations needed fo
 safe custody and record pending versus acknowledged pause accurately.
 
 Before relying on unattended progress, verify the actual session/ledger/receiver
-binding and the existing heartbeat's enabled state and target. Preserve explicit
+binding and that the Dispatcher's sweep timer is armed in the current session. Preserve explicit
 pauses and one-controller ownership. Delivered, handled and completed are distinct
-states. Unsupported App delivery or a paused/old-session heartbeat is a capability
+states. Unsupported App delivery or a stopped or old-session sweep timer is a capability
 gap to record and assign, not a reason to claim the Dispatcher will wake.
 
 ## Release findings

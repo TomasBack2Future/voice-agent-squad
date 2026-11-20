@@ -37,7 +37,10 @@ creation; never invent a PR number or remote approval.
 ## What the reviewer reviews
 
 The review input is the complete aggregate `base...head` diff plus the frozen
-Issue contract, acceptance mapping and substantive PR description. Commits are
+Issue contract, acceptance mapping and substantive PR description, including the
+original failing case from the Issue's Verification block. Ask the reviewer to
+check once, against that case, that the tests and evidence would fail if the
+fix were wrong or absent. Commits are
 authoring history, not separate review units. Do not start one review for each
 commit or use an approval for an earlier head as evidence for a later head.
 

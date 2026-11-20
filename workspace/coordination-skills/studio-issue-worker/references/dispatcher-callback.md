@@ -72,9 +72,9 @@ generated on each attempt.
    cycle when it next runs. Do not claim a wakeup was scheduled or delivered.
 3. Record `callback-sent` on confirmed transport success. On explicit failure or
    uncertain delivery record `callback-failed` or `callback-unknown`, preserve
-   the payload for heartbeat reconciliation and explain it in the final answer.
+   the payload for the Dispatcher's next sweep and explain it in the final answer.
    Never blind-retry an ambiguous send or create a second task/automation.
-   Use the existing bounded reconciliation/heartbeat fallback when configured;
+   The Dispatcher's sweep is the bounded reconciliation fallback;
    do not invent a watcher or ask the user to ferry the event. If no wakeup
    exists, report notification pending honestly while preserving durable state.
 4. Finish the user-visible final response without waiting for a Dispatcher ACK.

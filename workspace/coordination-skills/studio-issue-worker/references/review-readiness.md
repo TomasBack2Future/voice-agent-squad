@@ -101,7 +101,7 @@ only the existing materially repaired pre-sampling exception allows retry.
    rather than treating process start or a green CI result as completed review.
    Exit 0 is a valid approved review, 2 is a blocking verdict to verify, and 1
    is an operational failure with no approval. Use managed completion waits or
-   blocking CI watchers instead of model-driven polling. Keep a retained join
+   tracked CI watches instead of model-driven polling. Keep a retained join
    handle or completion callback that resumes the Worker; do not end at an idle
    prompt with anonymous background shells and assume their exit will advance
    the lifecycle.

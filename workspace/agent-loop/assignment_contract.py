@@ -77,9 +77,27 @@ SQUAD_TARGET = re.compile(r"voice-agent-squad|github:[^\s]*squad#\d+|Squad (?:to
 DESIGNATION = re.compile(r"(?i)(?:user[- ]designat\w*|designated by the user|用户[^。\n]{0,12}指定)[^。\n]{0,40}(?:maintenance[- ]agent|维护 ?agent|agent)|(?:maintenance[- ]agent|维护 ?agent)[^。\n]{0,30}(?:designated|指定)")
 
 
+# An implementation assignment names its closure standard on one fixed-format
+# line, so the check does not depend on how the surrounding prose is worded:
+#
+#     Verification block: <where it is> @ v<N>
+#
+# Other roles (Investigator, environment recovery, Deployer) carry their own
+# completion contract; only a prompt that invokes an implementation Worker
+# skill is checked. Wording that asks for a new acceptance tool is deliberately
+# not scanned here: every pattern tried either blocked ordinary assignments
+# ("add a test to verify job retry") or missed plain violations, and a launch
+# gate must not guess. That rule lives in the Verification block's method
+# column and the Worker skill.
+IMPLEMENTATION_ROLE = re.compile(r"\$(?:studio-issue-worker|agent-loop-worker)\b")
+VERIFICATION_LINE = re.compile(r"(?im)^[ \t>*-]*Verification block:[ \t]*\S[^\n]*?@[ \t]*v[1-9]\d*\b")
+
+
 def assignment_findings(text):
     """Findings for one generated Worker assignment, including repair ownership."""
     out = findings(text)
+    if IMPLEMENTATION_ROLE.search(text) and not VERIFICATION_LINE.search(text):
+        out.append(('missing-verification-block', 'implementation assignment lacks the line "Verification block: <locator> @ v<N>"'))
     designated = any(not NEGATION.search(re.sub(r"\s+", " ", text)[max(0, m.start() - 40):m.start()]) for m in DESIGNATION.finditer(text))
     if SQUAD_TARGET.search(text) and not designated:
         out.append(('squad-repair-without-designation', 'Squad-tool assignment names no user-designated maintenance agent'))

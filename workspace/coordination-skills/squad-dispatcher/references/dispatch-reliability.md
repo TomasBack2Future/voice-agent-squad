@@ -8,20 +8,22 @@ and deduplicated wake-ups. Integration Workers own handoff validation, integrati
 review/CI, merge, staging acceptance and cleanup; they do not poll other task progress.
 When no actionable release work exists, the integration Worker records a durable
 waiting checkpoint and yields its turn, retaining ownership. Waiting is not completion.
-A developer records a frozen handoff offer on both items and sends one offer-ready
-event to the originating Dispatcher. The Dispatcher verifies the offer and wakes an
-idle integration owner once per reservation generation/head/event. Active owners
+A developer records a frozen handoff offer on both items and records it as a phase
+result the integration owner waits on; where that owner holds no such wait, the
+Dispatcher verifies the offer and wakes it once per reservation generation/head/event. Active owners
 receive no routine reminders. Direct ACK/commit/accepted transfer messages remain valid.
-Observe with compact snapshots and saved cursors on the existing heartbeat; no new timer.
+Observe with `squad dispatch sweep` on the Dispatcher's own sweep timer; no second timer.
 
 Before relying on unattended progress, verify the actual next-invocation route:
 the selected ledger, current Dispatcher/native session, callback binding and
-receiver owner/incarnation/liveness; for an existing heartbeat, verify its enabled
-state and exact target. Record event-driven, periodic, both, or unavailable in the
+receiver owner/incarnation/liveness, and that the Dispatcher's own sweep timer is
+armed for this session. Record event-driven, periodic, both, or unavailable in the
 existing checkpoint. A running receiver proves a transport is present, not that
 every delivered event was handled or its dependency advanced. Reconcile durable
 delivery and handled cursors separately from Worker outcome and reservation state.
-An absent/paused heartbeat or one targeting an old session is not periodic fallback.
+An absent or stopped sweep timer, or one bound to an old session, is not periodic fallback:
+arm it in the current session at takeover unless a user pause covers the work; a timer
+stopped for a pause is re-armed only by the user's resume.
 Report that limit; preserve explicit pauses and do not silently enable, retarget,
 duplicate or replace a controller. Repair an evidenced route fault within existing
 authority, using the session-continuity contract for any actual migration.
@@ -140,13 +142,14 @@ because only existing sessions were considered. Do not invent work to fill it.
 Keep a recurring prompt focused on these stable duties and checkpoint locations;
 update current facts in the checkpoint instead of appending historical waits and
 version snapshots to the prompt. Report what advanced, what remains and who owns
-the next action. An outside supervisor checks this chain through the existing
-Dispatcher; it does not become a second scheduler or repeat the acceptance.
+the next action. Finding stuck work is this Dispatcher's own sweep; an outside
+observer may check only that the Dispatcher is alive and its timer armed. It never
+becomes a second scheduler, finds stuck work, sends corrections or repeats the acceptance.
 
 Use [session continuity](session-continuity.md) for behavioral health checks and
 cross-provider/model takeover. Quiet time alone never triggers replacement.
-Preserve custody, human pauses and bounded observation windows; use the existing
-event/heartbeat cycle, never a new poller or routine Worker reminders.
+Preserve custody, human pauses and bounded observation windows; use the event
+cycle and the one sweep timer, never another poller or routine Worker reminders.
 
 ## Shared failure reconciliation
 

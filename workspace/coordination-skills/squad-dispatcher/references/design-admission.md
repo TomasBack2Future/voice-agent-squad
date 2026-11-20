@@ -61,8 +61,83 @@ Record proportionate detail:
 - Issue consistency: related work, explicit dependencies, shared decisions,
   implementation boundaries and compatibility/migration requirements.
 - Acceptance: observable user scenarios, including relevant error/recovery
-  behavior; required environment capabilities and unresolved prerequisites.
+  behavior; required environment capabilities and unresolved prerequisites,
+  stated in the Verification block below.
 - Evidence references and remaining questions. Blocking questions preclude READY.
+
+### Verification block
+
+READY requires this block inside the section. It is the Issue standard: an owner
+and a reviewer can both tell from it what is being fixed, how it is checked and
+what the result means.
+
+```markdown
+### Verification (v1)
+
+Fix: <the failing behaviour, where it lives, the input or state that fails today>
+Reproduce locally: <command or steps that show the failure on the current revision>
+Tests that must fail before the fix: <named unit/contract tests to add, with the
+case each covers>
+
+| # | Criterion | Layer | How to verify | Pass | Not pass |
+| - | --------- | ----- | ------------- | ---- | -------- |
+| 1 | <observable result> | unit | <test command> | <exact observation> | <what a failure looks like> |
+| 2 | ... | local | <how the candidate revision is run as an owned process; the request or UI steps against it> | ... | ... |
+| 3 | ... | staging | <what a local client or owned browser reads on the staged candidate, which existing data> | ... | ... |
+| 4 | ... | production | <why staging data cannot prove it; what is read after the deploy> | ... | ... |
+```
+
+Rules for the block:
+
+- **One row per original criterion**, quoting its source. A criterion left out
+  of the block still binds its owner.
+- **Lowest layer that proves it.** `unit`: a committed unit or contract test.
+  `local`: the candidate revision run by the owner as an owned process, before
+  merge. `staging`: the deployed candidate with data that exists on staging.
+  `production`: only when staging data cannot prove the criterion, with that
+  reason written in the row; it is a read after the production release, under
+  the production authorization the assignment names, and grants none itself.
+  At every layer the check is run from a local client, existing CLI or owned
+  browser. Anything logic, boundary values, serialization
+  between a producer and its consumer, or old persisted shapes can express is a
+  `unit` row and a test that fails first; it is not left to be found on staging.
+- **Pass and not pass are observations**, written so two readers reach the same
+  verdict: a value, a status, a count, a rendered state. "Works", "no errors"
+  and "as expected" are not criteria. Not run, not triggered and zero traffic
+  are not pass.
+- **Verify locally with what exists.** The method is a local command, an
+  existing client or CLI, or an owned browser. A new acceptance tool or workflow,
+  and a check run as a cluster Job, are never the method for one Issue. A
+  product defect still gets its regression test in the product PR.
+- **Able to overturn a wrong fix.** A row that carries the original defect names
+  three things: the original failing input or state (the paused retry already on
+  the page, the payload at the size that broke), the real consumer or surface
+  that must show the result (the client that reads the response, the panel the
+  user reads; not a neighbouring element, and not a test double of the
+  producer), and in Not pass the observation that would prove the fix wrong.
+  Evidence that would look the same under a wrong implementation is not
+  evidence: a test that asserts the response shape the code happens to return, a
+  measurement of the element next to the broken one, a fresh object when the
+  defect was in an existing one. For an Issue admitted before this rule, add
+  only what is missing when it next enters repair or acceptance.
+- **Constructible now.** Name the fixture or data each row uses and confirm it
+  exists or can be created within authority. A criterion nobody can construct
+  is resolved here, before launch: choose an equivalent observable that proves
+  the same criterion, never a weaker one, or ask the user once with options. It is never discovered after deployment and never
+  silently weakened later.
+- **Closure follows the layers.** The owner closes the Issue when every row
+  passes at its layer and cleanup is done. A change that reaches a deployed
+  component has at least one `staging` row, so it is never closed on unit and
+  local evidence alone; a local run is not live acceptance. Rows at `unit`,
+  `local` and `staging` do not wait for a production release; only `production`
+  rows do.
+- **Revision.** Changing a criterion, its layer or its pass condition increments
+  the block's revision with the reason and authority. An owner corrects a wrong
+  command, fixture or test name itself and records the correction. A wrong or
+  unreachable criterion, layer or pass condition is one decision request; the
+  owner does not reinterpret it.
+
+A small defect needs two or three rows; do not pad the table.
 
 These dispositions belong to this section; they are not assumed to exist as
 Squad enum values or GitHub labels. Do not confuse product/design READY with
@@ -96,7 +171,7 @@ an obsolete assertion from a new product requirement: the Dispatcher may correct
 an assertion to match already-authorized semantics without another human approval;
 it may not weaken an invariant or choose new product behavior this way.
 Refresh affected decisions when those inputs change; do not reread the whole
-product on every heartbeat. For several children sharing a design, reference the
+product on every sweep. For several children sharing a design, reference the
 same decision and give each child bounded scope and acceptance ownership.
 
 Keep conceptual conflicts separate from scheduling edges: fix inconsistent

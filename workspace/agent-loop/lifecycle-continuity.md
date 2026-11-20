@@ -55,8 +55,9 @@ mode never grants production, disclosure, environment or implementation scope.
 
 A Goal preserves intent; its retry loop can terminate with the failed turn.
 Separate provider retries, agent-turn continuation and external-operation status.
-Use the already-authorized monitor or Dispatcher cycle outside the failed model
-session; do not create a second controller, timer or perpetual prompt loop.
+Use the Dispatcher's own sweep cycle, or the already-authorized liveness observer
+when the failed session is the Dispatcher itself; do not create a second
+controller, a second timer or a perpetual prompt loop.
 
 Before relying on unattended work, qualify that observer's actual enabled state,
 target and supported continuation route in the existing checkpoint. A paused
@@ -101,7 +102,7 @@ named repair owner with the failed check and next action; do not loop forever.
 
 Verify new native model/tool execution after resume. A delivered instruction,
 active Goal or living process is insufficient. If recovery awaits new authority,
-raise that exact missing operation promptly in the existing monitor cycle; keep
+raise that exact missing operation promptly in the Dispatcher's sweep cycle; keep
 independent authorized work moving. Report transport health and task recovery
 separately. Instructions alone do not qualify an unattended recovery capability.
 
@@ -129,10 +130,10 @@ existing owners; do not reacquire ENV merely for administrative cleanup.
 
 Distinguish four things: an ordinary message (context), an input or decision
 acknowledgement (transport), a phase result (the checks of a phase ran, with a
-verdict) and task completion (Issue gates met). When the next step belongs to
-someone else, the owner reports the finished phase in the same call that wakes
-that owner: `terminal-events submit --kind phase-result` (or `decision-request`
-for a question, `blocked`, `issue-closed`). A plain message is never the
+verdict) and task completion (Issue gates met). When another owner waits on a
+finished phase, the owner records it in one call: `terminal-events submit --kind
+phase-result` (`decision-request` only for a decision it needs; `blocked`,
+`issue-closed` for those outcomes). A plain message is never the
 handoff; after a merge release, Squad turns such a report into a
 `reconcile-needed` wake as a safety net, not as the contract.
 
