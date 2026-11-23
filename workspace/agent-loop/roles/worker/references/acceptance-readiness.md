@@ -60,14 +60,17 @@ the operation; do not treat the browser bridge's timeout as server duration.
 ## Prepare alongside implementation, not after deploy
 
 Start the acceptance plan when implementation starts and finish it before the
-candidate deploys. For every acceptance criterion record the concrete assertion,
+candidate deploys. For every `Blocks close: yes` row record the concrete assertion,
 fixture, real target and version, the access path qualified by a cheap read,
 model-call budget, cleanup and the failure branch (what is retried, what moves
 to a later candidate, what keeps the Issue open). Check the target's actual
 executability for that assertion before deploy: required model or evaluator
 binding, sampling or enablement settings, feature flags, pool or queue read
 paths. A criterion that cannot execute on the current target is found during
-implementation, not after rollout.
+implementation, not after rollout. When the path a criterion needs is not
+enabled on the target, do not enable or build it for the test: verify the
+criterion at `unit` or `local`, and if it is a `Blocks close: yes` row, send the
+one proposal the Verification block describes.
 
 - **No unrecoverable fixtures.** Before creating Sessions, runs, queue entries
   or other writes, prove a supported way to observe them and to cancel or clean
@@ -159,14 +162,15 @@ deterministic failure is not another full acceptance run; existing safe transien
 retry limits and required final CI/review gates still apply. Use this disposition
 inside the admitted execution scope without asking for routine permission.
 
-At closeout, compare each original required criterion with the actual evidence
-and required environment. Use passed, failed, not-executed, or not-applicable
-with the requirement-based reason. An unavailable fixture, omitted diagnostic or
-unconstructible live failure is not not-applicable and does not authorize a weaker
-evidence layer. Keep the Issue open for the specific gap and owner. A required
-criterion changes only through the existing explicit scope-decision route; never
-request a waiver merely to improve closure counts. Preserve valid evidence when
-correcting an earlier closure.
+At closeout, give each row of the Verification block its result against the
+actual evidence and environment: passed, failed and filed as #N, not verified
+with the reason, or waived by the user with the date. Only `Blocks close: yes`
+rows keep the Issue open. An unavailable fixture, omitted diagnostic or
+unconstructible live failure of a `yes` row is not "not applicable" and you do
+not move it to a weaker layer yourself: send the one proposal to close with
+that row unverified, with its cost, and let the user decide. A `no` row in the
+same position is recorded as not verified. Never report a waived or unverified
+row as passed. Preserve valid evidence when correcting an earlier closure.
 
 ## Choose the shortest authorized verification path
 

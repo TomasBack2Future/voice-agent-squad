@@ -79,18 +79,38 @@ Reproduce locally: <command or steps that show the failure on the current revisi
 Tests that must fail before the fix: <named unit/contract tests to add, with the
 case each covers>
 
-| # | Criterion | Layer | How to verify | Pass | Not pass |
-| - | --------- | ----- | ------------- | ---- | -------- |
-| 1 | <observable result> | unit | <test command> | <exact observation> | <what a failure looks like> |
-| 2 | ... | local | <how the candidate revision is run as an owned process; the request or UI steps against it> | ... | ... |
-| 3 | ... | staging | <what a local client or owned browser reads on the staged candidate, which existing data> | ... | ... |
-| 4 | ... | production | <why staging data cannot prove it; what is read after the deploy> | ... | ... |
+| # | Criterion | Blocks close | Layer | How to verify | Pass | Not pass |
+| - | --------- | ------------ | ----- | ------------- | ---- | -------- |
+| 1 | <the user-visible outcome on a path in use> | yes | staging | <what a local client or owned browser reads on the staged candidate, which existing data> | <exact observation> | <what a failure looks like> |
+| 2 | ... | no | unit | <test command> | ... | ... |
+| 3 | ... | no | local | <how the candidate revision is run as an owned process; the request or UI steps against it> | ... | ... |
+| 4 | ... | yes | production | <why staging data cannot prove it; what is read after the deploy> | ... | ... |
 ```
 
 Rules for the block:
 
-- **One row per original criterion**, quoting its source. A criterion left out
-  of the block still binds its owner.
+- **One row per original criterion**, quoting its source. The block is the
+  whole closing contract: what is not a row does not bind the owner, so list
+  them all here. Criteria that one unit test covers together may share a row.
+- **Must pass.** `Blocks close` is `yes` for at most three rows: the ones that
+  show the Issue's user-visible outcome on a path in use, meaning a path that is
+  enabled in the target environment and reached by a real user, client or job
+  today. Every other row is `no`: it is checked at `unit` or `local`, its result
+  is recorded, and it never holds the close. Defensive negatives, protocol and
+  input matrices, "every case again from the UI in production" and the behaviour
+  of a path nobody runs are `no` rows. When more than three rows would be `yes`
+  the Issue holds several outcomes: split it, each part with its own block.
+  Keep the marks a person wrote. When the criteria came from a source scan or
+  an agent, choose the marks yourself and say in the block that you did.
+- **Where the path exists.** A row is verified in an environment where its path
+  already runs. A path that is not enabled in the target environment (a flag
+  that is off, a service role that is not configured, no consumer) is a `no`
+  row at `unit` or `local`, or at `staging` when staging already runs it.
+  Nobody builds a temporary production path to exercise it: a release, a
+  catalog or configuration entry, a credential, a container or a host change
+  made only so that a test can run is not a verification step. An owner who
+  believes one is needed puts it on the list for the user with its cost before
+  anything is built.
 - **Lowest layer that proves it.** `unit`: a committed unit or contract test.
   `local`: the candidate revision run by the owner as an owned process, before
   merge. `staging`: the deployed candidate with data that exists on staging.
@@ -121,21 +141,44 @@ Rules for the block:
   defect was in an existing one. For an Issue admitted before this rule, add
   only what is missing when it next enters repair or acceptance.
 - **Constructible now.** Name the fixture or data each row uses and confirm it
-  exists or can be created within authority. A criterion nobody can construct
+  exists or can be created within authority. A `yes` row nobody can construct
   is resolved here, before launch: choose an equivalent observable that proves
-  the same criterion, never a weaker one, or ask the user once with options. It is never discovered after deployment and never
-  silently weakened later.
-- **Closure follows the layers.** The owner closes the Issue when every row
-  passes at its layer and cleanup is done. A change that reaches a deployed
-  component has at least one `staging` row, so it is never closed on unit and
-  local evidence alone; a local run is not live acceptance. Rows at `unit`,
-  `local` and `staging` do not wait for a production release; only `production`
-  rows do.
-- **Revision.** Changing a criterion, its layer or its pass condition increments
-  the block's revision with the reason and authority. An owner corrects a wrong
-  command, fixture or test name itself and records the correction. A wrong or
-  unreachable criterion, layer or pass condition is one decision request; the
-  owner does not reinterpret it.
+  the same criterion, or ask the user once with the options and what each
+  costs. A `no` row nobody can construct cheaply is recorded as not verified
+  with the reason. Neither is discovered after deployment, and no agent lowers
+  a `yes` row by itself.
+- **One attempt, then a proposal.** While the product is what failed, a `yes`
+  row is repaired and rechecked as often as it takes. When the method fails a
+  second time, or the next attempt needs a release, a shared-environment change
+  or a credential, the owner stops and proposes once: close with row N
+  unverified, what verifying it would cost, and what stays unproven. It goes on
+  the list for the user; only the user accepts it. An accepted row is reported
+  as "not verified, waived by the user on <date>", never as passed.
+- **What verification finds.** A `yes` row that fails because of the Issue's
+  change is repaired on the Issue. A `no` row that fails because of the change
+  is repaired in the same PR when that is small, otherwise filed. Anything else
+  found on the way (a defect that was there before, another component, the
+  behaviour of a model or provider) is reported once with its evidence, gets
+  its own Issue and does not hold this close. A model or provider quirk is
+  recorded, and fixed only when a path in use hits it.
+- **Closure follows the layers.** The owner closes the Issue when every `yes`
+  row passes at its layer, every `no` row has a recorded result (passed, failed
+  and filed as #N, or not verified with the reason) and cleanup is done. A
+  change that reaches a deployed component has at least one `yes` row at
+  `staging`, so it is never closed on unit and local evidence alone; a local
+  run is not live acceptance. Rows at `unit`, `local` and `staging` do not wait
+  for a production release; only `production` rows do.
+- **Revision.** Changing a criterion, its mark, its layer or its pass condition
+  increments the block's revision with the reason and authority. At admission
+  the marks are yours. After launch, moving a row from `yes` to `no` is the
+  user's decision, reached through the proposal above. An owner corrects a
+  wrong command, fixture or test name itself and records the correction. A
+  wrong or unreachable criterion, layer or pass condition is one decision
+  request; the owner does not reinterpret it.
+- **Blocks without marks.** A block admitted before the `Blocks close` column
+  keeps every row blocking until its next revision. For each such open Issue,
+  propose the marks of all its rows in one item on the list for the user, with
+  the cost of each row still unverified, and revise the block with the answer.
 
 A small defect needs two or three rows; do not pad the table.
 

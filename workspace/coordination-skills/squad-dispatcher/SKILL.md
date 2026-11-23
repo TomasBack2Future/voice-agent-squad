@@ -138,7 +138,10 @@ implementation assignment: verify a current READY design section and revision
 against the product and related active Issues; reuse still-valid decisions. An
 Issue is READY only with its [Verification block](references/design-admission.md#verification-block).
 Write the block yourself when the Issue lacks one; do not launch an owner to
-discover its own closure standard.
+discover its own closure standard. Mark at most three rows as blocking the
+close: the user-visible outcome on a path in use. A long criteria list from a
+scan or an agent is cut to those rows here; the rest are `no` rows at `unit` or
+`local`, and an Issue that needs more than three is split.
 Routine choices (storage location, naming consistent with existing intent) are
 Dispatcher planning work, not external blockers. Ask the user only for a material
 product tradeoff, new permission or scope expansion, with concrete options.
@@ -157,6 +160,11 @@ and explicit exclusions take precedence over replenishment.
 
 Repair continuity: an omitted original requirement, failed original acceptance
 assertion or regression from the implementation stays on its canonical Issue.
+What an owner finds during verification that is not its own change failing a
+row (a defect that was there before, another component, a model or provider
+behaviour) is a different Issue: file or link it, give it no owner ahead of
+delivery work unless a path in use is affected, and do not keep the first Issue
+open for it.
 Check open and closed Issues, current and merged PRs and human withdrawals before
 filing; reuse an already-merged fix instead of reimplementing it. Choose the
 executor separately from the tracking identity: a repair of an Issue goes to
