@@ -276,6 +276,7 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 			return false, nil, fmt.Errorf("unknown check metadata")
 		}
 	}
+	checks = currentCheckRuns(checks)
 	for _, r := range required {
 		found := false
 		if r.Context == "" {
@@ -324,6 +325,40 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 		ordinary = append(ordinary, checkResult{c.Status, c.Conclusion, c.State})
 	}
 	return checksPassed(ordinary), failures, nil
+}
+
+// currentCheckRuns keeps, for each check name of one App on this head, only its
+// newest run. A commit's rollup lists every run ever created for it, so a run
+// cancelled because a rerun replaced it, or a flaky failure followed by a
+// passing rerun, would otherwise refuse the release for the life of that head.
+// The newest run decides, as the code host's own branch protection does: a
+// later failure also supersedes an earlier success. A run from another App
+// never supersedes, and review runs are never superseded: a blocking review is
+// disputed in the release evidence, not resampled away.
+func currentCheckRuns(checks []mergeCheck) []mergeCheck {
+	type key struct {
+		app  int64
+		name string
+	}
+	newest := map[key]int64{}
+	superseding := func(c mergeCheck) bool {
+		return c.Type == "CheckRun" && !strings.HasPrefix(c.Name, "grok-review")
+	}
+	for _, c := range checks {
+		if superseding(c) {
+			if k := (key{c.Suite.App.ID, c.Name}); c.ID > newest[k] {
+				newest[k] = c.ID
+			}
+		}
+	}
+	out := make([]mergeCheck, 0, len(checks))
+	for _, c := range checks {
+		if superseding(c) && c.ID != newest[key{c.Suite.App.ID, c.Name}] {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func matchesRequired(c mergeCheck, r requiredMergeCheck) bool {

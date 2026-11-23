@@ -1198,6 +1198,13 @@ step; retrying the identical batch after a lost response is idempotent. Each
 changed decision enqueues its own `decision-resolved` wake. MCP:
 `squad_terminal_decision_reorder` with `decisions`.
 
+A merge release judges the newest run of each check name from one App on the
+exact head: a run cancelled because a rerun replaced it, or a failure followed
+by a passing rerun, no longer refuses the release, and a later failure
+supersedes an earlier success. A run from another App never supersedes, and a
+review run is never superseded: a blocking review is disputed in the release
+evidence, not resampled.
+
 `terminal-events phase-result --reservation KEY --generation N --worker-session
 ID --phase NAME --checks all|partial --verdict passed|failed|partial
 [--deferred TEXT] --outcome MESSAGE_ID` records that a phase's checks ran and

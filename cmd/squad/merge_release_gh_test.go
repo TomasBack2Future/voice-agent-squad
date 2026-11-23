@@ -113,6 +113,65 @@ func TestMergeChecksRequiredAndAdvisoryFailures(t *testing.T) {
 	}
 }
 
+// A commit's rollup lists every run ever created for it. The newest run of a
+// check name from one App decides; nothing else may be dropped.
+func TestMergeChecksJudgeTheNewestRunOfEachCheck(t *testing.T) {
+	required := []requiredMergeCheck{{Context: "CI Gate", AppID: 15368}}
+	run := func(name, conclusion string, id int64) mergeCheck {
+		c := checkFixture(name, conclusion)
+		c.ID = id
+		return c
+	}
+	for name, tc := range map[string]struct {
+		checks []mergeCheck
+		want   bool
+	}{
+		// The reported case: a run cancelled because its rerun replaced it.
+		"cancelled run replaced by a passing rerun": {[]mergeCheck{run("CI Gate", "CANCELLED", 21), run("go", "CANCELLED", 22), run("CI Gate", "SUCCESS", 31), run("go", "SUCCESS", 32)}, true},
+		"flaky failure followed by a passing rerun": {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "FAILURE", 22), run("go", "SUCCESS", 32)}, true},
+		// The newest run decides in both directions.
+		"passing run followed by a failing rerun": {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "SUCCESS", 22), run("go", "FAILURE", 32)}, false},
+		"newest required run cancelled":           {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("CI Gate", "CANCELLED", 31)}, false},
+		"newest run still in progress": {func() []mergeCheck {
+			c := run("go", "", 32)
+			c.Status = "IN_PROGRESS"
+			return []mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "SUCCESS", 22), c}
+		}(), false},
+		// Only the same check of the same App supersedes.
+		"cancelled check with no rerun":            {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "CANCELLED", 22)}, false},
+		"another check passing does not excuse it": {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "CANCELLED", 22), run("lint", "SUCCESS", 33)}, false},
+		"same name from another App does not supersede": {func() []mergeCheck {
+			other := run("go", "SUCCESS", 32)
+			other.Suite.App.ID = 999
+			other.Suite.App.Slug = "other-app"
+			return []mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "CANCELLED", 22), other}
+		}(), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, _, err := mergeChecksPassed(tc.checks, required, mergeHead, reviewApp)
+			if got != tc.want || (tc.want && err != nil) {
+				t.Fatalf("passed=%v want %v error=%v", got, tc.want, err)
+			}
+		})
+	}
+	// A blocking review is never superseded by a later sample: it stays a
+	// failure the release evidence must dispute, exactly as with one sample.
+	blocking := checkFixture("grok-review-shadow", "FAILURE")
+	later := checkFixture("grok-review-shadow", "SUCCESS")
+	later.ID = 99
+	got, failures, err := mergeChecksPassed([]mergeCheck{checkFixture("CI Gate", "SUCCESS"), blocking, later}, required, mergeHead, reviewApp)
+	if err != nil || !got || len(failures) != 1 || failures[0].CheckRunID != blocking.ID {
+		t.Fatalf("a later review sample hid a blocking one: passed=%v failures=%+v error=%v", got, failures, err)
+	}
+	enforced := checkFixture("grok-review-shadow", "FAILURE")
+	enforced.Name = "grok-review"
+	laterEnforced := enforced
+	laterEnforced.ID, laterEnforced.Conclusion = 99, "SUCCESS"
+	if got, _, _ = mergeChecksPassed([]mergeCheck{checkFixture("CI Gate", "SUCCESS"), enforced, laterEnforced}, required, mergeHead, reviewApp); got {
+		t.Fatal("an enforced blocking review was resampled away")
+	}
+}
+
 func mergePage(checks []mergeCheck, more bool, cursor string) []byte {
 	p := mergePRPage{State: "OPEN", HeadSHA: mergeHead, BaseRefName: "main"}
 	p.BaseRef.Target.OID = mergeBase
