@@ -113,39 +113,57 @@ func TestMergeChecksRequiredAndAdvisoryFailures(t *testing.T) {
 	}
 }
 
-// A commit's rollup lists every run ever created for it. The newest run of a
-// check name from one App decides; nothing else may be dropped.
-func TestMergeChecksJudgeTheNewestRunOfEachCheck(t *testing.T) {
+// A commit's rollup lists every run ever created for it. Only a later run that
+// completed successfully, of the same job in the same workflow and in another
+// check suite, replaces an earlier run. This is a merge gate: every other
+// combination must keep refusing.
+func TestMergeChecksAreReplacedOnlyByALaterSuccessfulRunOfTheSameJob(t *testing.T) {
 	required := []requiredMergeCheck{{Context: "CI Gate", AppID: 15368}}
-	run := func(name, conclusion string, id int64) mergeCheck {
+	// run builds a check run of workflow 7 ("ci") in the given suite.
+	run := func(name, conclusion string, id, suite int64) mergeCheck {
 		c := checkFixture(name, conclusion)
-		c.ID = id
+		c.ID, c.Suite.ID = id, suite
+		c.Suite.WorkflowRun = &struct {
+			Workflow struct {
+				ID int64 `json:"databaseId"`
+			} `json:"workflow"`
+		}{}
+		c.Suite.WorkflowRun.Workflow.ID = 7
 		return c
 	}
+	with := func(c mergeCheck, edit func(*mergeCheck)) mergeCheck { edit(&c); return c }
+	gate := run("CI Gate", "SUCCESS", 20, 1)
 	for name, tc := range map[string]struct {
 		checks []mergeCheck
 		want   bool
 	}{
-		// The reported case: a run cancelled because its rerun replaced it.
-		"cancelled run replaced by a passing rerun": {[]mergeCheck{run("CI Gate", "CANCELLED", 21), run("go", "CANCELLED", 22), run("CI Gate", "SUCCESS", 31), run("go", "SUCCESS", 32)}, true},
-		"flaky failure followed by a passing rerun": {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "FAILURE", 22), run("go", "SUCCESS", 32)}, true},
-		// The newest run decides in both directions.
-		"passing run followed by a failing rerun": {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "SUCCESS", 22), run("go", "FAILURE", 32)}, false},
-		"newest required run cancelled":           {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("CI Gate", "CANCELLED", 31)}, false},
-		"newest run still in progress": {func() []mergeCheck {
-			c := run("go", "", 32)
+		// The reported case, and the flaky one.
+		"cancelled run replaced by a passing rerun": {[]mergeCheck{run("CI Gate", "CANCELLED", 21, 1), run("go", "CANCELLED", 22, 1), run("CI Gate", "SUCCESS", 31, 2), run("go", "SUCCESS", 32, 2)}, true},
+		"failure followed by a passing rerun":       {[]mergeCheck{gate, run("go", "FAILURE", 22, 1), run("go", "SUCCESS", 32, 2)}, true},
+		// Only a successful later run replaces anything.
+		"later run skipped does not hide a failure (PR made a draft)": {[]mergeCheck{run("CI Gate", "FAILURE", 21, 1), run("go", "FAILURE", 22, 1), run("CI Gate", "SUCCESS", 31, 2), run("go", "SKIPPED", 32, 2)}, false},
+		"later run neutral does not hide a failure":                   {[]mergeCheck{gate, run("go", "FAILURE", 22, 1), run("go", "NEUTRAL", 32, 2)}, false},
+		"later run cancelled does not hide a failure":                 {[]mergeCheck{gate, run("go", "FAILURE", 22, 1), run("go", "CANCELLED", 32, 2)}, false},
+		"later run still in progress": {[]mergeCheck{gate, run("go", "SUCCESS", 22, 1), with(run("go", "", 32, 2), func(c *mergeCheck) {
 			c.Status = "IN_PROGRESS"
-			return []mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "SUCCESS", 22), c}
-		}(), false},
-		// Only the same check of the same App supersedes.
-		"cancelled check with no rerun":            {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "CANCELLED", 22)}, false},
-		"another check passing does not excuse it": {[]mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "CANCELLED", 22), run("lint", "SUCCESS", 33)}, false},
-		"same name from another App does not supersede": {func() []mergeCheck {
-			other := run("go", "SUCCESS", 32)
-			other.Suite.App.ID = 999
-			other.Suite.App.Slug = "other-app"
-			return []mergeCheck{run("CI Gate", "SUCCESS", 21), run("go", "CANCELLED", 22), other}
-		}(), false},
+		})}, false},
+		// A later failure still counts next to an earlier success.
+		"passing run followed by a failing rerun": {[]mergeCheck{gate, run("go", "SUCCESS", 22, 1), run("go", "FAILURE", 32, 2)}, false},
+		"newest required run cancelled":           {[]mergeCheck{gate, run("CI Gate", "CANCELLED", 31, 2)}, false},
+		"failure after the passing rerun":         {[]mergeCheck{gate, run("go", "FAILURE", 22, 1), run("go", "SUCCESS", 32, 2), run("go", "FAILURE", 42, 3)}, false},
+		// "The same job" is the same name in the same workflow of the same App.
+		"cancelled check with no rerun":          {[]mergeCheck{gate, run("go", "CANCELLED", 22, 1)}, false},
+		"another job passing does not excuse it": {[]mergeCheck{gate, run("go", "CANCELLED", 22, 1), run("lint", "SUCCESS", 33, 2)}, false},
+		"same name in another workflow does not replace": {[]mergeCheck{gate, run("accept", "FAILURE", 22, 1), with(run("accept", "SUCCESS", 32, 2), func(c *mergeCheck) {
+			c.Suite.WorkflowRun.Workflow.ID = 8
+		})}, false},
+		"same name from another App does not replace": {[]mergeCheck{gate, run("go", "CANCELLED", 22, 1), with(run("go", "SUCCESS", 32, 2), func(c *mergeCheck) {
+			c.Suite.App.ID, c.Suite.App.Slug = 999, "other-app"
+		})}, false},
+		"a run with no known workflow is never replaced": {[]mergeCheck{gate, with(run("go", "CANCELLED", 22, 1), func(c *mergeCheck) { c.Suite.WorkflowRun = nil }), run("go", "SUCCESS", 32, 2)}, false},
+		"a run with no known workflow replaces nothing":  {[]mergeCheck{gate, run("go", "CANCELLED", 22, 1), with(run("go", "SUCCESS", 32, 2), func(c *mergeCheck) { c.Suite.WorkflowRun = nil })}, false},
+		// A matrix with a static job name: two runs of one suite are two jobs.
+		"same name in the same suite does not replace": {[]mergeCheck{gate, run("test", "FAILURE", 22, 1), run("test", "SUCCESS", 23, 1)}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, _, err := mergeChecksPassed(tc.checks, required, mergeHead, reviewApp)
@@ -154,8 +172,14 @@ func TestMergeChecksJudgeTheNewestRunOfEachCheck(t *testing.T) {
 			}
 		})
 	}
-	// A blocking review is never superseded by a later sample: it stays a
-	// failure the release evidence must dispute, exactly as with one sample.
+	// A replaced run is still validated: one bound to another head is an error,
+	// not something a later pass makes disappear.
+	stale := with(run("go", "CANCELLED", 22, 1), func(c *mergeCheck) { c.Suite.Commit.OID = mergeBase })
+	if got, _, err := mergeChecksPassed([]mergeCheck{gate, stale, run("go", "SUCCESS", 32, 2)}, required, mergeHead, reviewApp); got || err == nil {
+		t.Fatalf("a replaced run of another head was accepted: passed=%v error=%v", got, err)
+	}
+	// A blocking review is never replaced by a later sample: it stays a failure
+	// the release evidence must dispute, exactly as with one sample.
 	blocking := checkFixture("grok-review-shadow", "FAILURE")
 	later := checkFixture("grok-review-shadow", "SUCCESS")
 	later.ID = 99

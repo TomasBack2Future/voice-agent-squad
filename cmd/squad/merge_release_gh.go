@@ -14,7 +14,7 @@ import (
 	"github.com/zsiec/squad/internal/terminalevents"
 )
 
-const mergeChecksQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){state headRefOid baseRefName baseRef{target{oid}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion externalId title isRequired(pullRequestNumber:$number) checkSuite{commit{oid} app{databaseId slug}}} ... on StatusContext{context state isRequired(pullRequestNumber:$number)}} pageInfo{hasNextPage endCursor}}}}}}}}}`
+const mergeChecksQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){state headRefOid baseRefName baseRef{target{oid}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion externalId title isRequired(pullRequestNumber:$number) checkSuite{databaseId commit{oid} app{databaseId slug} workflowRun{workflow{databaseId}}}} ... on StatusContext{context state isRequired(pullRequestNumber:$number)}} pageInfo{hasNextPage endCursor}}}}}}}}}`
 
 type mergeCheck struct {
 	Type       string `json:"__typename"`
@@ -28,6 +28,7 @@ type mergeCheck struct {
 	ExternalID string `json:"externalId"`
 	Title      string `json:"title"`
 	Suite      struct {
+		ID     int64 `json:"databaseId"`
 		Commit struct {
 			OID string `json:"oid"`
 		} `json:"commit"`
@@ -35,6 +36,12 @@ type mergeCheck struct {
 			ID   int64  `json:"databaseId"`
 			Slug string `json:"slug"`
 		} `json:"app"`
+		// WorkflowRun is null for a check run no workflow created.
+		WorkflowRun *struct {
+			Workflow struct {
+				ID int64 `json:"databaseId"`
+			} `json:"workflow"`
+		} `json:"workflowRun"`
 	} `json:"checkSuite"`
 }
 
@@ -327,34 +334,50 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 	return checksPassed(ordinary), failures, nil
 }
 
-// currentCheckRuns keeps, for each check name of one App on this head, only its
-// newest run. A commit's rollup lists every run ever created for it, so a run
-// cancelled because a rerun replaced it, or a flaky failure followed by a
+// currentCheckRuns drops a check run that a later successful run of the same
+// job has replaced. A commit's rollup lists every run ever created for it, so a
+// run cancelled because its rerun took over, or a flaky failure followed by a
 // passing rerun, would otherwise refuse the release for the life of that head.
-// The newest run decides, as the code host's own branch protection does: a
-// later failure also supersedes an earlier success. A run from another App
-// never supersedes, and review runs are never superseded: a blocking review is
-// disputed in the release evidence, not resampled away.
+//
+// The rule is deliberately narrow, because this is a merge gate:
+//   - only a later run that COMPLETED with SUCCESS replaces anything. A later
+//     skipped, neutral, cancelled, failed or unfinished run replaces nothing, so
+//     a rerun that skips a job (for example after the PR was made a draft)
+//     cannot hide that job's earlier failure, and a later failure still counts
+//     next to an earlier success;
+//   - "the same job" is the same check name of the same workflow of the same
+//     App. Jobs that merely share a name across workflows are different jobs;
+//     a run with no known workflow is never replaced and replaces nothing;
+//   - a run is never replaced by another run of its own check suite (a matrix
+//     with a static job name);
+//   - review runs are never replaced: a blocking review is disputed in the
+//     release evidence, not resampled away.
 func currentCheckRuns(checks []mergeCheck) []mergeCheck {
-	type key struct {
-		app  int64
-		name string
+	type job struct {
+		app, workflow int64
+		name          string
 	}
-	newest := map[key]int64{}
-	superseding := func(c mergeCheck) bool {
-		return c.Type == "CheckRun" && !strings.HasPrefix(c.Name, "grok-review")
+	identify := func(c mergeCheck) (job, bool) {
+		if c.Type != "CheckRun" || strings.HasPrefix(c.Name, "grok-review") || c.Suite.ID < 1 ||
+			c.Suite.WorkflowRun == nil || c.Suite.WorkflowRun.Workflow.ID < 1 {
+			return job{}, false
+		}
+		return job{c.Suite.App.ID, c.Suite.WorkflowRun.Workflow.ID, c.Name}, true
 	}
+	// The newest successful run of each job, and the suite it belongs to.
+	type pass struct{ id, suite int64 }
+	passed := map[job]pass{}
 	for _, c := range checks {
-		if superseding(c) {
-			if k := (key{c.Suite.App.ID, c.Name}); c.ID > newest[k] {
-				newest[k] = c.ID
-			}
+		if k, ok := identify(c); ok && c.Status == "COMPLETED" && c.Conclusion == "SUCCESS" && c.ID > passed[k].id {
+			passed[k] = pass{c.ID, c.Suite.ID}
 		}
 	}
 	out := make([]mergeCheck, 0, len(checks))
 	for _, c := range checks {
-		if superseding(c) && c.ID != newest[key{c.Suite.App.ID, c.Name}] {
-			continue
+		if k, ok := identify(c); ok {
+			if p := passed[k]; p.id > c.ID && p.suite != c.Suite.ID {
+				continue
+			}
 		}
 		out = append(out, c)
 	}
