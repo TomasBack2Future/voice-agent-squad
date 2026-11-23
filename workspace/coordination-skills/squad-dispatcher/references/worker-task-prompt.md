@@ -23,10 +23,11 @@ semantics, shared-resource order or risk.
 2. **Outcome and end condition**: the user result and the Issue's Verification
    block, cited on its own line as `Verification block: <locator> @ v<N>` (the
    assignment checker requires exactly this form): every criterion with its layer (`unit`,
-   `local`, `staging`, `production`), method, pass and not pass. A merged PR, a
-   cleared review finding or a passing substitute fixture is not the end
-   condition. Closure follows the layers: only `production` rows wait for the
-   production deploy.
+   `local`, `staging`, `production`), method, pass and not pass, and whether it
+   blocks the close. A merged PR, a cleared review finding or a passing
+   substitute fixture is not the end condition. Only `Blocks close: yes` rows
+   hold the close, and of those only `production` rows wait for the production
+   deploy.
 3. **Owner scope**: owned resources and fixtures, permitted operations (source,
    PR, merge, staging, production, model calls, configuration writes, Issue
    close), target environments, explicit exclusions, and retained fixtures or
@@ -88,8 +89,10 @@ AGENTS.md and repository instructions first, then the design section
 
 Outcome: <USER RESULT>.
 Verification block: <LOCATOR> @ v<N>
-Done means every row of that block passes at its stated layer, owned fixtures
-are cleaned up and resources released. Commit the block's named tests and see them fail
+Done means every row marked `Blocks close: yes` (every row, when the block has
+no such column) passes at its stated layer or carries the user's waiver, every
+other row has a recorded result, owned fixtures are cleaned up and
+resources released. Commit the block's named tests and see them fail
 before the fix. Rows at unit, local and staging close without a production
 release; only production rows wait for it, with you parked on the release stage.
 

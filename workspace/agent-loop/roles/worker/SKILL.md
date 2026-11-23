@@ -79,7 +79,18 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    probes before review. Choose further checks by the problem: real protocol or
    framing, old persisted data, the largest relevant scale. Do not add unrelated
    checks to look thorough, and do not move a criterion to a higher layer than
-   its block states.
+   its block states. Only the rows marked `Blocks close: yes` hold the close;
+   in a block without that column every row does. Check the other rows at the
+   layer the block gives and record the result; `unit` rows always run. Verify
+   a row where its path runs once the candidate is deployed, with nothing else
+   enabled: never build a temporary production path,
+   configuration entry, credential or container so that a test can run. A
+   fixture or read path you can build within your authority is preparation.
+   When a `yes` row's method has failed twice, or its next attempt needs a
+   release, a shared-environment change or a credential made only for the test,
+   stop and propose once to close with that row unverified, with what verifying
+   it would cost and what stays unproven; only the user accepts that, and the
+   row is then reported as waived, never as passed.
 5. **Prepare acceptance while implementing.** Decide the acceptance method and
    actual execution route now: target, fixture, credential route, observation,
    cleanup and budget. A missing fixture, login route or observation discovered
@@ -100,10 +111,11 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
 8. **Accept, clean up, close.** Check every criterion at its stated layer and
    record pass or not pass against the block's own wording, on the original
    failing input and on the real consumer or surface the row names, looking for
-   the observation that would prove the fix wrong. The block has one
-   row per original criterion; an original criterion it omits still binds, and
-   you report the gap as one decision request. Close the Issue when
-   all of them pass, owned fixtures are cleaned up and resources released (see
+   the observation that would prove the fix wrong. The block is the closing
+   contract: if an original criterion a person wrote has no row, report the gap
+   as one decision request. Close the Issue when every `Blocks close: yes` row
+   passes or carries the user's waiver, every other row has a recorded result,
+   owned fixtures are cleaned up and resources released (see
    the execution contract): a criterion staging data can prove closes on staging,
    and only a `production` criterion waits for the production deploy. A change
    that reaches a deployed component is never closed on unit and local evidence
@@ -148,11 +160,24 @@ from a compact brief. The full protocol is
 - Repair omissions, regressions and failed original acceptance on the same Issue;
   an additional PR is not a reason to open another Issue or end your role. If your
   current role is read-only, request the smallest authorized phase change once and
-  retain ownership; do not implement before it is effective. A genuinely separate finding is reported to the Dispatcher
-  with evidence and a proposed disposition; do not create or dispatch work.
+  retain ownership; do not implement before it is effective. A `yes` row that
+  does not pass keeps the Issue open whatever the cause; when the cause is not
+  your change, report it and send the one proposal, and do not repair the other
+  component. A `no` row that fails is rerun once; if the failure repeats, run
+  it once on the base revision locally or use evidence from before the deploy,
+  never a redeploy of the base to a shared environment. If it passes there your
+  change broke it and you repair it before the close; if it fails there too it
+  was there before. That, and anything else you notice that
+  no row covers (another component, the behaviour of a model or provider), is
+  a separate finding: report it once to the Dispatcher with evidence and a
+  proposed disposition, do not repair it here, and it does not hold your close.
+  Do not create or dispatch work.
 - After the assigned acceptance, logs, cleanup and safe resource release, close the
   Issue yourself under your `authorization.issue_close` and report; there is no
   routine Dispatcher approval before closing. Holds and unmet gates still apply.
+  Your final summary gives every row its result: passed; failed on the base
+  revision too and reported; not verified, with the reason; or waived by the
+  user, with the date.
 - Product naming, entry points, scope, compatibility and cross-Issue behavior
   follow the admitted design revision; send one bounded decision request when
   they must change and continue independent work. Routine implementation choices

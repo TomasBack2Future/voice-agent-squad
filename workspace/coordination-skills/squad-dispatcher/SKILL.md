@@ -138,7 +138,10 @@ implementation assignment: verify a current READY design section and revision
 against the product and related active Issues; reuse still-valid decisions. An
 Issue is READY only with its [Verification block](references/design-admission.md#verification-block).
 Write the block yourself when the Issue lacks one; do not launch an owner to
-discover its own closure standard.
+discover its own closure standard. Mark one to three rows as blocking the
+close: the user-visible outcome on a path in use. In a long criteria list from
+a scan or an agent only those rows are marked `yes`; the rest stay as `no` rows
+at `unit` or `local`, and an Issue that needs more than three is split.
 Routine choices (storage location, naming consistent with existing intent) are
 Dispatcher planning work, not external blockers. Ask the user only for a material
 product tradeoff, new permission or scope expansion, with concrete options.
@@ -157,6 +160,12 @@ and explicit exclusions take precedence over replenishment.
 
 Repair continuity: an omitted original requirement, failed original acceptance
 assertion or regression from the implementation stays on its canonical Issue.
+What an owner reports as a separate finding (a `no` row that also fails on the
+base revision, another component, a model or provider behaviour) is a different
+Issue: file or link it, give it no owner ahead of delivery work unless a path in
+use is affected, and do not keep the first Issue open for it. A blocking row
+that does not pass is never such a finding: it is repaired, or it reaches the
+user as the owner's one proposal.
 Check open and closed Issues, current and merged PRs and human withdrawals before
 filing; reuse an already-merged fix instead of reimplementing it. Choose the
 executor separately from the tracking identity: a repair of an Issue goes to
@@ -215,8 +224,9 @@ broader product changes, production operations or another repository.
   reviewer stays independent and unchanged. Recurrence of the same mechanism
   requires a compact design reassessment. Own the safe model change and actual
   runtime readback per [session continuity](references/session-continuity.md#review-failure-model-transition).
-- **Closeout.** After every criterion passes at its stated layer, the owning
-  Worker closes the Issue and reports; there is no routine ready-to-close step.
+- **Closeout.** After every `Blocks close: yes` row passes at its stated layer
+  or carries the user's waiver, and every other row has a recorded result, the
+  owning Worker closes the Issue and reports; there is no routine ready-to-close step.
   Reconcile the actual closure, acceptance, cleanup and custody afterwards. Partial delivery keeps the Issue
   OPEN with a concrete continuation owner/action, or an evidenced external
   prerequisite and next check, in the existing checkpoint; retiring an execution
