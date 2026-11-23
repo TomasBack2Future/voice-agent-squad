@@ -1198,22 +1198,6 @@ step; retrying the identical batch after a lost response is idempotent. Each
 changed decision enqueues its own `decision-resolved` wake. MCP:
 `squad_terminal_decision_reorder` with `decisions`.
 
-A merge release requires every check run on the exact head to have passed,
-except the runs of a cancelled workflow run that a later run has replaced. A
-commit keeps the runs of every check suite created for it, so a run cancelled
-because a newer one took over leaves cancelled jobs, and a failed gate job when
-the gate always runs. Such a run is replaced only when its own check suite
-concluded cancelled and a later run of the same job completed with success in a
-later check suite; the same job is the same check name of the same workflow of
-the same App, started by the same event. Nothing else is replaced. A suite that
-ran to a failure stays a failure even when a later suite passes: rerun its
-failed jobs, which replaces that attempt on GitHub itself. A later skipped,
-neutral, cancelled, failed or unfinished run replaces nothing, a `push` run
-does not replace a `pull_request` run, a rerun of an older suite does not
-replace a newer one, and a run whose workflow or event is unknown is never
-replaced. A review run is never replaced: a blocking review is disputed in the
-release evidence, not resampled.
-
 `terminal-events phase-result --reservation KEY --generation N --worker-session
 ID --phase NAME --checks all|partial --verdict passed|failed|partial
 [--deferred TEXT] --outcome MESSAGE_ID` records that a phase's checks ran and
@@ -1231,7 +1215,7 @@ evidence of the named checks across a handoff or re-reservation, and the
 generation is reported as provenance. Only the reservation's current
 generation and Worker can record, so an earlier custody cannot write. The
 phase name identifies what was checked: name a later candidate's or attempt's
-checks distinctly (`acceptance:s7`, `merge:pr1972`); a wait on a reused name
+checks distinctly (`acceptance:s7`, `merge-ready:pr1972`); a wait on a reused name
 that already has a result is refused as `wait-already-satisfied`, never
 released by the older result. MCP: `squad_terminal_phase_result`.
 
@@ -1413,6 +1397,27 @@ pending/failing ordinary checks refuse issuance. Check contexts remain App-pinne
 where the host policy specifies an integration. All ordinary rollup checks retain
 the existing success/skipped/neutral rule; this does not waive assignment-level
 CI or review requirements that are stricter than hosting settings.
+
+"Its checks passed" means every check run on the exact head passes, except what a
+cancelled workflow run left behind once a later run of the same workflow took over. A
+commit keeps the runs of every check suite created for it, so a run cancelled because a
+newer one started leaves cancelled jobs, and a failed gate job when the gate always
+runs. Only a completed run that does not pass, of a check suite that concluded
+cancelled, is ever dropped, and only for a later check suite of the same workflow of
+the same App started by the same event (a `push` run never stands in for a
+`pull_request` run). A run that was itself cancelled reached no verdict: it is dropped
+when such a later suite succeeded as a whole, which leaves what the commit would show
+had the cancelled run never started. A run with any other verdict (the gate's failure,
+or a job that failed before the cancellation) is dropped only when the same job, by
+check name, completed with success as a later run of such a later suite; a later
+skipped, neutral, cancelled, failed or unfinished run replaces nothing. A suite that
+ran to a failure stays a failure even when a later suite passes: rerun its failed
+jobs, which replaces that attempt on GitHub itself; the same in-place rerun clears a
+cancelled run that no later run covers. A rerun of an older suite replaces nothing in
+a newer one, a run whose suite, workflow or event is unknown is never dropped and
+replaces nothing, and a review run is never dropped: a blocking review is disputed in
+the release evidence, not resampled. The rollup belongs to the commit, so two pull
+requests that share a head commit share these runs.
 
 A `grok-review-shadow` **blocking finding** is advisory only when it is not
 required by either host policy surface and its App ID matches the installed

@@ -34,9 +34,10 @@ that reservation `completed`, create a replacement or remove a hold at
 implementation-ready/integrated. Missing receipt means incomplete transfer.
 A newly assigned sequential child requires explicit manifest/path verification;
 workers never self-discover the next Issue.
-Prefer reusing a verified available chain owner for that explicit next assignment
-when doing so avoids re-bootstrap and context transfer. Issue granularity need
-not force a new task per child. Keep one active child claim and the current
+A chain owner takes that explicit next assignment only as a linked obligation of
+its own Issue (the same PR, acceptance of its change, or as the batch's release
+owner); any other child gets its own Worker in a fresh session. Keep one active
+child claim and the current
 per-batch/global WIP limits. Distinguish implementation, path-release, acceptance
 and external-access edges; record which phase the evidence actually blocks.
 

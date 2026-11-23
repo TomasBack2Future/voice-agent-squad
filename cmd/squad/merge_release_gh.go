@@ -341,32 +341,40 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 	return checksPassed(ordinary), failures, nil
 }
 
-// currentCheckRuns drops the check runs of a cancelled workflow run that a
-// later run of the same workflow has replaced. A commit's rollup keeps the runs
-// of every check suite created for it, so a run cancelled because a newer one
-// took over (it leaves cancelled jobs and, with an always-running gate job, a
-// failure) would otherwise refuse the release for the life of that head.
+// currentCheckRuns drops the check runs a cancelled workflow run left behind
+// once a later run of the same workflow has taken over. A commit's rollup keeps
+// the runs of every check suite created for it, so a run cancelled because a
+// newer one started (it leaves cancelled jobs and, with an always-running gate
+// job, a failure) would otherwise refuse the release for the life of that head.
 //
-// The rule is deliberately narrow, because this is a merge gate. A run is
-// dropped only when all of these hold:
-//   - its own check suite concluded CANCELLED. A suite that ran to a failure is
-//     never replaced: its owner reruns the failed jobs, which replaces that
-//     attempt in the rollup itself;
-//   - a run of the same job COMPLETED with SUCCESS in a later check suite, and
-//     is itself the later run. A skipped, neutral, cancelled, failed or
-//     unfinished run replaces nothing, and neither does a rerun of an older
-//     suite;
-//   - "the same job" is the same check name of the same workflow of the same
-//     App, started by the same event. A push run does not replace a
-//     pull_request run, and jobs that merely share a name are different jobs;
-//     a run whose workflow or event is unknown is never replaced and replaces
-//     nothing;
-//   - it is not a review run: a blocking review is disputed in the release
-//     evidence, not resampled away.
+// The rule is deliberately narrow, because this is a merge gate. Only a
+// completed run that does not pass, of a check suite that concluded CANCELLED,
+// is ever dropped, and only for a later check suite of the same workflow of the same App, started
+// by the same event (a push run never stands in for a pull_request run):
+//   - a run that was itself cancelled reached no verdict. It is dropped when
+//     such a later suite concluded SUCCESS as a whole, which leaves exactly
+//     what the rollup would hold had the cancelled run never started; every
+//     run of the later suite is still judged;
+//   - a run that reached any other verdict (the gate's failure, or a job that
+//     failed before the cancellation) is dropped only when the same job, by
+//     check name, COMPLETED with SUCCESS as a later run of such a later suite.
+//     A later skipped, neutral, cancelled, failed or unfinished run replaces
+//     nothing, so a job that failed is never hidden by a rerun that skipped it.
+//
+// A suite that ran to a failure is never replaced (its owner reruns the failed
+// jobs, which replaces that attempt in the rollup itself), a rerun of an older
+// suite replaces nothing in a newer one, a run whose suite, workflow or event
+// is unknown is never dropped and replaces nothing, and review runs are never
+// dropped: a blocking review is disputed in the release evidence, not
+// resampled away.
 func currentCheckRuns(checks []mergeCheck) []mergeCheck {
+	type workflow struct {
+		app, id int64
+		event   string
+	}
 	type job struct {
-		app, workflow int64
-		event, name   string
+		workflow
+		name string
 	}
 	identify := func(c mergeCheck) (job, bool) {
 		run := c.Suite.WorkflowRun
@@ -374,18 +382,34 @@ func currentCheckRuns(checks []mergeCheck) []mergeCheck {
 			run == nil || run.Workflow.ID < 1 || run.Event == "" {
 			return job{}, false
 		}
-		return job{c.Suite.App.ID, run.Workflow.ID, run.Event, c.Name}, true
+		return job{workflow{c.Suite.App.ID, run.Workflow.ID, run.Event}, c.Name}, true
 	}
 	type pass struct{ id, suite int64 }
-	passed := map[job][]pass{}
+	passed := map[job][]pass{}          // successful runs of each job
+	succeeded := map[workflow][]int64{} // suites of each workflow that concluded SUCCESS
 	for _, c := range checks {
-		if k, ok := identify(c); ok && c.Status == "COMPLETED" && c.Conclusion == "SUCCESS" {
+		k, ok := identify(c)
+		if !ok {
+			continue
+		}
+		if c.Suite.Conclusion == "SUCCESS" {
+			succeeded[k.workflow] = append(succeeded[k.workflow], c.Suite.ID)
+		}
+		if c.Status == "COMPLETED" && c.Conclusion == "SUCCESS" {
 			passed[k] = append(passed[k], pass{c.ID, c.Suite.ID})
 		}
 	}
 	replaced := func(c mergeCheck) bool {
 		k, ok := identify(c)
-		if !ok || c.Suite.Conclusion != "CANCELLED" {
+		if !ok || c.Status != "COMPLETED" || c.Suite.Conclusion != "CANCELLED" || checkPassed(c) {
+			return false
+		}
+		if c.Conclusion == "CANCELLED" {
+			for _, suite := range succeeded[k.workflow] {
+				if suite > c.Suite.ID {
+					return true
+				}
+			}
 			return false
 		}
 		for _, p := range passed[k] {

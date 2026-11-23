@@ -335,7 +335,8 @@ Then check the batch, not only the live sessions:
   no acceptance started) is a missing decision of yours: make it now, within
   recorded authority. A production stage without production authorization, a
   frozen candidate, environment custody held by another owner and a human hold
-  or pause are not "ready": record what is missing and raise it once.
+  or pause are not "ready": record what is missing. A missing authorization or answer
+  goes on the list below; a hold or pause the user set is left alone.
 - **Waiting on a person.** Keep one current list in the checkpoint of every
   answer, action or authorization the work needs from the user, one line each:
   the Issue, the exact action needed, what it unblocks and since when. A hold or

@@ -114,13 +114,14 @@ func TestMergeChecksRequiredAndAdvisoryFailures(t *testing.T) {
 }
 
 // A commit's rollup keeps the runs of every check suite created for it. Only
-// the runs of a cancelled suite are replaced, and only by a later successful
-// run of the same job (same workflow, App and event) in a later suite. This is
-// a merge gate: every other combination must keep refusing.
-func TestMergeChecksReplaceOnlyACancelledSuiteByALaterSuccessfulRun(t *testing.T) {
+// what a cancelled workflow run left behind is dropped, and only for a later
+// suite of the same workflow, App and event: a cancelled job when that suite
+// succeeded as a whole, any other verdict when the same job passed in it. This
+// is a merge gate: every other combination must keep refusing.
+func TestMergeChecksDropOnlyWhatACancelledRunLeftBehind(t *testing.T) {
 	required := []requiredMergeCheck{{Context: "CI Gate", AppID: 15368}}
 	// run builds a check run of workflow 7 started by pull_request. Suite 1 was
-	// cancelled; every other suite ran to completion.
+	// cancelled; every other suite succeeded.
 	run := func(name, conclusion string, id, suite int64) mergeCheck {
 		c := checkFixture(name, conclusion)
 		c.ID, c.Suite.ID, c.Suite.Conclusion = id, suite, "SUCCESS"
@@ -135,66 +136,78 @@ func TestMergeChecksReplaceOnlyACancelledSuiteByALaterSuccessfulRun(t *testing.T
 	suiteConcluded := func(conclusion string) func(*mergeCheck) {
 		return func(c *mergeCheck) { c.Suite.Conclusion = conclusion }
 	}
-	// What a cancelled run leaves behind: cancelled jobs and a failed gate.
-	cancelledGate, cancelledGo := run("CI Gate", "FAILURE", 21, 1), run("go", "CANCELLED", 22, 1)
+	workflowRun := func(event string, workflow int64) func(*mergeCheck) {
+		return func(c *mergeCheck) {
+			c.Suite.WorkflowRun = &mergeWorkflowRun{Event: event}
+			c.Suite.WorkflowRun.Workflow.ID = workflow
+		}
+	}
+	noWorkflowRun := func(c *mergeCheck) { c.Suite.WorkflowRun = nil }
+	noSuiteID := func(c *mergeCheck) { c.Suite.ID = 0 }
+	otherApp := func(c *mergeCheck) { c.Suite.App.ID, c.Suite.App.Slug = 999, "other-app" }
+	unfinished := func(c *mergeCheck) { c.Status, c.Conclusion = "IN_PROGRESS", "" }
+	// What a cancelled run leaves behind: a failed gate (it always runs), a job
+	// cancelled before any verdict, or a job that failed before the cancellation.
+	cancelledGate, cancelledGo, failedGo := run("CI Gate", "FAILURE", 21, 1), run("go", "CANCELLED", 22, 1), run("go", "FAILURE", 22, 1)
+	// The run that took over.
 	gate, goPass := run("CI Gate", "SUCCESS", 31, 2), run("go", "SUCCESS", 32, 2)
+	// requiredGate satisfies the required check by itself, so that a refusal
+	// below can only come from the run that must not be dropped.
+	requiredGate := run("CI Gate", "SUCCESS", 20, 1)
 	for name, tc := range map[string]struct {
 		checks []mergeCheck
 		want   bool
 	}{
-		// The reported case (Studio #2288).
-		"cancelled run replaced by the later run that took over": {[]mergeCheck{cancelledGate, cancelledGo, gate, goPass}, true},
-		// A suite that ran to a failure is never replaced.
+		// The reported case (Studio #2288): the later run skipped one cancelled
+		// job and expanded the matrix another was cancelled before expanding.
+		"cancelled run replaced by the run that took over": {[]mergeCheck{cancelledGate, cancelledGo,
+			run("web-release-contract", "CANCELLED", 23, 1), run("unit (${{ matrix.shard }})", "CANCELLED", 24, 1),
+			gate, goPass, run("web-release-contract", "SKIPPED", 33, 2), run("unit (1)", "SUCCESS", 34, 2)}, true},
+		"job that failed before the cancellation, then passed": {[]mergeCheck{cancelledGate, failedGo, gate, goPass}, true},
+
+		// Nothing is dropped outside a completed run of a cancelled suite.
 		"failed suite followed by a passing one": {[]mergeCheck{
-			with(cancelledGate, suiteConcluded("FAILURE")), with(run("go", "FAILURE", 22, 1), suiteConcluded("FAILURE")), gate, goPass}, false},
-		"suite with no known conclusion": {[]mergeCheck{with(cancelledGate, suiteConcluded("")), with(cancelledGo, suiteConcluded("")), gate, goPass}, false},
-		// Only a successful later run replaces anything.
-		"later run skipped (PR made a draft)": {[]mergeCheck{cancelledGate, cancelledGo, gate, run("go", "SKIPPED", 32, 2)}, false},
-		"later run neutral":                   {[]mergeCheck{cancelledGate, cancelledGo, gate, run("go", "NEUTRAL", 32, 2)}, false},
-		"later run cancelled":                 {[]mergeCheck{cancelledGate, cancelledGo, gate, run("go", "CANCELLED", 32, 2)}, false},
-		"later run failed":                    {[]mergeCheck{cancelledGate, cancelledGo, gate, run("go", "FAILURE", 32, 2)}, false},
-		"later run still in progress": {[]mergeCheck{cancelledGate, cancelledGo, gate, with(run("go", "", 32, 2), func(c *mergeCheck) {
-			c.Status = "IN_PROGRESS"
-		})}, false},
-		"cancelled run with no later run":        {[]mergeCheck{gate, cancelledGo}, false},
-		"another job passing does not excuse it": {[]mergeCheck{gate, cancelledGo, run("lint", "SUCCESS", 33, 2)}, false},
-		"failure after the run that took over":   {[]mergeCheck{cancelledGate, cancelledGo, gate, goPass, run("go", "FAILURE", 42, 3)}, false},
-		// "Later" means a later suite and a later run, not a rerun of an older one.
-		"rerun of an older suite does not replace a newer cancelled one": {[]mergeCheck{gate,
-			with(run("go", "CANCELLED", 32, 3), suiteConcluded("CANCELLED")), run("go", "SUCCESS", 40, 2)}, false},
-		"later suite but earlier run":                  {[]mergeCheck{gate, with(cancelledGo, func(c *mergeCheck) { c.ID = 50 }), goPass}, false},
-		"same name in the same suite does not replace": {[]mergeCheck{gate, cancelledGo, run("go", "SUCCESS", 23, 1)}, false},
-		// "The same job" is the same name, workflow, App and event.
-		"push run does not replace a pull_request run": {[]mergeCheck{gate, cancelledGo, with(goPass, func(c *mergeCheck) {
-			c.Suite.WorkflowRun = &mergeWorkflowRun{Event: "push", Workflow: goPass.Suite.WorkflowRun.Workflow}
-		})}, false},
-		"unknown event on the cancelled run": {[]mergeCheck{gate, with(cancelledGo, func(c *mergeCheck) {
-			c.Suite.WorkflowRun = &mergeWorkflowRun{Workflow: goPass.Suite.WorkflowRun.Workflow}
-		}), goPass}, false},
-		"unknown event on both runs": {[]mergeCheck{gate,
-			with(cancelledGo, func(c *mergeCheck) {
-				c.Suite.WorkflowRun = &mergeWorkflowRun{Workflow: goPass.Suite.WorkflowRun.Workflow}
-			}),
-			with(goPass, func(c *mergeCheck) {
-				c.Suite.WorkflowRun = &mergeWorkflowRun{Workflow: goPass.Suite.WorkflowRun.Workflow}
-			})}, false},
-		"same name in another workflow": {[]mergeCheck{gate, cancelledGo, with(goPass, func(c *mergeCheck) {
-			c.Suite.WorkflowRun = &mergeWorkflowRun{Event: "pull_request"}
-			c.Suite.WorkflowRun.Workflow.ID = 8
-		})}, false},
-		"same name from another App": {[]mergeCheck{gate, cancelledGo, with(goPass, func(c *mergeCheck) {
-			c.Suite.App.ID, c.Suite.App.Slug = 999, "other-app"
-		})}, false},
-		"no known workflow on the cancelled run": {[]mergeCheck{gate, with(cancelledGo, func(c *mergeCheck) { c.Suite.WorkflowRun = nil }), goPass}, false},
-		"no known workflow on the later run":     {[]mergeCheck{gate, cancelledGo, with(goPass, func(c *mergeCheck) { c.Suite.WorkflowRun = nil })}, false},
-		"no known workflow on both runs": {[]mergeCheck{gate,
-			with(cancelledGo, func(c *mergeCheck) { c.Suite.WorkflowRun = nil }), with(goPass, func(c *mergeCheck) { c.Suite.WorkflowRun = nil })}, false},
-		"workflow id unknown on both runs": {[]mergeCheck{gate,
-			with(cancelledGo, func(c *mergeCheck) { c.Suite.WorkflowRun = &mergeWorkflowRun{Event: "pull_request"} }),
-			with(goPass, func(c *mergeCheck) { c.Suite.WorkflowRun = &mergeWorkflowRun{Event: "pull_request"} })}, false},
-		"suite id unknown on the cancelled run": {[]mergeCheck{gate, with(cancelledGo, func(c *mergeCheck) { c.Suite.ID = 0 }), goPass}, false},
-		"suite id unknown on both runs": {[]mergeCheck{gate,
-			with(cancelledGo, func(c *mergeCheck) { c.Suite.ID = 0 }), with(goPass, func(c *mergeCheck) { c.Suite.ID = 0 })}, false},
+			with(cancelledGate, suiteConcluded("FAILURE")), with(failedGo, suiteConcluded("FAILURE")), gate, goPass}, false},
+		"cancelled job of a suite that ran to a failure":    {[]mergeCheck{requiredGate, with(cancelledGo, suiteConcluded("FAILURE")), goPass}, false},
+		"cancelled job of a suite with no known conclusion": {[]mergeCheck{requiredGate, with(cancelledGo, suiteConcluded("")), goPass}, false},
+		"unfinished run of a cancelled suite":               {[]mergeCheck{requiredGate, with(cancelledGo, unfinished), goPass}, false},
+
+		// A cancelled job needs a later suite of the same workflow, App and
+		// event that succeeded as a whole.
+		"cancelled job, no later suite":                  {[]mergeCheck{requiredGate, cancelledGo}, false},
+		"cancelled job, later suite failed":              {[]mergeCheck{requiredGate, cancelledGo, with(goPass, suiteConcluded("FAILURE"))}, false},
+		"cancelled job, later suite cancelled":           {[]mergeCheck{requiredGate, cancelledGo, with(goPass, suiteConcluded("CANCELLED"))}, false},
+		"cancelled job, later suite unfinished":          {[]mergeCheck{requiredGate, cancelledGo, with(goPass, suiteConcluded(""))}, false},
+		"cancelled job, only an older suite passed":      {[]mergeCheck{gate, goPass, with(run("go", "CANCELLED", 42, 3), suiteConcluded("CANCELLED"))}, false},
+		"cancelled job, later suite of another workflow": {[]mergeCheck{requiredGate, cancelledGo, with(goPass, workflowRun("pull_request", 8))}, false},
+		"cancelled job, later suite of another App":      {[]mergeCheck{requiredGate, cancelledGo, with(goPass, otherApp)}, false},
+		"cancelled job, later suite started by a push":   {[]mergeCheck{requiredGate, cancelledGo, with(goPass, workflowRun("push", 7))}, false},
+		"cancelled job, event unknown on it":             {[]mergeCheck{requiredGate, with(cancelledGo, workflowRun("", 7)), goPass}, false},
+		"cancelled job, event unknown on both":           {[]mergeCheck{requiredGate, with(cancelledGo, workflowRun("", 7)), with(goPass, workflowRun("", 7))}, false},
+		"cancelled job, workflow unknown on it":          {[]mergeCheck{requiredGate, with(cancelledGo, noWorkflowRun), goPass}, false},
+		"cancelled job, workflow unknown on the later":   {[]mergeCheck{requiredGate, cancelledGo, with(goPass, noWorkflowRun)}, false},
+		"cancelled job, workflow unknown on both":        {[]mergeCheck{requiredGate, with(cancelledGo, noWorkflowRun), with(goPass, noWorkflowRun)}, false},
+		"cancelled job, workflow id unknown on both":     {[]mergeCheck{requiredGate, with(cancelledGo, workflowRun("pull_request", 0)), with(goPass, workflowRun("pull_request", 0))}, false},
+		"cancelled job, suite id unknown on it":          {[]mergeCheck{requiredGate, with(cancelledGo, noSuiteID), goPass}, false},
+
+		// Any other verdict needs the same job to pass, as a later run of such
+		// a later suite. A rerun that skips the job hides nothing.
+		"failed job, later run skipped (PR made a draft)":  {[]mergeCheck{requiredGate, failedGo, run("go", "SKIPPED", 32, 2)}, false},
+		"failed job, later run neutral":                    {[]mergeCheck{requiredGate, failedGo, run("go", "NEUTRAL", 32, 2)}, false},
+		"failed job, later run cancelled":                  {[]mergeCheck{requiredGate, failedGo, run("go", "CANCELLED", 32, 2)}, false},
+		"failed job, later run failed":                     {[]mergeCheck{requiredGate, failedGo, run("go", "FAILURE", 32, 2)}, false},
+		"failed job, later run unfinished":                 {[]mergeCheck{requiredGate, failedGo, with(goPass, unfinished)}, false},
+		"failed job, no later run of it":                   {[]mergeCheck{requiredGate, failedGo, run("lint", "SUCCESS", 33, 2)}, false},
+		"failed job, failure after the run that took over": {[]mergeCheck{requiredGate, failedGo, goPass, run("go", "FAILURE", 42, 3)}, false},
+		"failed job, only an older suite passed":           {[]mergeCheck{gate, with(run("go", "FAILURE", 32, 3), suiteConcluded("CANCELLED")), run("go", "SUCCESS", 40, 2)}, false},
+		"failed job, later suite but earlier run":          {[]mergeCheck{requiredGate, with(failedGo, func(c *mergeCheck) { c.ID = 50 }), goPass}, false},
+		"failed job, passing run of its own suite":         {[]mergeCheck{requiredGate, failedGo, run("go", "SUCCESS", 23, 1)}, false},
+		"failed job, same name in another workflow":        {[]mergeCheck{requiredGate, failedGo, with(goPass, workflowRun("pull_request", 8))}, false},
+		"failed job, same name from another App":           {[]mergeCheck{requiredGate, failedGo, with(goPass, otherApp)}, false},
+		"failed job, later run started by a push":          {[]mergeCheck{requiredGate, failedGo, with(goPass, workflowRun("push", 7))}, false},
+		"failed job, event unknown on both":                {[]mergeCheck{requiredGate, with(failedGo, workflowRun("", 7)), with(goPass, workflowRun("", 7))}, false},
+		"failed job, workflow unknown on both":             {[]mergeCheck{requiredGate, with(failedGo, noWorkflowRun), with(goPass, noWorkflowRun)}, false},
+		"failed job, suite id unknown on it":               {[]mergeCheck{requiredGate, with(failedGo, noSuiteID), goPass}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, _, err := mergeChecksPassed(tc.checks, required, mergeHead, reviewApp)
@@ -203,13 +216,13 @@ func TestMergeChecksReplaceOnlyACancelledSuiteByALaterSuccessfulRun(t *testing.T
 			}
 		})
 	}
-	// A replaced run is still validated: one bound to another head is an error,
+	// A dropped run is still validated: one bound to another head is an error,
 	// not something a later pass makes disappear.
 	stale := with(cancelledGo, func(c *mergeCheck) { c.Suite.Commit.OID = mergeBase })
 	if got, _, err := mergeChecksPassed([]mergeCheck{gate, stale, goPass}, required, mergeHead, reviewApp); got || err == nil {
-		t.Fatalf("a replaced run of another head was accepted: passed=%v error=%v", got, err)
+		t.Fatalf("a dropped run of another head was accepted: passed=%v error=%v", got, err)
 	}
-	// A blocking review is never replaced by a later sample, even one a
+	// A blocking review is never dropped for a later sample, even one a
 	// workflow produced in a later suite after its own was cancelled: it stays
 	// a failure the release evidence must dispute.
 	sample := func(name, conclusion string, id, suite int64) mergeCheck {
@@ -225,31 +238,62 @@ func TestMergeChecksReplaceOnlyACancelledSuiteByALaterSuccessfulRun(t *testing.T
 	if got, _, _ = mergeChecksPassed([]mergeCheck{gate, sample("grok-review", "FAILURE", 22, 1), sample("grok-review", "SUCCESS", 32, 2)}, required, mergeHead, reviewApp); got {
 		t.Fatal("an enforced blocking review was resampled away")
 	}
+	if got, _, _ = mergeChecksPassed([]mergeCheck{gate, sample("grok-review", "CANCELLED", 22, 1), goPass}, required, mergeHead, reviewApp); got {
+		t.Fatal("a cancelled enforced review was dropped for a later suite")
+	}
 }
 
-// The rule reads the suite's conclusion and the run's workflow and event from
-// the rollup; without them in the query and the decoding nothing is replaced.
-func TestMergeChecksQueryCarriesWhatReplacementNeeds(t *testing.T) {
+// The rollup of Studio #2288's head on 2026-11-22 as GitHub returned it, with
+// run and suite ids shortened: suite 145 was cancelled when suite 252 started.
+// It was refused; it must pass, and only through the fields the query reads.
+func TestMergeChecksAcceptTheReportedRollup(t *testing.T) {
 	for _, field := range []string{"checkSuite{databaseId conclusion ", "workflowRun{event workflow{databaseId}}"} {
 		if !strings.Contains(mergeChecksQuery, field) {
 			t.Fatalf("the rollup query does not read %q", field)
 		}
 	}
-	node := func(id, suite int64, name, conclusion, suiteConclusion string) string {
+	node := func(id, suite int64, suiteConclusion, name, conclusion string) string {
 		return fmt.Sprintf(`{"__typename":"CheckRun","databaseId":%d,"name":%q,"status":"COMPLETED","conclusion":%q,"isRequired":false,`+
 			`"checkSuite":{"databaseId":%d,"conclusion":%q,"commit":{"oid":%q},"app":{"databaseId":15368,"slug":"github-actions"},`+
 			`"workflowRun":{"event":"pull_request","workflow":{"databaseId":7}}}}`, id, name, conclusion, suite, suiteConclusion, mergeHead)
 	}
+	var nodes []string
+	for i, job := range []struct{ name, cancelled, later string }{
+		{"ci-fast / policy and classify", "CANCELLED", "SUCCESS"},
+		{"web-release-contract", "CANCELLED", "SKIPPED"},
+		{"go", "CANCELLED", "SUCCESS"},
+		{"logging-contract", "CANCELLED", "SUCCESS"},
+		{"CI Gate", "FAILURE", "SUCCESS"},
+		{"image-candidate", "CANCELLED", "SUCCESS"},
+		{"frontend-unit (${{ matrix.shard }})", "CANCELLED", "SKIPPED"},
+		{"frontend-dependencies", "CANCELLED", "SKIPPED"},
+		{"repository-tooling", "CANCELLED", "SUCCESS"},
+		{"frontend-image", "CANCELLED", "SKIPPED"},
+		{"image", "CANCELLED", "SKIPPED"},
+		{"frontend-static", "CANCELLED", "SKIPPED"},
+		{"frontend-integration", "CANCELLED", "SKIPPED"},
+		{"frontend-candidate", "CANCELLED", "SKIPPED"},
+		{"Freeze changed staging components for terminal CI consumption", "CANCELLED", "SKIPPED"},
+	} {
+		nodes = append(nodes, node(int64(100+i), 145, "CANCELLED", job.name, job.cancelled), node(int64(200+i), 252, "SUCCESS", job.name, job.later))
+	}
 	var checks []mergeCheck
-	raw := "[" + strings.Join([]string{
-		node(21, 1, "CI Gate", "FAILURE", "CANCELLED"), node(22, 1, "go", "CANCELLED", "CANCELLED"),
-		node(31, 2, "CI Gate", "SUCCESS", "SUCCESS"), node(32, 2, "go", "SUCCESS", "SUCCESS"),
-	}, ",") + "]"
-	if err := json.Unmarshal([]byte(raw), &checks); err != nil {
+	if err := json.Unmarshal([]byte("["+strings.Join(nodes, ",")+"]"), &checks); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, err := mergeChecksPassed(checks, []requiredMergeCheck{{Context: "CI Gate", AppID: 15368}}, mergeHead, reviewApp); err != nil || !got {
-		t.Fatalf("the decoded rollup of a replaced cancelled run was refused: passed=%v error=%v", got, err)
+	required := []requiredMergeCheck{{Context: "CI Gate", AppID: 15368}}
+	if got, _, err := mergeChecksPassed(checks, required, mergeHead, reviewApp); err != nil || !got {
+		t.Fatalf("the reported rollup was refused: passed=%v error=%v", got, err)
+	}
+	// Without the run that took over, the same cancelled suite refuses.
+	var alone []mergeCheck
+	for _, c := range checks {
+		if c.Suite.ID == 145 {
+			alone = append(alone, c)
+		}
+	}
+	if got, _, _ := mergeChecksPassed(alone, required, mergeHead, reviewApp); got {
+		t.Fatal("a cancelled suite passed with no run to take over")
 	}
 }
 
