@@ -82,7 +82,8 @@ for permission; ordinary steps inside the assignment need no Dispatcher decision
    its block states. Only the rows marked `Blocks close: yes` hold the close;
    in a block without that column every row does. Check the other rows at the
    layer the block gives and record the result; `unit` rows always run. Verify
-   a row where its path already runs: never build a temporary production path,
+   a row where its path runs once the candidate is deployed, with nothing else
+   enabled: never build a temporary production path,
    configuration entry, credential or container so that a test can run. A
    fixture or read path you can build within your authority is preparation.
    When a `yes` row's method has failed twice, or its next attempt needs a
@@ -162,9 +163,11 @@ from a compact brief. The full protocol is
   retain ownership; do not implement before it is effective. A `yes` row that
   does not pass keeps the Issue open whatever the cause; when the cause is not
   your change, report it and send the one proposal, and do not repair the other
-  component. A `no` row that fails is run once on the base revision: if it
-  passes there your change broke it and you repair it before the close; if it
-  fails there too it was there before. That, and anything else you notice that
+  component. A `no` row that fails is rerun once; if the failure repeats, run
+  it once on the base revision locally or use evidence from before the deploy,
+  never a redeploy of the base to a shared environment. If it passes there your
+  change broke it and you repair it before the close; if it fails there too it
+  was there before. That, and anything else you notice that
   no row covers (another component, the behaviour of a model or provider), is
   a separate finding: report it once to the Dispatcher with evidence and a
   proposed disposition, do not repair it here, and it does not hold your close.

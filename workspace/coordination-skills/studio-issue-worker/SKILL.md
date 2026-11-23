@@ -51,8 +51,8 @@ ambiguous identity, or an unbound prompt naming a different Issue, requires
 correction. Never discover, reserve, dispatch or self-select another Issue.
 Original acceptance failures and omissions remain repairs on this Issue,
 including additional PRs and the original-path recheck. A separate finding
-(a `no` row that also fails on the base revision, another component, a model or
-provider behaviour) is reported once and does not hold the close. An authorized related-work
+(a `no` row that also fails on the base revision, or something no row covers in
+another component or in a model or provider) is reported once and does not hold the close. An authorized related-work
 amendment may reuse this owner through [existing-owner routing](../squad-dispatcher/references/session-continuity.md#existing-owners-and-supported-assignment-routes);
 verify scope and custody before writes and never bypass read-only, production or
 native-session fences.

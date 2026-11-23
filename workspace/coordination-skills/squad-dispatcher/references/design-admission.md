@@ -105,11 +105,12 @@ Rules for the block:
   nobody runs are `no` rows. When more than three rows would be `yes` the Issue
   holds several outcomes: split it, each part with its own block. Keep the
   marks a person wrote. Otherwise choose them yourself and say in the block
-  that you did; when you mark a criterion a person wrote as `no`, say so in one
-  line the next time you show the list for the user, and do not wait for an
+  that you did; when you mark a criterion a person wrote as `no`, add one
+  information line saying so to the list for the user, and do not wait for an
   answer.
 - **Where the path exists.** A row is verified in the environment its layer
-  names, and only where its path already runs there. A path that is not enabled
+  names, and only where its path runs there once the candidate is deployed,
+  with nothing else enabled. A path that is not enabled
   (a flag that is off, a service role that is not configured, no consumer) is a
   `no` row at `unit` or `local`. Nobody builds a temporary production path to
   exercise it: a release, a catalog or configuration entry, a credential, a
@@ -166,10 +167,15 @@ Rules for the block:
   open whatever the cause. When the Issue's change caused it, it is repaired
   on the Issue. When something else did (another component, a model or
   provider), the owner reports the cause and sends the one proposal above; it
-  does not repair the other component. A `no` row that fails is run once on the
-  base revision. If it passes there, the change broke it: repair it before the
-  close. If it fails there too, it was there before: report it once with that
-  evidence, it gets its own Issue and does not hold this close. Anything else
+  does not repair the other component. A `no` row that fails is rerun once on
+  the candidate; a failure that does not repeat is recorded and reported. One
+  that repeats is run once on the base revision, as a local run or from
+  evidence taken before the deploy, never by redeploying the base to a shared
+  environment. If it passes there, the change broke it: repair it before the
+  close, and if that repair itself needs a release or a shared-environment
+  change, send the one proposal as for a `yes` row. If it fails there too, it
+  was there before: report it once with that evidence, it gets its own Issue
+  and does not hold this close. Anything else
   noticed on the way that no row covers is reported once the same way. A model
   or provider quirk is recorded, and fixed only when a path in use hits it.
 - **Closure follows the layers.** The owner closes the Issue when every `yes`
