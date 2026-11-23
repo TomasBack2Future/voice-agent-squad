@@ -352,9 +352,12 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 // is ever dropped, and only for a later check suite of the same workflow of the same App, started
 // by the same event (a push run never stands in for a pull_request run):
 //   - a run that was itself cancelled reached no verdict. It is dropped when
-//     such a later suite concluded SUCCESS as a whole, which leaves exactly
-//     what the rollup would hold had the cancelled run never started; every
-//     run of the later suite is still judged;
+//     such a later suite concluded SUCCESS as a whole and holds a run newer
+//     than it, so the suite finished after the cancellation: that leaves what
+//     the rollup would hold had the cancelled run never started, and every
+//     run of the later suite is still judged. A rerun cancelled after the
+//     later suite finished is not covered: the attempt it replaced may have
+//     failed;
 //   - a run that reached any other verdict (the gate's failure, or a job that
 //     failed before the cancellation) is dropped only when the same job, by
 //     check name, COMPLETED with SUCCESS as a later run of such a later suite.
@@ -385,15 +388,19 @@ func currentCheckRuns(checks []mergeCheck) []mergeCheck {
 		return job{workflow{c.Suite.App.ID, run.Workflow.ID, run.Event}, c.Name}, true
 	}
 	type pass struct{ id, suite int64 }
-	passed := map[job][]pass{}          // successful runs of each job
-	succeeded := map[workflow][]int64{} // suites of each workflow that concluded SUCCESS
+	passed := map[job][]pass{} // successful runs of each job
+	// The newest run of each suite of a workflow that concluded SUCCESS.
+	succeeded := map[workflow]map[int64]int64{}
 	for _, c := range checks {
 		k, ok := identify(c)
 		if !ok {
 			continue
 		}
 		if c.Suite.Conclusion == "SUCCESS" {
-			succeeded[k.workflow] = append(succeeded[k.workflow], c.Suite.ID)
+			if succeeded[k.workflow] == nil {
+				succeeded[k.workflow] = map[int64]int64{}
+			}
+			succeeded[k.workflow][c.Suite.ID] = max(succeeded[k.workflow][c.Suite.ID], c.ID)
 		}
 		if c.Status == "COMPLETED" && c.Conclusion == "SUCCESS" {
 			passed[k] = append(passed[k], pass{c.ID, c.Suite.ID})
@@ -405,8 +412,8 @@ func currentCheckRuns(checks []mergeCheck) []mergeCheck {
 			return false
 		}
 		if c.Conclusion == "CANCELLED" {
-			for _, suite := range succeeded[k.workflow] {
-				if suite > c.Suite.ID {
+			for suite, newest := range succeeded[k.workflow] {
+				if suite > c.Suite.ID && newest > c.ID {
 					return true
 				}
 			}
