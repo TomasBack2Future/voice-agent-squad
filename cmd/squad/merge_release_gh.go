@@ -14,7 +14,7 @@ import (
 	"github.com/zsiec/squad/internal/terminalevents"
 )
 
-const mergeChecksQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){state headRefOid baseRefName baseRef{target{oid}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion externalId title isRequired(pullRequestNumber:$number) checkSuite{commit{oid} app{databaseId slug}}} ... on StatusContext{context state isRequired(pullRequestNumber:$number)}} pageInfo{hasNextPage endCursor}}}}}}}}}`
+const mergeChecksQuery = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){state headRefOid baseRefName baseRef{target{oid}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100,after:$cursor){nodes{__typename ... on CheckRun{databaseId name status conclusion externalId title isRequired(pullRequestNumber:$number) checkSuite{databaseId conclusion commit{oid} app{databaseId slug} workflowRun{event workflow{databaseId}}}} ... on StatusContext{context state isRequired(pullRequestNumber:$number)}} pageInfo{hasNextPage endCursor}}}}}}}}}`
 
 type mergeCheck struct {
 	Type       string `json:"__typename"`
@@ -28,14 +28,28 @@ type mergeCheck struct {
 	ExternalID string `json:"externalId"`
 	Title      string `json:"title"`
 	Suite      struct {
-		Commit struct {
+		ID int64 `json:"databaseId"`
+		// Conclusion is the result of the whole suite, CANCELLED when its
+		// workflow run was cancelled.
+		Conclusion string `json:"conclusion"`
+		Commit     struct {
 			OID string `json:"oid"`
 		} `json:"commit"`
 		App struct {
 			ID   int64  `json:"databaseId"`
 			Slug string `json:"slug"`
 		} `json:"app"`
+		// WorkflowRun is null for a check run no workflow created.
+		WorkflowRun *mergeWorkflowRun `json:"workflowRun"`
 	} `json:"checkSuite"`
+}
+
+// mergeWorkflowRun is the workflow run that created a check suite.
+type mergeWorkflowRun struct {
+	Event    string `json:"event"`
+	Workflow struct {
+		ID int64 `json:"databaseId"`
+	} `json:"workflow"`
 }
 
 type requiredMergeCheck struct {
@@ -276,6 +290,7 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 			return false, nil, fmt.Errorf("unknown check metadata")
 		}
 	}
+	checks = currentCheckRuns(checks)
 	for _, r := range required {
 		found := false
 		if r.Context == "" {
@@ -324,6 +339,103 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 		ordinary = append(ordinary, checkResult{c.Status, c.Conclusion, c.State})
 	}
 	return checksPassed(ordinary), failures, nil
+}
+
+// currentCheckRuns drops the check runs a cancelled workflow run left behind
+// once a later run of the same workflow has taken over. A commit's rollup keeps
+// the runs of every check suite created for it, so a run cancelled because a
+// newer one started (it leaves cancelled jobs and, with an always-running gate
+// job, a failure) would otherwise refuse the release for the life of that head.
+//
+// The rule is deliberately narrow, because this is a merge gate. Only a
+// completed run that does not pass, of a check suite that concluded CANCELLED,
+// is ever dropped, and only for a later check suite of the same workflow of the same App, started
+// by the same event (a push run never stands in for a pull_request run):
+//   - a run that was itself cancelled reached no verdict. It is dropped when
+//     such a later suite concluded SUCCESS as a whole and holds a run created
+//     after it: that leaves what the rollup would hold had the cancelled run
+//     never started, and every run of the later suite is still judged. A
+//     rerun created after the later suite's runs is not covered: the attempt
+//     it replaced may have failed;
+//   - a run that reached any other verdict (the gate's failure, or a job that
+//     failed before the cancellation) is dropped only when the same job, by
+//     check name, COMPLETED with SUCCESS as a later run of such a later suite.
+//     A later skipped, neutral, cancelled, failed or unfinished run replaces
+//     nothing, so a job that failed is never hidden by a rerun that skipped it.
+//
+// A suite that ran to a failure is never replaced (its owner reruns the failed
+// jobs, which replaces that attempt in the rollup itself), a rerun of an older
+// suite replaces nothing in a newer one, a run whose suite, workflow or event
+// is unknown is never dropped and replaces nothing, and review runs are never
+// dropped: a blocking review is disputed in the release evidence, not
+// resampled away.
+//
+// Known limit: the rollup holds only the newest attempt of each suite. Once a
+// failed job has been rerun in place its failure is gone from GitHub, and no
+// rule over the rollup can see it.
+func currentCheckRuns(checks []mergeCheck) []mergeCheck {
+	type workflow struct {
+		app, id int64
+		event   string
+	}
+	type job struct {
+		workflow
+		name string
+	}
+	identify := func(c mergeCheck) (job, bool) {
+		run := c.Suite.WorkflowRun
+		if c.Type != "CheckRun" || strings.HasPrefix(c.Name, "grok-review") || c.Suite.ID < 1 ||
+			run == nil || run.Workflow.ID < 1 || run.Event == "" {
+			return job{}, false
+		}
+		return job{workflow{c.Suite.App.ID, run.Workflow.ID, run.Event}, c.Name}, true
+	}
+	type pass struct{ id, suite int64 }
+	passed := map[job][]pass{} // successful runs of each job
+	// The newest run of each suite of a workflow that concluded SUCCESS.
+	succeeded := map[workflow]map[int64]int64{}
+	for _, c := range checks {
+		k, ok := identify(c)
+		if !ok {
+			continue
+		}
+		if c.Suite.Conclusion == "SUCCESS" {
+			if succeeded[k.workflow] == nil {
+				succeeded[k.workflow] = map[int64]int64{}
+			}
+			succeeded[k.workflow][c.Suite.ID] = max(succeeded[k.workflow][c.Suite.ID], c.ID)
+		}
+		if c.Status == "COMPLETED" && c.Conclusion == "SUCCESS" {
+			passed[k] = append(passed[k], pass{c.ID, c.Suite.ID})
+		}
+	}
+	replaced := func(c mergeCheck) bool {
+		k, ok := identify(c)
+		if !ok || c.Status != "COMPLETED" || c.Suite.Conclusion != "CANCELLED" || checkPassed(c) {
+			return false
+		}
+		if c.Conclusion == "CANCELLED" {
+			for suite, newest := range succeeded[k.workflow] {
+				if suite > c.Suite.ID && newest > c.ID {
+					return true
+				}
+			}
+			return false
+		}
+		for _, p := range passed[k] {
+			if p.id > c.ID && p.suite > c.Suite.ID {
+				return true
+			}
+		}
+		return false
+	}
+	out := make([]mergeCheck, 0, len(checks))
+	for _, c := range checks {
+		if !replaced(c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func matchesRequired(c mergeCheck, r requiredMergeCheck) bool {

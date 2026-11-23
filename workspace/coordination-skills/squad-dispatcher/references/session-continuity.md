@@ -102,13 +102,17 @@ tracking system. A genuinely independent outcome, shared component defect with a
 separate contract, or operational target can have its own Issue; state that reason
 and do not make it a gate on unrelated acceptance.
 
-Choose the executor separately from the tracking identity. Prefer the current
-owner, then a suitable existing owner with relevant context, capacity and a safe
-phase boundary. Inspect its actual work, role, allowed writes, repository, paths,
-claims, external operations and receiver before changing responsibility. WIP
-availability alone is not a reason to launch a fresh Worker. Record the concrete
-reason when existing owners cannot safely do the work (for example an incompatible
-role/access boundary, conflicting in-flight custody or an unrecoverable client).
+Choose the executor separately from the tracking identity. A repair of an Issue
+goes to that Issue's current owner. A different Issue gets its own Worker in a
+fresh session; do not queue unrelated Issues on one long session because it has
+context or is at hand. An existing owner takes a second Issue only as a linked
+obligation (below): both ship in the same PR, the second is the acceptance of the
+first's change, or it is the batch's release owner carrying its members' deploy
+and acceptance. Before changing any responsibility inspect the owner's actual
+work, role, allowed writes, repository, paths, claims, external operations and
+receiver. Record the concrete reason when the Issue's own owner cannot safely do
+the work (for example an incompatible role/access boundary, conflicting in-flight
+custody or an unrecoverable client).
 Do not preserve a client indefinitely when no authorized useful work is possible;
 retain the unfinished outcome and its concrete continuation route instead.
 
@@ -159,8 +163,8 @@ routes; none is permission for a Worker to select its own next Issue:
   another reservation, including a completed one; `dispatch continue` is not a
   bypass. Do not edit SQLite, rename identities, copy authority or start a second
   client on the same native. Record the unsupported transition and retain valid
-  work; the Dispatcher may select another suitable live integration owner or
-  record why a fresh session is necessary. User authority permits developing the
+  work; the Dispatcher launches a fresh session for it, or for a linked
+  obligation selects the suitable live integration owner. User authority permits developing the
   missing capability, not pretending it exists.
 
 After an admitted change, verify the first actual repair/reused-evidence or

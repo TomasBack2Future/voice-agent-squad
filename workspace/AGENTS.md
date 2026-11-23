@@ -115,8 +115,10 @@ separate operation from editing source.
 ## Outcome continuity
 
 A failed original acceptance assertion, omitted requirement or implementation
-regression stays on its canonical Issue. Prefer its current owner or a suitable
-existing owner before creating another execution. Distinguish tracking a genuinely
+regression stays on its canonical Issue with its current owner. A different
+Issue gets its own Worker; an existing owner takes it only as a linked
+obligation (the same PR, acceptance of that owner's change, or the batch's
+release owner). Distinguish tracking a genuinely
 independent finding from assigning a new Worker; check existing/withdrawn work
 first. Amend roles and related obligations through the responsible Dispatcher's
 effective decision and supported custody route, never by a second native binding

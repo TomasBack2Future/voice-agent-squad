@@ -159,8 +159,14 @@ Repair continuity: an omitted original requirement, failed original acceptance
 assertion or regression from the implementation stays on its canonical Issue.
 Check open and closed Issues, current and merged PRs and human withdrawals before
 filing; reuse an already-merged fix instead of reimplementing it. Choose the
-executor separately from the tracking identity: prefer the current owner, then a
-suitable existing owner, before a fresh Worker.
+executor separately from the tracking identity: a repair of an Issue goes to
+that Issue's current owner. A different Issue gets its own Worker in a fresh
+session. An existing owner takes a second Issue, through the linked-obligation
+route of session continuity, only when both ship in the same PR, when the
+second is the acceptance of the first's change, or when it is the batch's
+release owner carrying its members' deploy and acceptance. One long session
+carrying several unrelated Issues in sequence serializes work that could run in
+parallel and pays for its whole history on every turn.
 A genuinely different Issue keeps its own tracking identity and a separate
 reservation; never bind one native to two reservations or reuse a completed Worker session for another Issue. Do not
 retire an idle owner merely to change phase. Details:
@@ -329,14 +335,22 @@ Then check the batch, not only the live sessions:
   no acceptance started) is a missing decision of yours: make it now, within
   recorded authority. A production stage without production authorization, a
   frozen candidate, environment custody held by another owner and a human hold
-  or pause are not "ready": record what is missing and raise it once.
-- **Waiting on a person.** A decision only the user can make is raised in the
-  cycle it is found, once, with the concrete choice, its options, what each
-  affects and what continues meanwhile. The four hours are for reminding: an
-  item still waiting for the user's answer after that long is raised once more.
-  First challenge the label: "needs the user" and "cannot be constructed" are
-  claims to verify, and most are technical steps an owner can take. This is about unanswered needs, not about a hold or pause the user
-  set: those are recorded only.
+  or pause are not "ready": record what is missing. A missing authorization or answer
+  goes on the list below; a hold or pause the user set is left alone.
+- **Waiting on a person.** Keep one current list in the checkpoint of every
+  answer, action or authorization the work needs from the user, one line each:
+  the Issue, the exact action needed, what it unblocks and since when. A hold or
+  pause the user set is not an item on it; it is recorded and left alone. Show
+  the list when an item is added and once a day, so the user can clear it in one
+  sitting instead of being asked piecemeal; the daily display is the reminder,
+  not a new request, and an empty list is not shown. A decision only the user
+  can make is added in the cycle it is found, with the concrete choice, its
+  options, what each affects and what continues meanwhile. When the user
+  answers, record the answer verbatim once on the owning item's thread and
+  publish only the decision its exact scope enables, in the same cycle: the
+  owner does not ask again and nobody relays it a second time. Before adding
+  an item, challenge the label: "needs the user" and "cannot be constructed"
+  are claims to verify, and most are technical steps an owner can take.
 
 A quiet sweep reports nothing and sends nothing.
 
@@ -383,8 +397,12 @@ forms; the essentials:
   evidence as the installed command reference specifies. Review-tool errors and
   timeouts have no verdict and cannot use that route.
 - **Phase results.** Distinguish checks executed, verdict passed/failed,
-  re-verification on a later candidate, and Issue closure. Name phases by what was
-  checked (`acceptance:s7`, `merge:pr1972`). For a dependent not marked for
+  re-verification on a later candidate, and Issue closure. A phase name states
+  the fact a dependent may rely on: `merge-ready:pr1972` when the head is
+  reviewed and green, `merge:pr1972` only once the PR is merged, `deploy:` only
+  once the deploy finished. A wait on `merge:` released by a readiness result
+  sends the dependent ahead of the merge. Name phases by what was
+  checked (`acceptance:s7`, `merge-ready:pr1972`). For a dependent not marked for
   release, consuming a result means updating its decision; an ACK alone is not
   consumption. Before
   keeping a wait condition, compare it with the owner's latest result and drop a
