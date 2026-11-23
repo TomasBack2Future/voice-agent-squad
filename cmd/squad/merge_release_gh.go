@@ -352,12 +352,11 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 // is ever dropped, and only for a later check suite of the same workflow of the same App, started
 // by the same event (a push run never stands in for a pull_request run):
 //   - a run that was itself cancelled reached no verdict. It is dropped when
-//     such a later suite concluded SUCCESS as a whole and holds a run newer
-//     than it, so the suite finished after the cancellation: that leaves what
-//     the rollup would hold had the cancelled run never started, and every
-//     run of the later suite is still judged. A rerun cancelled after the
-//     later suite finished is not covered: the attempt it replaced may have
-//     failed;
+//     such a later suite concluded SUCCESS as a whole and holds a run created
+//     after it: that leaves what the rollup would hold had the cancelled run
+//     never started, and every run of the later suite is still judged. A
+//     rerun created after the later suite's runs is not covered: the attempt
+//     it replaced may have failed;
 //   - a run that reached any other verdict (the gate's failure, or a job that
 //     failed before the cancellation) is dropped only when the same job, by
 //     check name, COMPLETED with SUCCESS as a later run of such a later suite.
@@ -370,6 +369,10 @@ func mergeChecksPassed(checks []mergeCheck, required []requiredMergeCheck, head 
 // is unknown is never dropped and replaces nothing, and review runs are never
 // dropped: a blocking review is disputed in the release evidence, not
 // resampled away.
+//
+// Known limit: the rollup holds only the newest attempt of each suite. Once a
+// failed job has been rerun in place its failure is gone from GitHub, and no
+// rule over the rollup can see it.
 func currentCheckRuns(checks []mergeCheck) []mergeCheck {
 	type workflow struct {
 		app, id int64

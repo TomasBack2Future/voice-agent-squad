@@ -184,6 +184,7 @@ func TestMergeChecksDropOnlyWhatACancelledRunLeftBehind(t *testing.T) {
 		// finished: the rerun removed the failure, and the later suite skipped it.
 		"cancelled rerun newer than the later suite":     {[]mergeCheck{requiredGate, with(cancelledGo, func(c *mergeCheck) { c.ID = 500 }), run("go", "SKIPPED", 32, 2), run("lint", "SUCCESS", 33, 2)}, false},
 		"cancelled job, only an older suite passed":      {[]mergeCheck{gate, goPass, with(run("go", "CANCELLED", 42, 3), suiteConcluded("CANCELLED"))}, false},
+		"cancelled job, an older suite rerun after it":   {[]mergeCheck{gate, run("go", "SUCCESS", 60, 2), with(run("go", "CANCELLED", 42, 3), suiteConcluded("CANCELLED"))}, false},
 		"cancelled job, later suite of another workflow": {[]mergeCheck{requiredGate, cancelledGo, with(goPass, workflowRun("pull_request", 8))}, false},
 		"cancelled job, later suite of another App":      {[]mergeCheck{requiredGate, cancelledGo, with(goPass, otherApp)}, false},
 		"cancelled job, later suite started by a push":   {[]mergeCheck{requiredGate, cancelledGo, with(goPass, workflowRun("push", 7))}, false},

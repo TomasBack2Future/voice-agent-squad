@@ -1406,10 +1406,11 @@ runs. Only a completed run that does not pass, of a check suite that concluded
 cancelled, is ever dropped, and only for a later check suite of the same workflow of
 the same App started by the same event (a `push` run never stands in for a
 `pull_request` run). A run that was itself cancelled reached no verdict: it is dropped
-when such a later suite succeeded as a whole and holds a run newer than it, so that
-suite finished after the cancellation, which leaves what the commit would show had the
-cancelled run never started. A rerun that is cancelled after the later suite finished
-is not dropped: the attempt it replaced may have failed. A run with any other verdict (the gate's failure,
+when such a later suite succeeded as a whole and holds a run created after it, which
+leaves what the commit would show had the cancelled run never started. A rerun
+created after the later suite's runs is not dropped: the attempt it replaced may have
+failed. Known limit: GitHub keeps only the newest attempt of each suite, so a failure
+that was rerun in place is no longer visible to this check. A run with any other verdict (the gate's failure,
 or a job that failed before the cancellation) is dropped only when the same job, by
 check name, completed with success as a later run of such a later suite; a later
 skipped, neutral, cancelled, failed or unfinished run replaces nothing. A suite that
