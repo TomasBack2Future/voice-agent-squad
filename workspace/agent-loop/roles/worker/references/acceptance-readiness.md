@@ -27,9 +27,10 @@ When a new test or tooling gap appears, trace it to the original required
 assertion before adding a dependency. Distinguish the required behavior/evidence
 from a preferred way to collect it: use an equivalent qualified real-target path
 when it proves that assertion, and track optional tooling separately. If no
-permitted path can prove a required assertion, keep it open with the precise
-missing capability and owner; do not waive the assertion or silently add a new
-product feature to its completion criteria.
+permitted path can prove a `Blocks close: yes` row, do not waive it yourself or
+silently add a new product feature to its completion criteria: send the one
+proposal the Verification block describes, with the precise missing capability
+and what it would cost. A `no` row in that position is recorded as not verified.
 
 Bind the plan to the configured API origin/Project and candidate/fixture provenance.
 Check execution and ephemeral-cleanup scope separately, including the actual supported
@@ -69,8 +70,9 @@ binding, sampling or enablement settings, feature flags, pool or queue read
 paths. A criterion that cannot execute on the current target is found during
 implementation, not after rollout. When the path a criterion needs is not
 enabled on the target, do not enable or build it for the test: verify the
-criterion at `unit` or `local`, and if it is a `Blocks close: yes` row, send the
-one proposal the Verification block describes.
+criterion at `unit` or `local`, or on staging when staging already runs that
+path, and if it is a `Blocks close: yes` row, send the one proposal the
+Verification block describes.
 
 - **No unrecoverable fixtures.** Before creating Sessions, runs, queue entries
   or other writes, prove a supported way to observe them and to cancel or clean
@@ -93,8 +95,11 @@ one proposal the Verification block describes.
   (for example a production observation) that the original criteria do not ask
   for.
 - **Unfinished technical preparation is not a waiver.** A missing fixture,
-  read path or tool gap is preparation work for its owner. Never ask the user
-  to waive a criterion because its preparation is incomplete.
+  read path or tool gap that its owner can build within authority is
+  preparation work. Never ask the user to waive a criterion because such
+  preparation is incomplete; the proposal to close with a row unverified is for
+  a row whose next attempt needs a release, a shared-environment change or a
+  credential made only for the test, or whose method has failed twice.
 
 ## Design verification from behavior, not from the patch
 
@@ -163,9 +168,10 @@ retry limits and required final CI/review gates still apply. Use this dispositio
 inside the admitted execution scope without asking for routine permission.
 
 At closeout, give each row of the Verification block its result against the
-actual evidence and environment: passed, failed and filed as #N, not verified
-with the reason, or waived by the user with the date. Only `Blocks close: yes`
-rows keep the Issue open. An unavailable fixture, omitted diagnostic or
+actual evidence and environment: passed; failed on the base revision too and
+reported; not verified, with the reason; or waived by the user, with the date.
+Only `Blocks close: yes` rows keep the Issue open, and in a block without that
+column every row does. An unavailable fixture, omitted diagnostic or
 unconstructible live failure of a `yes` row is not "not applicable" and you do
 not move it to a weaker layer yourself: send the one proposal to close with
 that row unverified, with its cost, and let the user decide. A `no` row in the

@@ -89,8 +89,9 @@ AGENTS.md and repository instructions first, then the design section
 
 Outcome: <USER RESULT>.
 Verification block: <LOCATOR> @ v<N>
-Done means every row marked `Blocks close: yes` passes at its stated layer,
-every other row has a recorded result, owned fixtures are cleaned up and
+Done means every row marked `Blocks close: yes` (every row, when the block has
+no such column) passes at its stated layer, every other row has a recorded
+result, owned fixtures are cleaned up and
 resources released. Commit the block's named tests and see them fail
 before the fix. Rows at unit, local and staging close without a production
 release; only production rows wait for it, with you parked on the release stage.

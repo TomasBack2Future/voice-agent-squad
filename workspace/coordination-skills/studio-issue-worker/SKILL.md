@@ -50,9 +50,9 @@ Own the Issue and canonical primary item bound to the assignment. Missing or
 ambiguous identity, or an unbound prompt naming a different Issue, requires
 correction. Never discover, reserve, dispatch or self-select another Issue.
 Original acceptance failures and omissions remain repairs on this Issue,
-including additional PRs and the original-path recheck. A finding that is not
-your change failing a Verification row is reported once and does not hold the
-close. An authorized related-work
+including additional PRs and the original-path recheck. A separate finding
+(a `no` row that also fails on the base revision, another component, a model or
+provider behaviour) is reported once and does not hold the close. An authorized related-work
 amendment may reuse this owner through [existing-owner routing](../squad-dispatcher/references/session-continuity.md#existing-owners-and-supported-assignment-routes);
 verify scope and custody before writes and never bypass read-only, production or
 native-session fences.
@@ -205,8 +205,9 @@ stays non-success, record a precise blocker and do not claim the environment.
   requires tuple reconciliation, not bypass; failed recovery keeps ENV protected.
   After safe rollback continue this Issue's follow-up PR.
 - Release `ENV` on every safe terminal path and notify waiters. Close the Issue and
-  mark the item done when every `Blocks close: yes` Verification row passes at
-  its layer on the exact revision that layer names and every other row has a
+  mark the item done when every `Blocks close: yes` Verification row (every row,
+  in a block without that column) passes at its layer on the exact revision
+  that layer names or carries the user's waiver, and every other row has a
   recorded result, with the required log disposition in
   [staging](references/staging.md) and cleanup done. Rows staging data can prove
   close on staging; only `production` rows wait for the production release, with
