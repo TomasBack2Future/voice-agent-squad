@@ -347,11 +347,9 @@ Then check the batch, not only the live sessions:
   options, what each affects and what continues meanwhile. When the user
   answers, record the answer verbatim once on the owning item's thread and
   publish only the decision its exact scope enables, in the same cycle: the
-  owner does not ask again and nobody relays it a second time. The four hours are for reminding: an
-  item still waiting for the user's answer after that long is raised once more.
-  First challenge the label: "needs the user" and "cannot be constructed" are
-  claims to verify, and most are technical steps an owner can take. This is about unanswered needs, not about a hold or pause the user
-  set: those are recorded only.
+  owner does not ask again and nobody relays it a second time. Before adding
+  an item, challenge the label: "needs the user" and "cannot be constructed"
+  are claims to verify, and most are technical steps an owner can take.
 
 A quiet sweep reports nothing and sends nothing.
 

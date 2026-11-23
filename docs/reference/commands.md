@@ -1199,17 +1199,20 @@ changed decision enqueues its own `decision-resolved` wake. MCP:
 `squad_terminal_decision_reorder` with `decisions`.
 
 A merge release requires every check run on the exact head to have passed,
-except a run that a later run of the same job has replaced. A run is replaced
-only by a later run that completed with success, of the same check name in the
-same workflow of the same App, in another check suite: a run cancelled because
-its rerun took over, or a flaky failure followed by a passing rerun, no longer
-refuses the release for the life of that head. Nothing else is replaced. A
-later skipped, neutral, cancelled, failed or unfinished run replaces nothing,
-so a rerun that skips a job cannot hide its earlier failure, and a later
-failure counts next to an earlier success. Jobs that share a name across
-workflows are different jobs; a run with no known workflow is never replaced.
-A review run is never replaced: a blocking review is disputed in the release
-evidence, not resampled.
+except the runs of a cancelled workflow run that a later run has replaced. A
+commit keeps the runs of every check suite created for it, so a run cancelled
+because a newer one took over leaves cancelled jobs, and a failed gate job when
+the gate always runs. Such a run is replaced only when its own check suite
+concluded cancelled and a later run of the same job completed with success in a
+later check suite; the same job is the same check name of the same workflow of
+the same App, started by the same event. Nothing else is replaced. A suite that
+ran to a failure stays a failure even when a later suite passes: rerun its
+failed jobs, which replaces that attempt on GitHub itself. A later skipped,
+neutral, cancelled, failed or unfinished run replaces nothing, a `push` run
+does not replace a `pull_request` run, a rerun of an older suite does not
+replace a newer one, and a run whose workflow or event is unknown is never
+replaced. A review run is never replaced: a blocking review is disputed in the
+release evidence, not resampled.
 
 `terminal-events phase-result --reservation KEY --generation N --worker-session
 ID --phase NAME --checks all|partial --verdict passed|failed|partial
