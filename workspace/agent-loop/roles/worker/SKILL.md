@@ -219,7 +219,10 @@ lock freeing and a time arriving.
   citing the readback.
 - **What you send the Dispatcher.** A plain message wakes nobody and needs no
   answer; use it for progress. When a finished phase is something another owner
-  waits on, record it with `terminal-events phase-result`; expect no reply. Send
+  waits on, record it with `terminal-events phase-result` under the name your
+  assignment gives, and only when that fact is true: a head that is reviewed and
+  green is `merge-ready`, not `merge`; a deploy that was dispatched is not
+  `deploy`. Expect no reply. Send
   a `decision-request` only when you need a decision: a real boundary crossing
   (failure branches), a merge release under `release-required`, a satisfied or
   expired hold without a release marker, or a wrong or missing Verification
